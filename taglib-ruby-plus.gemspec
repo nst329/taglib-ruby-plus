@@ -22,7 +22,7 @@ Gem::Specification.new do |s|
 
   s.require_paths = ['lib']
   s.required_ruby_version = '>= 3.2'
-  s.requirements = ['TagLib C++ >= 2.3.1 (libtag1-dev in Debian/Ubuntu, taglib-devel in Fedora/RHEL)']
+  s.requirements = ['TagLib C++ >= 2.3.2 (libtag1-dev in Debian/Ubuntu, taglib-devel in Fedora/RHEL)']
 
   s.add_development_dependency 'bundler', '>= 2.4', '< 5'
   s.add_development_dependency 'rake-compiler', '~> 0.9'
@@ -57,6 +57,8 @@ Gem::Specification.new do |s|
     'Guardfile',
     'LICENSE.txt',
     'README.md',
+    'Docs/taglib-2.3.2-upgrade-design.md',
+    'Docs/ADR/2026-09-07-taglib-2.3.2対応.md',
     'Rakefile',
     'docs/default/fulldoc/html/css/common.css',
     'docs/mp4-chapter-api-design.md',
@@ -66,6 +68,7 @@ Gem::Specification.new do |s|
     'docs/ADR/2026-08-28-mp4-chapter-read-ownership.md',
     'docs/ADR/2026-08-28-bundler4-ci-compatibility.md',
     'docs/ADR/2026-09-01-swig-tracking-moving-gc.md',
+    'docs/Memos/2026-09-01-ruby4-mp4-item-map-segfault-investigation.md',
     'docs/taglib/aiff.rb',
     'docs/taglib/base.rb',
     'docs/taglib/flac.rb',

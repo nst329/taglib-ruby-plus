@@ -538,6 +538,11 @@ module TagLib::MP4
     Unknown = 0
     AAC     = 1
     ALAC    = 2
+    AC3     = 3
+    EAC3    = 4
+    FLAC    = 5
+    DTS     = 6
+    Opus    = 7
 
     # @return [Integer] The number of bits per audio sample.
     attr_reader :bits_per_sample
@@ -549,6 +554,9 @@ module TagLib::MP4
     #
     # @since 1.0.0
     attr_reader :codec
+
+    # @return [String] The four-character codec identifier from the MP4 file.
+    attr_reader :codec_id
   end
 
   # The `CoverArt` class is used to embed cover art images in MP4 tags.

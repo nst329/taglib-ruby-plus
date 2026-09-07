@@ -68,9 +68,12 @@ class MP4FileTest < Test::Unit::TestCase
       end
 
       should 'contain mp4-specific information' do
+        assert_equal({Unknown: 0, AAC: 1, ALAC: 2, AC3: 3, EAC3: 4, FLAC: 5, DTS: 6, Opus: 7},
+                     TagLib::MP4::Properties.constants(false).to_h { |name| [name, TagLib::MP4::Properties.const_get(name)] })
         assert_equal 16, @properties.bits_per_sample
         assert_equal false, @properties.encrypted?
         assert_equal TagLib::MP4::Properties::AAC, @properties.codec
+        assert_equal 'mp4a', @properties.codec_id
       end
     end
 

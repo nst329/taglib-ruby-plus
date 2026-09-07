@@ -2,7 +2,7 @@
 
 ## 前提と結論
 
-対象はMP4/M4Aとし、TagLib 2.3.1以上で提供する。今回の検証では、MP4の`covr` artworkとFFmpegのattached pictureは、JPEG/PNG/BMPについて実用上同じ画像データとして往復できた。一方、GIFはMP4のattached pictureとしてFFmpegで直接扱えないため、互換対象から除外する。
+対象はMP4/M4Aとし、TagLib 2.3.2以上で提供する。今回の検証では、MP4の`covr` artworkとFFmpegのattached pictureは、JPEG/PNG/BMPについて実用上同じ画像データとして往復できた。一方、GIFはMP4のattached pictureとしてFFmpegで直接扱えないため、互換対象から除外する。
 
 `-movflags use_metadata_tags`付きの字幕muxでは、入力に2枚あったattached pictureが0枚になった。したがって、TagLib APIを追加しても、字幕mux前の取得とmux後の復元は必要である。ただし、この取得・復元をAtomicParsleyからTagLibへ移行できる設計とする。
 
@@ -138,6 +138,6 @@ tag.remove_artwork        # covrを全削除
 
 1. Ruby所有`Artwork`とMP4プロパティ名の変換表を追加する。
 2. `contentRating`の値オブジェクトとItemMap変換を追加する。
-3. TagLib 2.3.1以上のビルド・APIテストを追加する。
+3. TagLib 2.3.2以上のビルド・APIテストを追加する。
 4. MListNewでfeature flag付きのTagLib取得・復元を実装し、AtomicParsleyフォールバックを残す。
 5. 実ファイル・プレイヤー確認後、AtomicParsleyのMP4タグ更新とartwork復元を段階的に削除する。

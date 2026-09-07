@@ -25,7 +25,7 @@ Contributions for more coverage of the library are very welcome.
 
 ## Installation
 
-Before you install the gem, make sure to have [TagLib 2.3.1 or higher][taglib]
+Before you install the gem, make sure to have [TagLib 2.3.2 or higher][taglib]
 installed with header files and a C++17 compiler. This is a source gem: its
 native extensions are compiled against the TagLib installed on your system.
 The TagLib shared library is also required at runtime.
@@ -35,9 +35,9 @@ The TagLib shared library is also required at runtime.
 * Brew: `brew install taglib`
 * MacPorts: `sudo port install taglib`
 
-Then install taglib-ruby-plus 2.3.1:
+Then install taglib-ruby-plus 2.3.2:
 
-    gem install taglib-ruby-plus --version 2.3.1
+    gem install taglib-ruby-plus --version 2.3.2
 
 ### MacOS
 
@@ -45,16 +45,16 @@ Depending on your brew setup, TagLib might be installed in different locations,
 which makes it hard for taglib-ruby-plus to find it. To get the library location, run:
 
     $ brew info taglib
-    taglib: stable 2.3.1 (bottled), HEAD
+    taglib: stable 2.3.2 (bottled), HEAD
     Audio metadata library
     https://taglib.org/
-    /opt/homebrew/Cellar/taglib/2.3.1 (files installed by Homebrew) *
+    /opt/homebrew/Cellar/taglib/2.3.2 (files installed by Homebrew) *
     ...
 
 Note the line with the path at the end. Provide that using the `TAGLIB_DIR`
 environment variable when installing, like this:
 
-    TAGLIB_DIR=/opt/homebrew/opt/taglib gem install taglib-ruby-plus --version 2.3.1
+    TAGLIB_DIR=/opt/homebrew/opt/taglib gem install taglib-ruby-plus --version 2.3.2
 
 If you're using bundler, like this:
 
@@ -162,19 +162,19 @@ Build and install gem into system gems:
 
 Build a specific version of Taglib:
 
-    PLATFORM=x86_64-linux TAGLIB_VERSION=2.3.1 rake vendor
+    PLATFORM=x86_64-linux TAGLIB_VERSION=2.3.2 rake vendor
 
-The above command will automatically download TagLib 2.3.1, build it and
-install it in `tmp/x86_64-linux/taglib-2.3.1`.
+The above command will automatically download TagLib 2.3.2, build it and
+install it in `tmp/x86_64-linux/taglib-2.3.2`.
 
 The `swig`, `compile` and `test` tasks can then be executed against that specific
 version of Taglib by setting the `TAGLIB_DIR` environment variable to
-`$PWD/tmp/x86_64-linux/taglib-2.3.1` (it is assumed that TagLib headers are
+`$PWD/tmp/x86_64-linux/taglib-2.3.2` (it is assumed that TagLib headers are
 located at `$TAGLIB_DIR/include` and taglib libraries at `$TAGLIB_DIR/lib`).
 
 To do everything in one command:
 
-    PLATFORM=x86_64-linux TAGLIB_VERSION=2.3.1 TAGLIB_DIR=$PWD/tmp/x86_64-linux/taglib-2.3.1 rake vendor compile test
+    PLATFORM=x86_64-linux TAGLIB_VERSION=2.3.2 TAGLIB_DIR=$PWD/tmp/x86_64-linux/taglib-2.3.2 rake vendor compile test
 
 ### Workflow
 

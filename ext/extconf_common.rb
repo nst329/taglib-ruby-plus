@@ -61,13 +61,13 @@ taglib_version_check = <<~CPP
 
   #if TAGLIB_MAJOR_VERSION < 2 || \
       (TAGLIB_MAJOR_VERSION == 2 && TAGLIB_MINOR_VERSION < 3) || \
-      (TAGLIB_MAJOR_VERSION == 2 && TAGLIB_MINOR_VERSION == 3 && TAGLIB_PATCH_VERSION < 1)
-  #error TagLib 2.3.1 or newer is required
+      (TAGLIB_MAJOR_VERSION == 2 && TAGLIB_MINOR_VERSION == 3 && TAGLIB_PATCH_VERSION < 2)
+  #error TagLib 2.3.2 or newer is required
   #endif
 CPP
 
 unless try_cpp(taglib_version_check)
-  error 'TagLib 2.3.1 or newer is required. Please upgrade TagLib and retry.'
+  error 'TagLib 2.3.2 or newer is required. Please upgrade TagLib and retry.'
 end
 
 $CFLAGS << ' -DSWIG_TYPE_TABLE=taglib'

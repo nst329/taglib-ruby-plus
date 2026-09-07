@@ -25,7 +25,7 @@ jobs:
     env:
       MAKEFLAGS: -j2
       PLATFORM: x86_64-linux
-      TAGLIB_VERSION: 2.3.1
+      TAGLIB_VERSION: 2.3.2
       SWIG_DIR: .swig-v4.1.1
 
     steps:
@@ -100,9 +100,9 @@ jobs:
           LD_LIBRARY_PATH: ${{ github.workspace }}/tmp/${{ env.PLATFORM }}/taglib-${{ env.TAGLIB_VERSION }}/lib
         run: |
           mkdir -p "$GEM_HOME"
-          gem install --local taglib-ruby-plus-2.3.1.gem --no-document
+          gem install --local taglib-ruby-plus-2.3.2.gem --no-document
           ruby <<'RUBY'
-          gem 'taglib-ruby-plus', '= 2.3.1'
+          gem 'taglib-ruby-plus', '= 2.3.2'
           require 'fileutils'
           require 'tmpdir'
           require 'taglib_plus'

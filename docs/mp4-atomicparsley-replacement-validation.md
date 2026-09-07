@@ -4,14 +4,14 @@
 
 ## 結論
 
-TagLib 2.3.1の既存の`MP4::ItemMap`、`Item`、`CoverArt`、チャプターAPIを使えば、今回の対象に含まれるMP4メタデータの多くはRuby側へ移行できる見込みである。
+TagLib 2.3.2の既存の`MP4::ItemMap`、`Item`、`CoverArt`、チャプターAPIを使えば、今回の対象に含まれるMP4メタデータの多くはRuby側へ移行できる見込みである。
 
 MP4 property/artworkの高レベルAPIを追加した。通常の`File#save`について、未知atomを含む`ilst`のバイト単位保持は保証しない。
 
 ## 環境と方法
 
 - ブランチ: `investigate/mp4-atomicparsley-replacement`
-- TagLib: 2.3.1
+- TagLib: 2.3.2
 - taglib-ruby-plusのローカルネイティブ拡張を使用
 - `test/data/mp4.m4a`のコピーを使い、保存後にTagLibとAtomicParsleyで再読込
 - 既存ファイルは変更していない

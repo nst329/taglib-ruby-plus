@@ -3128,6 +3128,31 @@ fail:
   return Qnil;
 }
 
+SWIGINTERN VALUE
+_wrap_Properties_codec_id(int argc, VALUE *argv, VALUE self) {
+  TagLib::MP4::Properties *arg1 = (TagLib::MP4::Properties *) 0 ;
+  void *argp1 = 0 ;
+  int res1 = 0 ;
+  TagLib::String result;
+  VALUE vresult = Qnil;
+
+  if ((argc < 0) || (argc > 0)) {
+    rb_raise(rb_eArgError, "wrong # of arguments(%d for 0)",argc); SWIG_fail;
+  }
+  res1 = SWIG_ConvertPtr(self, &argp1,SWIGTYPE_p_TagLib__MP4__Properties, 0 |  0 );
+  if (!SWIG_IsOK(res1)) {
+    SWIG_exception_fail(SWIG_ArgError(res1), Ruby_Format_TypeError( "", "TagLib::MP4::Properties const *","codecId", 1, self ));
+  }
+  arg1 = reinterpret_cast< TagLib::MP4::Properties * >(argp1);
+  result = ((TagLib::MP4::Properties const *)arg1)->codecId();
+  {
+    vresult = taglib_string_to_ruby_string(result);
+  }
+  return vresult;
+fail:
+  return Qnil;
+}
+
 
 static swig_class SwigClassCoverArt;
 
@@ -6600,6 +6625,11 @@ SWIGEXPORT void Init_taglib_mp4(void) {
   rb_define_const(SwigClassProperties.klass, "Unknown", SWIG_From_int(static_cast< int >(TagLib::MP4::Properties::Unknown)));
   rb_define_const(SwigClassProperties.klass, "AAC", SWIG_From_int(static_cast< int >(TagLib::MP4::Properties::AAC)));
   rb_define_const(SwigClassProperties.klass, "ALAC", SWIG_From_int(static_cast< int >(TagLib::MP4::Properties::ALAC)));
+  rb_define_const(SwigClassProperties.klass, "AC3", SWIG_From_int(static_cast< int >(TagLib::MP4::Properties::AC3)));
+  rb_define_const(SwigClassProperties.klass, "EAC3", SWIG_From_int(static_cast< int >(TagLib::MP4::Properties::EAC3)));
+  rb_define_const(SwigClassProperties.klass, "FLAC", SWIG_From_int(static_cast< int >(TagLib::MP4::Properties::FLAC)));
+  rb_define_const(SwigClassProperties.klass, "DTS", SWIG_From_int(static_cast< int >(TagLib::MP4::Properties::DTS)));
+  rb_define_const(SwigClassProperties.klass, "Opus", SWIG_From_int(static_cast< int >(TagLib::MP4::Properties::Opus)));
   rb_define_method(SwigClassProperties.klass, "length_in_milliseconds", VALUEFUNC(_wrap_Properties_length_in_milliseconds), -1);
   rb_define_method(SwigClassProperties.klass, "bitrate", VALUEFUNC(_wrap_Properties_bitrate), -1);
   rb_define_method(SwigClassProperties.klass, "sample_rate", VALUEFUNC(_wrap_Properties_sample_rate), -1);
@@ -6607,6 +6637,7 @@ SWIGEXPORT void Init_taglib_mp4(void) {
   rb_define_method(SwigClassProperties.klass, "bits_per_sample", VALUEFUNC(_wrap_Properties_bits_per_sample), -1);
   rb_define_method(SwigClassProperties.klass, "encrypted?", VALUEFUNC(_wrap_Properties_encryptedq___), -1);
   rb_define_method(SwigClassProperties.klass, "codec", VALUEFUNC(_wrap_Properties_codec), -1);
+  rb_define_method(SwigClassProperties.klass, "codec_id", VALUEFUNC(_wrap_Properties_codec_id), -1);
   SwigClassProperties.mark = 0;
   SwigClassProperties.destroy = (void (*)(void *)) free_TagLib_MP4_Properties;
   SwigClassProperties.trackObjects = 1;

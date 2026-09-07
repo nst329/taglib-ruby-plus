@@ -4,8 +4,8 @@
 
 | 項目 | 内容 |
 |---|---|
-| TagLib | 2.3.1以上（`>= 2.3.1`） |
-| taglib-ruby-plus | 2.3.1（TagLibの要求バージョンとは別のプロジェクト番号） |
+| TagLib | 2.3.2以上（`>= 2.3.2`） |
+| taglib-ruby-plus | 2.3.2（TagLibの要求バージョンとは別のプロジェクト番号） |
 | 初期対応OS | macOS、Linux |
 | チャプター形式 | Nero、QuickTime |
 | 保存 | 通常保存、チャプター専用保存 |
@@ -226,7 +226,7 @@ TagLibの通常保存を呼ばず、変更済みチャプターだけを保存�
 └── チャプター専用保存
           │
           ▼
-TagLib 2.3.1
+TagLib 2.3.2
 ```
 
 - 共通APIと形式別APIは同じ内部関数を利用する。
@@ -234,7 +234,7 @@ TagLib 2.3.1
 - 新しいC拡張は作らず、既存の`taglib_mp4`拡張へ追加する。
 - `save_chapters`は`MP4::File::save()`を呼ばない。
 
-TagLib 2.3.1にはチャプター専用保存の公開APIがないため、既存の公開`NeroChapterList`／`QtChapterList`を呼び出す補助C++層を`taglib_mp4`へ実装する。
+TagLib 2.3.2にはチャプター専用保存の公開APIがないため、既存の公開`NeroChapterList`／`QtChapterList`を呼び出す補助C++層を`taglib_mp4`へ実装する。
 
 - C++のChapterListはSWIGで公開せず、Rubyの値オブジェクトとの間でコピーする。
 
@@ -283,22 +283,22 @@ TagLib 2.3.1にはチャプター専用保存の公開APIがないため、既�
 
 - FileのcloseとGC後もコピー済みChapterが有効である。
 - 既存のMP4 Item、CoverArt、読み書きAPIに回帰がない。
-- TagLib 2.3.1未満では`TagLib >= 2.3.1`が必要であることを示してビルドを中止する。
+- TagLib 2.3.2未満では`TagLib >= 2.3.2`が必要であることを示してビルドを中止する。
 
 ## 9. 完了条件
 
-- macOS/LinuxのTagLib 2.3.1でビルドと全テストが成功する。
+- macOS/LinuxのTagLib 2.3.2でビルドと全テストが成功する。
 - 公開APIと使用例が`docs/taglib/mp4.rb`に記載される。
-- READMEにTagLib 2.3.1以上が必要であることを記載する。
+- READMEにTagLib 2.3.2以上が必要であることを記載する。
 - CHANGELOGに追加API、互換性、Windowsが初期保証対象外であることを記載する。
-- taglib-ruby-plusのバージョンは2.3.1とする。番号はTagLibの要求バージョンとは別管理だが、今回は同じ数値になる。
+- taglib-ruby-plusのバージョンは2.3.2とする。番号はTagLibの要求バージョンとは別管理だが、今回は同じ数値になる。
 
 ## 10. gem配布
 
 taglib-ruby-plusはsource gemとして配布する。gemのインストール時にネイティブ
-拡張をビルドし、利用者の環境にあるTagLib 2.3.1以上へリンクする。
+拡張をビルドし、利用者の環境にあるTagLib 2.3.2以上へリンクする。
 
-- gemバージョンは`2.3.1`、TagLibの最低バージョンは`2.3.1`として別管理する。
+- gemバージョンは`2.3.2`、TagLibの最低バージョンは`2.3.2`として別管理する。
 - 生成済みSWIGラッパーをgemに含め、利用者側でSWIGを要求しない。
 - インストール時にはTagLibのヘッダー、ライブラリ、C++17コンパイラを必要とする。
 - 実行時にはリンク対象のTagLib共有ライブラリを必要とする。

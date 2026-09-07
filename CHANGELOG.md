@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 - Add Ruby-owned MP4 artwork and content-rating value objects.
 - Add CI coverage for the MP4 metadata API and packaged gem smoke test.
 
+## 2.3.2
+### Changed
+- Require TagLib 2.3.2 or newer when building the native extensions.
+- Expose MP4 codec identifiers and the additional TagLib 2.3.2 codec values.
+- Use the TagLib 2.3.2 fixes for MP4 chapter references and malformed atom handling.
+
 ## 2.3.1
 ### Added
 - Add MP4 Nero and QuickTime chapter read/write APIs, including `style: :preserve`.
