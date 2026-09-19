@@ -11,6 +11,7 @@ public:
   void insert(const TagLib::ByteVector &, TagLib::offset_t, size_t) override { ++discarded; }
   void removeBlock(TagLib::offset_t, size_t) override { ++discarded; }
   void truncate(TagLib::offset_t) override { ++discarded; }
+  bool hasError() const override { return discarded > 0; }
 };
 
 int main(int argc, char **argv) {
@@ -21,6 +22,5 @@ int main(int argc, char **argv) {
   file.tag()->setTitle("Discarded title");
   const bool result = file.save();
   std::cout << "save=" << result << " discarded=" << stream.discarded << '\n';
-  // Baseline assertion, not the desired contract of the future patched library.
-  return result && stream.discarded > 0 ? 0 : 1;
+  return !result && stream.discarded > 0 ? 0 : 1;
 }

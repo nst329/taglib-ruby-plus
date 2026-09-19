@@ -2168,6 +2168,20 @@ static VALUE taglib_mp4_chapter_class() {
   return rb_path2class("TagLib::MP4::Chapter");
 }
 
+static VALUE taglib_mp4_mdta_items(TagLib::MP4::Tag *tag) {
+  VALUE result = rb_ary_new2(tag->mdtaItems().size());
+  for (const auto &item : tag->mdtaItems()) {
+    VALUE entry = rb_hash_new();
+    rb_hash_aset(entry, ID2SYM(rb_intern("key")), taglib_string_to_ruby_string(item.key));
+    rb_hash_aset(entry, ID2SYM(rb_intern("key_index")), UINT2NUM(item.keyIndex));
+    rb_hash_aset(entry, ID2SYM(rb_intern("data_type")), UINT2NUM(item.dataType));
+    rb_hash_aset(entry, ID2SYM(rb_intern("locale")), UINT2NUM(item.locale));
+    rb_hash_aset(entry, ID2SYM(rb_intern("data")), taglib_bytevector_to_ruby_string(item.data));
+    rb_ary_push(result, entry);
+  }
+  return result;
+}
+
 static VALUE taglib_mp4_chapter_to_ruby(const TagLib::MP4::Chapter &chapter) {
   VALUE title = taglib_string_to_ruby_string(chapter.title());
   VALUE start_time = LL2NUM(chapter.startTime());
@@ -2745,10 +2759,55 @@ SWIGINTERN VALUE TagLib_MP4_Tag___setitem__(TagLib::MP4::Tag *self,TagLib::Strin
     TagLib::MP4::ItemMap::ConstIterator it = self->itemMap().find(string);
     if (it != self->itemMap().end()) {
       unlink_taglib_mp4_item_map_iterator(it);
-    }
-    self->setItem(string, item);
-    return Qnil;
   }
+  self->setItem(string, item);
+  return Qnil;
+}
+SWIGINTERN VALUE _wrap_Tag__mdta_items(int argc, VALUE *argv, VALUE self) {
+  if(argc != 0)
+    rb_raise(rb_eArgError, "wrong # of arguments(%d for 0)", argc);
+  void *argp = 0;
+  if(!SWIG_IsOK(SWIG_ConvertPtr(self, &argp, SWIGTYPE_p_TagLib__MP4__Tag, 0)))
+    rb_raise(rb_eTypeError, "invalid TagLib::MP4::Tag");
+  return taglib_mp4_mdta_items(reinterpret_cast<TagLib::MP4::Tag *>(argp));
+}
+SWIGINTERN VALUE _wrap_Tag__copy_state_to(int argc, VALUE *argv, VALUE self) {
+  if(argc != 1)
+    rb_raise(rb_eArgError, "wrong # of arguments(%d for 1)", argc);
+  void *source_ptr = 0;
+  void *destination_ptr = 0;
+  if(!SWIG_IsOK(SWIG_ConvertPtr(self, &source_ptr, SWIGTYPE_p_TagLib__MP4__Tag, 0)) ||
+     !SWIG_IsOK(SWIG_ConvertPtr(argv[0], &destination_ptr, SWIGTYPE_p_TagLib__MP4__Tag, 0)))
+    rb_raise(rb_eTypeError, "invalid TagLib::MP4::Tag");
+  reinterpret_cast<TagLib::MP4::Tag *>(source_ptr)->copyStateTo(
+    *reinterpret_cast<TagLib::MP4::Tag *>(destination_ptr));
+  return Qnil;
+}
+SWIGINTERN VALUE _wrap_Tag__set_mdta_item(int argc, VALUE *argv, VALUE self) {
+  if(argc != 4)
+    rb_raise(rb_eArgError, "wrong # of arguments(%d for 4)", argc);
+  void *argp = 0;
+  if(!SWIG_IsOK(SWIG_ConvertPtr(self, &argp, SWIGTYPE_p_TagLib__MP4__Tag, 0)))
+    rb_raise(rb_eTypeError, "invalid TagLib::MP4::Tag");
+  Check_Type(argv[0], T_STRING);
+  Check_Type(argv[3], T_STRING);
+  TagLib::String key = ruby_string_to_taglib_string(argv[0]);
+  TagLib::ByteVector data = ruby_string_to_taglib_bytevector(argv[3]);
+  bool result = reinterpret_cast<TagLib::MP4::Tag *>(argp)->setMdtaItem(
+    key, NUM2UINT(argv[1]), NUM2UINT(argv[2]), data);
+  return SWIG_From_bool(static_cast<bool>(result));
+}
+SWIGINTERN VALUE _wrap_Tag__remove_mdta_item(int argc, VALUE *argv, VALUE self) {
+  if(argc != 1)
+    rb_raise(rb_eArgError, "wrong # of arguments(%d for 1)", argc);
+  void *argp = 0;
+  if(!SWIG_IsOK(SWIG_ConvertPtr(self, &argp, SWIGTYPE_p_TagLib__MP4__Tag, 0)))
+    rb_raise(rb_eTypeError, "invalid TagLib::MP4::Tag");
+  Check_Type(argv[0], T_STRING);
+  TagLib::String key = ruby_string_to_taglib_string(argv[0]);
+  bool result = reinterpret_cast<TagLib::MP4::Tag *>(argp)->removeMdtaItem(key);
+  return SWIG_From_bool(static_cast<bool>(result));
+}
 SWIGINTERN VALUE TagLib_MP4_Tag_remove_item(TagLib::MP4::Tag *self,TagLib::String const &string){
     TagLib::MP4::ItemMap::ConstIterator it = self->itemMap().find(string);
     if (it != self->itemMap().end()) {
@@ -6745,6 +6804,10 @@ SWIGEXPORT void Init_taglib_mp4(void) {
   rb_define_method(SwigClassTag.klass, "strip", VALUEFUNC(_wrap_Tag_strip), -1);
   rb_define_method(SwigClassTag.klass, "[]=", VALUEFUNC(_wrap_Tag___setitem__), -1);
   rb_define_method(SwigClassTag.klass, "remove_item", VALUEFUNC(_wrap_Tag_remove_item), -1);
+  rb_define_method(SwigClassTag.klass, "_copy_state_to", VALUEFUNC(_wrap_Tag__copy_state_to), -1);
+  rb_define_method(SwigClassTag.klass, "_mdta_items", VALUEFUNC(_wrap_Tag__mdta_items), -1);
+  rb_define_method(SwigClassTag.klass, "_set_mdta_item", VALUEFUNC(_wrap_Tag__set_mdta_item), -1);
+  rb_define_method(SwigClassTag.klass, "_remove_mdta_item", VALUEFUNC(_wrap_Tag__remove_mdta_item), -1);
   SwigClassTag.mark = 0;
   SwigClassTag.destroy = (void (*)(void *)) free_TagLib_MP4_Tag;
   SwigClassTag.trackObjects = 1;
@@ -6771,4 +6834,3 @@ SWIGEXPORT void Init_taglib_mp4(void) {
   SwigClassFile.destroy = (void (*)(void *)) free_taglib_mp4_file;
   SwigClassFile.trackObjects = 1;
 }
-

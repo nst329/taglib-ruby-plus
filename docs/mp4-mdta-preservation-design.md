@@ -531,7 +531,19 @@ clang++ -std=c++17 -I/opt/homebrew/opt/taglib/include \
 
 固定TagLibソースと本リポジトリ管理のパッチを採用し、専用ビルドをRuby拡張へ接続する。
 mdtaの解析・保持・編集・出力は本体、API接続と安全なファイル置換はRuby側の責務とする。
-実装は未着手であり、パッチ作成とビルド経路変更は今後の実装工程で行う。
+第一実装を開始し、TagLib v2.3.2固定commit向けパッチ、C++直接テスト、Ruby API、
+temp+rename保存、再open検証、通常saveのmdat payload hash検証、`save_chapters`の
+未保存metadata拒否までを実装した。TagLibパッチは`patches/taglib/`で管理し、vendor
+タスクが適用済みのTagLibだけをRuby拡張へ接続する。
+
+第一実装のRuby APIは`mdta_items`／`mdta_item`／`set_mdta_item`／`remove_mdta_item`。
+`MdtaItem#text`はtype 1の有効UTF-8だけを返し、その他は生binary `data`から暗黙変換しない。
+通常title／artistは通常ilst itemを優先し、通常itemが無いときだけmdta UTF-8値へfallbackする。
+
+TagLib本体には`IOStream::hasError()`と`File::ioError()`を追加し、短いwrite、seek、truncate、
+flushの失敗をsave結果へ伝播させた。chapter専用保存は、元のmdat payload列を出力側へ
+順序を保って含むことを検証し、chapter用mdatの追加だけを許可する。sample table単位の
+track分類が必要な断片化／特殊レイアウトは、現時点では成功扱いにしない。
 
 互換性よりも保存安全性を優先し、temp + rename + SWIG Fileポインタ再生成を採用する。
 保存後に古い`tag`、`Item`、`Properties` wrapperを再利用できないことは仕様とする。

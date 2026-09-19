@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Design experiments against the unpatched library, not product acceptance tests.
+# Contract tests for the patched TagLib and the Ruby save boundary.
 require "minitest/autorun"
 require "tmpdir"
 require "fileutils"
@@ -50,10 +50,10 @@ class Mp4MdtaDesignContractTest < Minitest::Test
     refute result.success?
   end
 
-  def test_discarded_writes_can_return_success_without_changing_bytes
+  def test_discarded_writes_are_reported_as_save_failure
     before = Digest::SHA256.file(@source).hexdigest
     output = run!(ENV.fetch("MDTA_IO_FAULT"), @source)
-    assert_match(/save=1 discarded=[1-9]/, output)
+    assert_match(/save=0 discarded=[1-9]/, output)
     assert_equal before, Digest::SHA256.file(@source).hexdigest
   end
 
@@ -87,11 +87,11 @@ class Mp4MdtaDesignContractTest < Minitest::Test
       map = file.tag.item_map
       assert map.include?("\u00a9nam")
       map.erase("\u00a9nam")
-      assert_equal "", file.tag.title
+      assert_equal "MDTA Title", file.tag.title
       map.insert("\u00a9nam", TagLib::MP4::Item.new(["Map title"]))
       assert_equal "Map title", file.tag.title
       map.clear
-      assert_equal "", file.tag.title
+      assert_equal "MDTA Title", file.tag.title
     end
   end
 

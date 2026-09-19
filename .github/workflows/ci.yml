@@ -64,7 +64,7 @@ jobs:
           path: |
             tmp/${{ env.PLATFORM }}/taglib-${{ env.TAGLIB_VERSION }}
             tmp/taglib-${{ env.TAGLIB_VERSION }}.tar.gz
-          key: taglib-${{ matrix.os }}-v${{ env.TAGLIB_VERSION }}-cache.v3
+          key: taglib-${{ matrix.os }}-v${{ env.TAGLIB_VERSION }}-mdta-patch.v1
 
       - name: Install TagLib (C++)
         if: steps.cache-taglib.outputs.cache-hit != 'true'

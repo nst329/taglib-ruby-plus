@@ -213,6 +213,20 @@ static VALUE taglib_mp4_chapters(TagLib::MP4::File *file, int style) {
   return taglib_mp4_chapters_to_ruby(chapters);
 }
 
+static VALUE taglib_mp4_mdta_items(TagLib::MP4::Tag *tag) {
+  VALUE result = rb_ary_new2(tag->mdtaItems().size());
+  for (const auto &item : tag->mdtaItems()) {
+    VALUE entry = rb_hash_new();
+    rb_hash_aset(entry, ID2SYM(rb_intern("key")), taglib_string_to_ruby_string(item.key));
+    rb_hash_aset(entry, ID2SYM(rb_intern("key_index")), UINT2NUM(item.keyIndex));
+    rb_hash_aset(entry, ID2SYM(rb_intern("data_type")), UINT2NUM(item.dataType));
+    rb_hash_aset(entry, ID2SYM(rb_intern("locale")), UINT2NUM(item.locale));
+    rb_hash_aset(entry, ID2SYM(rb_intern("data")), taglib_bytevector_to_ruby_string(item.data));
+    rb_ary_push(result, entry);
+  }
+  return result;
+}
+
 static void taglib_mp4_set_chapters(TagLib::MP4::File *file, VALUE value, int style) {
   TagLib::MP4::ChapterList chapters = taglib_mp4_chapters_from_ruby(value, file);
   if (style == TAGLIB_RUBY_MP4_STYLE_NERO || style == TAGLIB_RUBY_MP4_STYLE_BOTH) {
@@ -349,6 +363,9 @@ namespace TagLib {
 %ignore TagLib::MP4::Item::toStem;
 %include <taglib/mp4item.h>
 
+%ignore TagLib::MP4::MdtaItem;
+%ignore TagLib::MP4::MdtaItemList;
+
 namespace TagLib {
   namespace MP4 {
     %template(ItemMap) ::TagLib::Map<String, Item>;
@@ -356,6 +373,7 @@ namespace TagLib {
 }
 
 %ignore TagLib::MP4::Tag::itemListMap; // Deprecated.
+%ignore TagLib::MP4::Tag::copyStateTo;
 
 %rename("__getitem__") TagLib::MP4::Tag::item;
 
@@ -492,6 +510,23 @@ namespace TagLib {
 }
 
 %extend TagLib::MP4::Tag {
+  void _copy_state_to(TagLib::MP4::Tag *destination) {
+    $self->copyStateTo(*destination);
+  }
+
+  VALUE _mdta_items() {
+    return taglib_mp4_mdta_items($self);
+  }
+
+  bool _set_mdta_item(const String &key, unsigned int data_type,
+                      unsigned int locale, const ByteVector &data) {
+    return $self->setMdtaItem(key, data_type, locale, data);
+  }
+
+  bool _remove_mdta_item(const String &key) {
+    return $self->removeMdtaItem(key);
+  }
+
   VALUE __setitem__(const String& string, const MP4::Item &item) {
     TagLib::MP4::ItemMap::ConstIterator it = $self->itemMap().find(string);
     if (it != $self->itemMap().end()) {

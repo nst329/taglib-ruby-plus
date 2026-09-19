@@ -10,6 +10,8 @@ install_dll = "#{Build.install_dir}/bin/libtag.dll"
 $cross_config_options = ["--with-opt-dir=#{Build.install_dir}"]
 
 taglib_url = "https://github.com/taglib/taglib/archive/v#{Build.version}.tar.gz"
+taglib_base_commit = 'deadc2990767dfbda0701e0ab35fdeea653db08f'
+taglib_patch = File.expand_path('../patches/taglib/0001-mp4-mdta-preservation.patch', __dir__)
 taglib_options = ['-DCMAKE_BUILD_TYPE=Release',
                   '-DBUILD_EXAMPLES=OFF',
                   '-DBUILD_TESTS=OFF',
@@ -26,6 +28,15 @@ def configure_cross_compile(ext)
   ext.cross_compiling do |gem|
     gem.files << 'lib/libtag.dll'
   end
+end
+
+def ensure_taglib_patch(source, patch, expected_commit)
+  actual_commit = `git -C #{source} rev-parse HEAD`.strip
+  abort "Unexpected TagLib source commit: #{actual_commit}" unless actual_commit == expected_commit
+  return if system("git -C #{source} apply --reverse --check #{patch}")
+
+  abort 'TagLib mdta patch cannot be applied' unless system("git -C #{source} apply --check #{patch}")
+  sh "git -C #{source} apply #{patch}"
 end
 
 require 'rake/extensiontask'
@@ -84,6 +95,7 @@ end
 task vendor: [Build.library]
 
 file Build.library => [Build.install_dir, Build.build_dir, Build.source] do
+  ensure_taglib_patch(Build.source, taglib_patch, taglib_base_commit)
   chdir Build.build_dir do
     sh %(cmake -DCMAKE_INSTALL_PREFIX=#{Build.install_dir} #{taglib_options} #{Build.source})
     sh 'make install -j 4 VERBOSE=1'
@@ -98,4 +110,8 @@ file Build.source do
   sh "git clone --depth=1 --branch=v#{Build.version} https://github.com/taglib/taglib.git #{Build.source}"
   sh "git -C #{Build.source} submodule init"
   sh "git -C #{Build.source} submodule update --depth=1"
+  actual_commit = `git -C #{Build.source} rev-parse HEAD`.strip
+  abort "Unexpected TagLib source commit: #{actual_commit}" unless actual_commit == taglib_base_commit
+  sh "git -C #{Build.source} apply --check #{taglib_patch}"
+  sh "git -C #{Build.source} apply #{taglib_patch}"
 end

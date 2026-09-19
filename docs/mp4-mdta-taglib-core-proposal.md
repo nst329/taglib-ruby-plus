@@ -1,6 +1,6 @@
 # TagLib本体でのMP4 mdta対応設計（パッチ方式採用）
 
-2026-09-19。ユーザー承認によりパッチ方式を採用。実装は未着手。
+2026-09-19。ユーザー承認によりパッチ方式を採用。2026-09-20に第一実装を開始した。
 既存の[保持設計](mp4-mdta-preservation-design.md)に対し、TagLib本体の変更を
 このリポジトリで管理するパッチとして適用する。製品コードの変更は含まない。
 
@@ -35,6 +35,24 @@ commit SHAを固定して差分を再確認する。以下のファイル名・�
 
 `mp4atom`の全体書き換えは不要。既存の通常item parser、artwork、freeform、chapter処理は
 再利用し、mdtaを解釈する入口と出力の組み立てを追加する。
+
+## 第一実装の確定内容
+
+`patches/taglib/0001-mp4-mdta-preservation.patch`をTagLib v2.3.2の固定commitへ適用する。
+本体には`MP4::MdtaItem`、`MdtaItemList`、`Tag::mdtaItems()`、既存キーを更新・削除する
+`setMdtaItem()`／`removeMdtaItem()`、`Tag::copyStateTo()`を追加した。`Tag`はmdtaの数値
+itemを通常`ItemMap`へ入れず、キーindex、型、locale、生payloadと元atomを保持してから、
+通常itemと同じ`ilst`更新で再出力する。未解釈の4-byte itemもopaque bytesとして保存する。
+
+Ruby側の公開APIは`mdta_items`、`mdta_item`、`set_mdta_item`、`remove_mdta_item`であり、
+通常`item_map`とは別である。`MdtaItem#text`はdata type 1かつUTF-8が有効な場合だけ値を
+返す。通常itemがあるtitle／artistは通常itemを優先し、無い場合だけmdtaのUTF-8値へfallback
+する。`show`と`description`もproperty APIから同じfallback規則で読める。
+
+通常`save`と`save_chapters`は同一ディレクトリの一時コピーへ保存し、独立再読込、metadata
+比較、通常save時のmdat payload SHA-256比較を通過してからrenameする。metadata変更を伴う
+`save_chapters`は`ChapterSaveError`で拒否する。rename後の再open失敗は`committed: true`
+の`MdtaSaveError`とし、旧wrapperを再利用しない。
 
 ## 読み込みとデータモデル
 
@@ -241,7 +259,7 @@ TagLibと現行Ruby binding、OSのファイル操作を検証した。5 tests /
 | rename後失敗 | 実rename直後に再open失敗を注入 | パスは新内容、旧FDは旧内容。旧FD close後のreadは拒否 |
 
 最後の実験はOSハンドルの寿命を確かめるもの。将来のSWIG無効化実装を検証したものではない。
-Map実験も現行経路の確認であり、未実装のisModifiedやcopyStateToの正しさを証明しない。
+Map実験も現行経路の確認であり、実装前は`isModified`や`copyStateTo`の正しさを証明しない。
 破損注入は一時fixture限定。原本のSHA-256不変も確認した。
 
 再現手順（成果物は一時ディレクトリ）:
@@ -257,5 +275,10 @@ MDTA_BASELINE="$probe_dir/baseline" MDTA_IO_FAULT="$probe_dir/io-fault" \
 ```
 
 実行にはこのcheckoutのRuby base/MP4拡張と開発用FFmpegが必要。製品への依存追加はしない。
-TagLibパッチ、失敗検出FileStream、snapshot比較、SWIG無効化は未実装であり、上記は
-設計上の全4指摘の根拠検証である。修正版での保持・原本保護の受入試験は実装後に行う。
+この設計検証は未修正版TagLibに対するbaselineであり、TagLibパッチ、snapshot比較、
+SWIGの`copyStateTo`接続後の受入試験とは分ける。第一実装ではTagLibパッチ、snapshot比較、
+一時保存、再open、mdat hash、`save_chapters`拒否を実ファイルfixtureで検証済みである。
+IOStreamには`hasError()`／`File::ioError()`を追加し、短いwrite、seek、truncate、flushの
+失敗をTagLibのsave結果へ反映した。Rubyのchapter専用保存では元の全mdat payloadを出力側の
+mdat列中に順序を保って検証し、chapter用mdatの追加だけを許可する。sample table単位での
+track分類が必要な入力は、現時点ではmdat列検証を越えて成功扱いにしない。

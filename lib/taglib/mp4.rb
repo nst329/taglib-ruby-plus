@@ -1,5 +1,7 @@
 # frozen-string-literal: true
 
+require 'digest'
+require 'fileutils'
 require 'taglib_mp4'
 
 module TagLib::MP4
@@ -174,6 +176,51 @@ module TagLib::MP4
 
   class ChapterConflictError < StandardError; end
   class ChapterSaveError < StandardError; end
+  class MdtaItemError < ArgumentError; end
+  class MdtaSaveError < StandardError
+    attr_reader :committed, :phase
+
+    def initialize(message, committed: false, phase: nil)
+      @committed = committed
+      @phase = phase
+      super(message)
+    end
+  end
+
+  class MdtaItem
+    attr_reader :key, :key_index, :data_type, :locale, :data
+
+    def initialize(key:, key_index:, data_type:, locale:, data:)
+      @key = key.dup.freeze
+      @key_index = Integer(key_index)
+      @data_type = Integer(data_type)
+      @locale = Integer(locale)
+      @data = data.dup.force_encoding(Encoding::BINARY).freeze
+      freeze
+    end
+
+    def text
+      return unless data_type == 1
+
+      candidate = data.dup.force_encoding(Encoding::UTF_8)
+      candidate.valid_encoding? ? candidate : nil
+    end
+
+    def ==(other)
+      other.is_a?(MdtaItem) && [key, key_index, data_type, locale, data] ==
+        [other.key, other.key_index, other.data_type, other.locale, other.data]
+    end
+    alias eql? ==
+
+    def hash
+      [key, key_index, data_type, locale, data].hash
+    end
+
+    def inspect
+      format('#<%s key=%p index=%d type=%d locale=%d bytes=%d>', self.class, key,
+             key_index, data_type, locale, data.bytesize)
+    end
+  end
 
   class File
     extend ::TagLib::FileOpenable
@@ -184,6 +231,14 @@ module TagLib::MP4
       both: 3,
       any: 4
     }.freeze
+
+    alias initialize_without_snapshot initialize
+    private :initialize_without_snapshot
+
+    def initialize(*args)
+      initialize_without_snapshot(*args)
+      @mp4_metadata_snapshot = metadata_snapshot
+    end
 
     def chapters(style: nil)
       read_chapter_style_code(style) unless style.nil?
@@ -247,21 +302,186 @@ module TagLib::MP4
     end
 
     def save_chapters
-      result = _save_chapters
-      @chapter_state = nil
-      result
+      if metadata_dirty?
+        raise ChapterSaveError, 'save metadata changes before save_chapters'
+      end
+
+      atomic_save(chapters_only: true)
     end
 
     alias save_without_chapter_state save
     private :save_without_chapter_state
 
     def save(*args)
-      result = save_without_chapter_state(*args)
-      @chapter_state = nil if result
-      result
+      raise ArgumentError, 'save does not accept arguments' unless args.empty?
+
+      atomic_save(chapters_only: false)
     end
 
     private
+
+    def atomic_save(chapters_only:)
+      source_path = name
+      raise MdtaSaveError.new('MP4 file has no path', phase: :prepare) if source_path.nil? || source_path.empty?
+
+      expected_metadata = metadata_snapshot
+      source_mdat = mdat_payload_signature(source_path)
+      temp_path = "#{source_path}.taglib-mdta-#{Process.pid}-#{object_id}"
+      committed = false
+
+      begin
+        ::FileUtils.cp(source_path, temp_path)
+        temporary = self.class.new(temp_path, false)
+        begin
+          if chapters_only
+            apply_chapter_state_to(temporary)
+            result = temporary.send(:save_without_chapter_state)
+          else
+            copy_tag_state_to(temporary)
+            apply_chapter_state_to(temporary)
+            result = temporary.send(:save_without_chapter_state)
+          end
+          raise MdtaSaveError.new('TagLib failed to save temporary MP4', phase: :taglib_save) unless result
+        ensure
+          temporary.close
+        end
+
+        verify_saved_copy(temp_path, expected_metadata, source_mdat, chapters_only)
+        ::FileUtils.mv(temp_path, source_path)
+        committed = true
+
+        close
+        begin
+          initialize(source_path, false)
+        rescue StandardError => error
+          @mp4_invalid_after_commit = true
+          raise MdtaSaveError.new("MP4 reopened failed after rename: #{error.message}",
+                                  committed: true, phase: :reopen)
+        end
+
+        @chapter_state = nil
+        @mp4_metadata_snapshot = metadata_snapshot
+        true
+      rescue MdtaSaveError
+        raise
+      rescue StandardError => error
+        raise MdtaSaveError.new(error.message, committed: committed, phase: :replace)
+      ensure
+        ::FileUtils.rm_f(temp_path) unless committed
+      end
+    end
+
+    def copy_tag_state_to(destination)
+      if tag.respond_to?(:_copy_state_to)
+        tag._copy_state_to(destination.tag)
+        return
+      end
+
+      destination_map = destination.tag.item_map
+      destination_map.clear
+      tag.item_map.to_a.each do |key, item|
+        destination_map.insert(key, item)
+      end
+    end
+
+    def apply_chapter_state_to(destination)
+      return unless @chapter_state
+
+      @chapter_state.each do |style, chapters|
+        destination.set_chapters(chapters, style: style)
+      end
+    end
+
+    def verify_saved_copy(path, expected_metadata, source_mdat, chapters_only)
+      verification = self.class.new(path, false)
+      begin
+        actual_metadata = verification.send(:metadata_snapshot)
+        unless actual_metadata == expected_metadata
+          raise MdtaSaveError.new('temporary MP4 metadata verification failed', phase: :verify)
+        end
+        actual_mdat = verification.send(:mdat_payload_signature, path)
+        media_preserved = chapters_only ? mdat_payloads_preserved?(source_mdat, actual_mdat) : actual_mdat == source_mdat
+        unless media_preserved
+          raise MdtaSaveError.new('temporary MP4 media payload changed', phase: :verify)
+        end
+      ensure
+        verification.close
+      end
+    end
+
+    def metadata_dirty?
+      metadata_snapshot != @mp4_metadata_snapshot
+    end
+
+    def metadata_snapshot
+      {
+        items: tag.item_map.to_a.sort_by(&:first).map { |key, item| [key, item_snapshot(item)] },
+        mdta: tag.mdta_items.map { |item| [item.key, item.key_index, item.data_type, item.locale, item.data] }
+      }
+    end
+
+    def item_snapshot(item)
+      case item.type
+      when 1 then [:bool, item.to_bool]
+      when 2 then [:int, item.to_int]
+      when 3 then [:int_pair, item.to_int_pair]
+      when 4 then [:byte, item.to_byte]
+      when 5 then [:uint, item.to_uint]
+      when 6 then [:long_long, item.to_long_long]
+      when 7 then [:string_list, item.to_string_list]
+      when 8 then [:byte_vector_list, item.to_byte_vector_list]
+      when 9 then [:cover_art_list, item.to_cover_art_list.map { |art| [art.format, art.data] }]
+      else [:unknown, item.type]
+      end
+    end
+
+    def mdat_payload_signature(path)
+      signatures = []
+      ::File.open(path, 'rb') do |io|
+        file_length = io.stat.size
+        offset = 0
+        while offset + 8 <= file_length
+          io.seek(offset)
+          header = io.read(8)
+          size = header.unpack1('N')
+          header_length = 8
+          if size == 1
+            extended = io.read(8)
+            size = extended.unpack1('Q>')
+            header_length = 16
+          elsif size.zero?
+            size = file_length - offset
+          end
+          raise MdtaSaveError.new('invalid MP4 atom while hashing media', phase: :verify) if size < header_length || offset + size > file_length
+
+          if header.byteslice(4, 4) == 'mdat'
+            digest = Digest::SHA256.new
+            remaining = size - header_length
+            while remaining.positive?
+              chunk = io.read([remaining, 1024 * 1024].min)
+              raise MdtaSaveError.new('truncated mdat while hashing media', phase: :verify) if chunk.nil? || chunk.empty?
+
+              digest.update(chunk)
+              remaining -= chunk.bytesize
+            end
+            signatures << [size - header_length, digest.hexdigest]
+          end
+          offset += size
+        end
+      end
+      signatures
+    end
+
+    def mdat_payloads_preserved?(original, saved)
+      index = 0
+      original.all? do |signature|
+        index += 1 while index < saved.length && saved[index] != signature
+        next false if index >= saved.length
+
+        index += 1
+        true
+      end
+    end
 
     def chapter_style_code(style)
       CHAPTER_STYLE_CODES.fetch(style) do
@@ -338,6 +558,13 @@ module TagLib::MP4
     }.freeze
 
     CONTENT_RATING_PROPERTY = 'contentRating'
+    MDTA_PROPERTY_KEYS = {
+      'title' => 'title',
+      'artist' => 'artist',
+      'description' => 'description',
+      'TVShowName' => 'show',
+      'show' => 'show'
+    }.freeze
 
     def property(name)
       values = property_values(name)
@@ -347,12 +574,17 @@ module TagLib::MP4
     def property_values(name)
       key = property_atom(name)
       item = item_map[key]
-      return [] unless item
+      if item
+        values = item.to_string_list
+        return values unless key == PROPERTY_ATOMS.fetch(CONTENT_RATING_PROPERTY)
 
-      values = item.to_string_list
-      return values unless key == PROPERTY_ATOMS.fetch(CONTENT_RATING_PROPERTY)
+        return values.map { |value| ContentRating.parse(value) }
+      end
 
-      values.map { |value| ContentRating.parse(value) }
+      mdta_key = MDTA_PROPERTY_KEYS[name.to_s]
+      return [] unless mdta_key
+
+      mdta_items.filter_map { |entry| entry.text if entry.key == mdta_key }
     end
 
     def properties
@@ -415,13 +647,68 @@ module TagLib::MP4
       self
     end
 
+    def mdta_items
+      return [] unless respond_to?(:_mdta_items)
+
+      _mdta_items.map do |entry|
+        MdtaItem.new(**entry.transform_keys(&:to_sym))
+      end
+    end
+
+    def mdta_item(key)
+      mdta_items.find { |entry| entry.key == normalize_mdta_key(key) }
+    end
+
+    def set_mdta_item(key, data, data_type: 1, locale: 0)
+      raise MdtaItemError, 'patched TagLib with mdta support is required' unless respond_to?(:_set_mdta_item)
+
+      key = normalize_mdta_key(key)
+      validate_mdta_data!(data)
+      data = data.dup.force_encoding(Encoding::BINARY)
+      data_type = validate_mdta_integer!(data_type, 'data_type')
+      locale = validate_mdta_integer!(locale, 'locale')
+      unless _set_mdta_item(key, data_type, locale, data)
+        raise MdtaItemError, "unknown mdta key: #{key.inspect}"
+      end
+      self
+    end
+
+    def remove_mdta_item(key)
+      raise MdtaItemError, 'patched TagLib with mdta support is required' unless respond_to?(:_remove_mdta_item)
+
+      key = normalize_mdta_key(key)
+      _remove_mdta_item(key)
+      self
+    end
+
     private
 
     def property_atom(name)
       name = name.to_s
+      return PROPERTY_ATOMS.fetch('TVShowName') if name == 'show'
+
       PROPERTY_ATOMS.fetch(name) do
         raise ArgumentError, "unsupported MP4 property: #{name.inspect}"
       end
+    end
+
+    def normalize_mdta_key(key)
+      raise MdtaItemError, 'mdta key must be a String' unless key.is_a?(String)
+      raise MdtaItemError, 'mdta key must be valid UTF-8' unless key.encoding == Encoding::UTF_8 && key.valid_encoding?
+      raise MdtaItemError, 'mdta key must not contain NUL bytes' if key.include?("\0")
+
+      key
+    end
+
+    def validate_mdta_data!(data)
+      raise MdtaItemError, 'mdta data must be a String' unless data.is_a?(String)
+    end
+
+    def validate_mdta_integer!(value, name)
+      unless value.is_a?(Integer) && value >= 0 && value <= 0xffff_ffff
+        raise MdtaItemError, "mdta #{name} must be an unsigned 32-bit Integer"
+      end
+      value
     end
 
     def validate_property_value(name, value)
