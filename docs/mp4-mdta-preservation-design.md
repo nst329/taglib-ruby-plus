@@ -2,7 +2,7 @@
 
 ## 状態
 
-設計レビュー済み・簡易fixture検証と境界見直し反映・実装前（2026-09-19）
+TagLib本体へのパッチ方式採用・簡易fixture検証反映・実装前（2026-09-19）
 
 ## 目的
 
@@ -99,6 +99,10 @@ Ruby bindingだけでなく、TagLib C++ APIを直接使った場合にも同じ
 chapter専用の`save_chapters`は通常の`MP4::Tag::save()`を呼ばないため、mdta通常保存とは
 別経路として維持する。
 
+mdta対応後もこの境界を維持する。`save_chapters`はmetadata writerを実行せず、未保存の
+通常tagまたはmdta変更がある場合は、Ruby側の一時File再openで変更を失わないよう
+`ChapterSaveError`で拒否する。
+
 ## 採用するデータモデル
 
 mdtaを既存の`ItemMap`へ混在させない。`keys` tableと`ilst` item群は別の集合として
@@ -160,6 +164,10 @@ mdta setterはmdtaだけを変更する。これにより、同名キーが両�
 
 ## TagLib本体に必要な変更
 
+採用した[TagLib本体へのパッチ方式](mp4-mdta-taglib-core-proposal.md)を参照する。
+固定したTagLibソースへ本リポジトリ管理のパッチを適用し、専用prefixへビルドする。
+parser/writerは本体へ集約し、Ruby拡張による保存後のatom再構成は採用しない。
+
 正式対応としてTagLib本体へ提案する範囲は次のとおり。
 
 - mdta handlerの検出
@@ -175,14 +183,15 @@ NI STEM対応のPR #1は、今回のmdta対応そのものではないため、�
 
 ## taglib-ruby-plus側の実装範囲
 
-TagLib本体を`/opt/homebrew`から変更せず、既存の`taglib_mp4`拡張へ次を追加する。
+`/opt/homebrew`を変更せず、パッチ適用版TagLibへ`TAGLIB_DIR`でリンクする。
+このリポジトリでは次を担当する。
 
-- mdta atomのraw parser/writer
-- `keys`と`ilst`の対応付け
+- TagLibパッチ、適用順、固定ソースとchecksumの管理
+- vendor/CIでのパッチ適用・専用ビルド・機能検出
+- mdta専用C++ APIのbinding
 - Ruby値オブジェクトとのコピー変換
-- 未知型の生payload保持
-- 通常saveとmdta保存の統合
-- C++直接テスト
+- 一時コピーを修正版TagLibで保存・検証して置換する処理
+- C++直接テストとRuby APIテストの接続、パッケージ検証
 
 Ruby側ではmdta専用APIと、通常プロパティのフォールバックを追加する。
 
@@ -294,11 +303,13 @@ tag.remove_mdta_item(key, namespace: "mdta")       # keyと値を全削除
 
 ### 準備
 
-1. TagLib保存を呼ぶ前に、元MP4の全meta atom、keys、mdta数値item、通常itemの
-   構造上の位置（`udta`内のmeta順、handler、ilst内の順序）と生bytesをsnapshotする。
+1. TagLib保存を呼ぶ前に、TagLib本体の編集モデルとして元MP4の全meta atom、keys、
+   mdta数値item、通常item、削除状態、構造上の位置（`udta`内のmeta順、handler、
+   ilst内の順序）と生bytesをsnapshotする。
 2. snapshotから編集可能なworking modelを複製する。通常`ItemMap`、chapter状態、
-   mdta状態の変更はこのworking modelへ適用する。
-3. mdtaのkeys/items/data_atomsを検証し、working modelから出力可能なbyte列へ変換する。
+   mdta状態の変更はこのworking modelへ適用する。公開ItemMapとmdta配列から再構成しない。
+3. mdtaのkeys/items/data_atomsと削除状態を検証し、working modelから出力可能なbyte列へ
+   変換する。
 4. 同一ディレクトリに一時ファイルを作り、元MP4をコピーする。
 
 この時点では元MP4を変更しない。
@@ -306,18 +317,17 @@ tag.remove_mdta_item(key, namespace: "mdta")       # keyと値を全削除
 ### 一時ファイルの生成
 
 1. 一時ファイルを新しいTagLib `MP4::File`で開く。
-2. 現在の通常`ItemMap`を移す。
-3. 現在変更されているNero／QuickTime chapterを移す。
+2. TagLib本体の状態複製操作で、通常item、mdta、未知atom、削除状態、meta所属を一括して移す。
+3. 現在変更されているNero／QuickTime chapterを移す。未保存tag変更を失う再構成はしない。
 4. TagLibの通常`save()`を一時ファイルへ実行する。
-5. TagLib保存後の通常itemを抽出する。
-6. working modelを出力のsource of truthとして、snapshotしたmeta位置へ通常itemと
-   mdta数値itemを再配置する。snapshotは未変更raw atom、meta位置、handler、opaqueな
-   構造を復元するために使い、TagLib保存後の`keys`や数値itemからmdtaを再生成しない。
-7. 必要なら`stco`／`co64`と親atomサイズを更新する。
+   このsaveはパッチ適用版を使い、通常ItemMapに加えて編集済みmdta状態も事前に移す。
+5. 通常itemとmdtaの合成、keys/ilstの整合性、親atomサイズとchunk offsetの更新は
+   TagLib本体のwriterが担当する。Ruby側で保存後のatomを再構成しない。
+6. 一時出力を独立に再読込し、後述の検証へ進む。
 
-TagLibが誤認識したmdta数値itemは、通常`ItemMap`へ移さない。`ItemMap`から移すのは
-空のキーを除く通常item全てとし、既存の`zzzz`、新規の未知item、長いRubyキーを持つ
-freeform itemも含める。分類には元atomのraw名とhandlerを用い、Rubyの文字列長を
+TagLibが誤認識したmdta数値itemは、通常`ItemMap`へ移さない。通常item、既存の`zzzz`、
+新規の未知item、長いRubyキーを持つfreeform itemは、TagLib本体の編集モデルから同じ
+meta所属と順序で出力する。分類には元atomのraw名とhandlerを用い、Rubyの文字列長を
 判定条件にしない。
 keysにない数値itemや参照範囲外のindexを検出した場合は、元MP4を置換せず
 `MdtaSaveError`にする。
@@ -332,16 +342,22 @@ snapshotの識別にはbyte offsetを使わない。TagLib保存でmetaの大き
 2. 通常ilstのtitle、artist、artwork、freeform、chapterを確認する。
 3. mdtaのkey、data type、locale、payloadを確認する。
 4. ファイルサイズ・atom境界・chunk offsetの整合性を確認する。
-5. flushおよびfsync後、renameで元パスへ置換する。
-6. 元パスを新しいTagLib Fileで開き直す。
-7. SWIGのFileポインタを新しいFileへ差し替える。
+5. 通常metadata保存では全mdat payloadの順序・長さ・SHA-256一致を確認する。chapter変更時は
+   chapter以外の全trackのsample bytesと長さを比較する。対応不能なレイアウトは拒否する。
+6. 書込み側をflush/closeし、I/Oエラーとfsync結果を確認してからrenameで元パスへ置換する。
+7. 元パスを新しいTagLib Fileで開き直す。
+8. SWIGのFileポインタを新しいFileへ差し替える。
 
 rename前に失敗した場合、元MP4は変更しない。
-rename後の再openに失敗した場合は保存失敗として例外を送出するが、出力MP4自体は検証済みの内容を維持する。
+rename後の再openまたはwrapper再接続失敗では旧Fileと全借用wrapperを無効化し、Fileを
+使用不能にする。例外は`committed=true`と失敗phaseを持ち、出力は置換済みであることを示す。
+rename前の失敗は`committed=false`で元Fileと未保存編集を維持する。I/O失敗の検出を
+再openだけに依存させず、TagLib本体のエラー報告を必須とする。
 
 ## SWIG wrapperの寿命
 
 保存成功時は、古いFile native objectを破棄し、新しいnative Fileを同じRuby File wrapperへ関連付ける。
+rename後の失敗時も古いnative objectを使用不能にする。古いオブジェクトへ戻してはならない。
 古いFileが所有していた次のborrowed wrapperは無効化する。
 
 - `Tag`
@@ -361,6 +377,11 @@ rename後の再openに失敗した場合は保存失敗として例外を送出�
 
 保存失敗時は`false`を返さず、`MdtaSaveError`を送出する。
 既存のchapter専用`ChapterSaveError`の契約とは分離する。
+
+保存例外には`committed`と`phase`を持たせ、chapter専用保存も同じ置換状態を通知する。
+ItemMapの直接clear/erase/insertは、本体の読み込み時snapshotとの差分で検出して内部モデルに
+反映する。`isModified`をsetterフラグだけで実装しない。詳細と失敗系の検証結果は
+[本体設計](mp4-mdta-taglib-core-proposal.md)の2026-09-20レビュー検証を参照する。
 
 ## 検証マトリクス
 
@@ -443,6 +464,7 @@ TagLibの通常保存は同一ファイルを直接変更するため、保存�
 - artworkは通常ilstの`covr`として保持する。
 - freeform itemは通常ilstのまま保持する。
 - `save_chapters`はmdta通常保存と干渉させない。
+- 未保存の通常tag/mdta変更を伴う`save_chapters`は拒否し、先に通常`save`を要求する。
 - mdtaの読み書きは通常`ItemMap`とは別APIにする。
 - 既存の通常MP4を可能な範囲で保持するが、保存後のborrowed wrapperの寿命は保証しない。
 - 保存後のTag、Item、Propertiesは再取得を必須とする。
@@ -478,6 +500,7 @@ test/mp4_mdta_atom_probe.rb --expect-mdta \
 clang++ -std=c++17 -I/opt/homebrew/opt/taglib/include \
   test/mp4_mdta_direct_baseline.cpp \
   -L/opt/homebrew/opt/taglib/lib -ltag -o /tmp/mp4_mdta_direct_baseline
+/tmp/mp4_mdta_direct_baseline /tmp/mdta-fixture.mp4 /tmp/mdta-fixture-saved.mp4
 ```
 
 `generate_mp4_mdta_fixture.rb`は`FFMPEG`環境変数でFFmpegの場所を変更できる。
@@ -505,6 +528,10 @@ clang++ -std=c++17 -I/opt/homebrew/opt/taglib/include \
   APIの優先順位判定には使わない。検証ではatom単位の値を正本とする。
 
 ## 決定事項
+
+固定TagLibソースと本リポジトリ管理のパッチを採用し、専用ビルドをRuby拡張へ接続する。
+mdtaの解析・保持・編集・出力は本体、API接続と安全なファイル置換はRuby側の責務とする。
+実装は未着手であり、パッチ作成とビルド経路変更は今後の実装工程で行う。
 
 互換性よりも保存安全性を優先し、temp + rename + SWIG Fileポインタ再生成を採用する。
 保存後に古い`tag`、`Item`、`Properties` wrapperを再利用できないことは仕様とする。
