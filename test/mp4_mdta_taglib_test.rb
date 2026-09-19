@@ -99,11 +99,24 @@ class MP4MdtaTagLibTest < Test::Unit::TestCase
     end
   end
 
-  def test_mdta_api_rejects_unknown_key_without_mutating
+  def test_mdta_api_adds_and_removes_new_key
     open_file do |file|
-      assert_raise(TagLib::MP4::MdtaItemError) do
-        file.tag.set_mdta_item('new-key', 'value')
-      end
+      file.tag.set_mdta_item('com.example.taglib.new-key', 'value')
+      assert_equal 'value', file.tag.mdta_item('com.example.taglib.new-key').text
+      assert file.save
+    end
+
+    open_file do |file|
+      item = file.tag.mdta_item('com.example.taglib.new-key')
+      assert_not_nil item
+      assert_equal 'value', item.text
+      file.tag.remove_mdta_item('com.example.taglib.new-key')
+      assert_nil file.tag.mdta_item('com.example.taglib.new-key')
+      assert file.save
+    end
+
+    open_file do |file|
+      assert_nil file.tag.mdta_item('com.example.taglib.new-key')
       assert_equal 'loudnorm', file.tag.mdta_item('audio_normalization').text
     end
   end

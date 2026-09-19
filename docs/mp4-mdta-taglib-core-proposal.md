@@ -40,7 +40,9 @@ commit SHAを固定して差分を再確認する。以下のファイル名・�
 
 `patches/taglib/0001-mp4-mdta-preservation.patch`をTagLib v2.3.2の固定commitへ適用する。
 本体には`MP4::MdtaItem`、`MdtaItemList`、`Tag::mdtaItems()`、既存キーを更新・削除する
-`setMdtaItem()`／`removeMdtaItem()`、`Tag::copyStateTo()`を追加した。`Tag`はmdtaの数値
+`setMdtaItem()`／`removeMdtaItem()`、`Tag::copyStateTo()`を追加した。`setMdtaItem()`は既存の
+mdta `keys`／`ilst`がある場合に新規キーをkeys table末尾へ追加し、削除時はindexを再採番する。
+`Tag`はmdtaの数値
 itemを通常`ItemMap`へ入れず、キーindex、型、locale、生payloadと元atomを保持してから、
 通常itemと同じ`ilst`更新で再出力する。未解釈の4-byte itemもopaque bytesとして保存する。
 

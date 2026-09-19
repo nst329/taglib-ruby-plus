@@ -67,7 +67,30 @@ int main(int argc, char **argv)
     require(reopened.tag()->setMdtaItem("audio_normalization_target", 1, 0,
                                         TagLib::ByteVector("-14-LUFS", 8)),
             "mdta target update failed");
+    require(reopened.tag()->setMdtaItem("com.example.taglib.new-key", 1, 0,
+                                        TagLib::ByteVector("new-value", 9)),
+            "new mdta key add failed");
     require(reopened.save(), "mdta save failed");
+  }
+
+  {
+    TagLib::MP4::File saved(argv[2], false);
+    require(saved.isValid(), "saved output is invalid");
+    const auto &afterMdta = saved.tag()->mdtaItems();
+    const auto *normalization = find(afterMdta, "audio_normalization");
+    const auto *target = find(afterMdta, "audio_normalization_target");
+    const auto *newKey = find(afterMdta, "com.example.taglib.new-key");
+    require(newKey && newKey->data == TagLib::ByteVector("new-value", 9),
+            "new mdta key did not roundtrip");
+    require(normalization != nullptr, "normalization missing after mdta update");
+    require(target != nullptr, "target missing after mdta update");
+    require(normalization->data == TagLib::ByteVector("ebu-r128", 8),
+            "normalization changed unexpectedly");
+    require(target->data == TagLib::ByteVector("-14-LUFS", 8),
+            "target changed unexpectedly");
+    require(saved.tag()->removeMdtaItem("com.example.taglib.new-key"),
+            "new mdta key removal failed");
+    require(saved.save(), "mdta key removal save failed");
   }
 
   TagLib::MP4::File finalFile(argv[2], false);
@@ -83,6 +106,8 @@ int main(int argc, char **argv)
     std::cerr << "target=" << (target ? target->data.toHex().data() : "missing") << '\n';
     return 1;
   }
+  require(find(afterMdta, "com.example.taglib.new-key") == nullptr,
+          "removed mdta key still exists");
   require(finalFile.tag()->title() == "Changed by patched TagLib", "normal title lost after mdta save");
   return 0;
 }

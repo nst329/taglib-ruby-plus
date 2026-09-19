@@ -286,6 +286,8 @@ tag.remove_mdta_item(key, namespace: "mdta")       # keyと値を全削除
 維持する。新規keyはkeys tableの末尾へ追加する。`set_mdta_item`も同じ置換規則を使い、
 `data_type`、`locale`、生payloadをそのまま保存する。
 
+`set_mdta_item`は既存のmdta `keys`／`ilst`がある場合、新規キーをkeys table末尾へ追加する。
+
 `remove_mdta_item`は指定keyの全data atomとkeys tableの項目を削除し、後続のkeys indexと
 数値ilst item名を1つずつ繰り上げる。読み出したkey-only entryを保持したい場合は、明示的な
 変更を行わず通常保存する。未知型の値を文字列setterで更新する操作は提供しない。

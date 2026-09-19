@@ -12,7 +12,7 @@
 
 `moov/udta/meta`の`hdlr=mdta`を検出し、`keys`のindexと`ilst`の数値itemを分離して
 読み込みます。各`data` atomのdata type、locale、生payloadを保持し、通常の`ilst`
-保存時にもmdta itemを再出力します。既存キーの更新・削除APIと、UTF-8 type 1の
+保存時にもmdta itemを再出力します。既存キーの更新・削除、新規キー追加APIと、UTF-8 type 1の
 `title`／`artist` fallbackも含みます。
 
 通常の`ItemMap`へmdta itemを混在させないことが重要です。未知の型は生bytesとして
