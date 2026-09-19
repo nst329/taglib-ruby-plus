@@ -144,7 +144,7 @@ class Mp4AtomProbe
       mdta_index = item.type.unpack1("N")
       numeric_mdta_item = handler == "mdta" && item.type.getbyte(0).zero?
       if numeric_mdta_item
-        if mdta_index <= result["keys"].length
+        if mdta_index.positive? && mdta_index <= result["keys"].length
           result["mdta_items"] << { "index" => mdta_index, "data" => data_items }
           data_items.each { |data| result["values"] << data.merge("index" => mdta_index) }
         else
@@ -191,6 +191,8 @@ class Mp4AtomProbe
   end
 
   def parse_data(atom)
+    raise "truncated data atom at #{atom.offset}" if atom.payload_offset + 8 > atom.end_offset
+
     type = uint32(atom.payload_offset)
     locale = uint32(atom.payload_offset + 4)
     payload = @bytes.byteslice(atom.payload_offset + 8, atom.end_offset - atom.payload_offset - 8) || "".b

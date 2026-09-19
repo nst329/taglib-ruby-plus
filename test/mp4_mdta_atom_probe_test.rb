@@ -63,6 +63,23 @@ class Mp4MdtaAtomProbeTest < Minitest::Test
     end
   end
 
+  def test_short_data_atom_is_rejected
+    short_data = box("data", [1].pack("N"))
+    with_mp4(mp4(mdta_meta(item(1, short_data)))) do |path|
+      _output, error, status = Open3.capture3(RbConfig.ruby, PROBE, "--check", path)
+      refute status.success?
+      assert_match(/truncated data atom/, error)
+    end
+  end
+
+  def test_zero_index_item_is_rejected
+    with_mp4(mp4(mdta_meta(item(0, "".b)))) do |path|
+      _output, error, status = Open3.capture3(RbConfig.ruby, PROBE, "--check", path)
+      refute status.success?
+      assert_match(/ilst index 0 has no keys entry/, error)
+    end
+  end
+
   private
 
   def with_mp4(bytes)

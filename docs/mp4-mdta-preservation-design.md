@@ -2,7 +2,7 @@
 
 ## 状態
 
-設計レビュー済み・簡易fixture検証反映・実装前（2026-09-19）
+設計レビュー済み・簡易fixture検証と境界見直し反映・実装前（2026-09-19）
 
 ## 目的
 
@@ -296,8 +296,9 @@ tag.remove_mdta_item(key, namespace: "mdta")       # keyと値を全削除
 
 1. TagLib保存を呼ぶ前に、元MP4の全meta atom、keys、mdta数値item、通常itemの
    構造上の位置（`udta`内のmeta順、handler、ilst内の順序）と生bytesをsnapshotする。
-2. 現在の通常`ItemMap`、chapter状態、mdta状態を読み取る。
-3. mdtaのkeys/items/data_atomsを検証し、出力可能なbyte列へ変換する。
+2. snapshotから編集可能なworking modelを複製する。通常`ItemMap`、chapter状態、
+   mdta状態の変更はこのworking modelへ適用する。
+3. mdtaのkeys/items/data_atomsを検証し、working modelから出力可能なbyte列へ変換する。
 4. 同一ディレクトリに一時ファイルを作り、元MP4をコピーする。
 
 この時点では元MP4を変更しない。
@@ -309,8 +310,9 @@ tag.remove_mdta_item(key, namespace: "mdta")       # keyと値を全削除
 3. 現在変更されているNero／QuickTime chapterを移す。
 4. TagLibの通常`save()`を一時ファイルへ実行する。
 5. TagLib保存後の通常itemを抽出する。
-6. snapshotしたmeta位置へ通常itemとmdta数値itemを再配置する。mdtaのkeysは
-   snapshotをsource of truthとし、TagLib保存後の`keys`や数値itemから再生成しない。
+6. working modelを出力のsource of truthとして、snapshotしたmeta位置へ通常itemと
+   mdta数値itemを再配置する。snapshotは未変更raw atom、meta位置、handler、opaqueな
+   構造を復元するために使い、TagLib保存後の`keys`や数値itemからmdtaを再生成しない。
 7. 必要なら`stco`／`co64`と親atomサイズを更新する。
 
 TagLibが誤認識したmdta数値itemは、通常`ItemMap`へ移さない。`ItemMap`から移すのは
@@ -390,6 +392,9 @@ ItemMapの意味的な一致は、TagLibを再読込する別テストの責務�
 
 - 合成fixtureでは同じkey indexの数値itemを2個作り、1個目にdata atomを2個置いた。
   probeはitem境界とdata個数`[2, 1]`を区別し、未知型`33`のpayloadを文字列化しなかった。
+- data payload headerが8 bytes未満の短い`data` atomは`truncated data atom`として拒否し、
+  key index `0`の数値itemもkeysの範囲外として拒否した。壊れたfixtureを正常値として
+  扱わない境界を固定した。
 - keysだけ残って値がないfixtureは`--require-value=title=...`で拒否された。FFmpeg fixtureの
   title、show、artist、description、normalization 2項目は必須値検査を通過し、現行TagLib
   保存後fixtureはkeysが残っていても必須値検査に失敗した。
@@ -486,6 +491,18 @@ clang++ -std=c++17 -I/opt/homebrew/opt/taglib/include \
   明示的な変更を行わない通常保存だけを許可する。
 - keysが壊れている、数値itemがkeys範囲外、data atomが切れている場合は、通常保存でも
   元パスを置換しない。
+
+## 未解決点
+
+- TagLib本体へ提案する公開APIの最終的なC++型名と、既存`MP4::Item`との責務分離は、
+  上流レビューで確定する。taglib-ruby-plus側では先に`MdtaKey`／`MdtaItem`相当の内部
+  モデルを実装できるが、上流APIを独自に確定したものとは扱わない。
+- `udta`内に複数のmdta `meta`があるファイルは、通常保存で全て保持する一方、mdta setter
+  の対象選択規則は未確定である。当面は曖昧さを避けてsetterを失敗させる。
+- `moov`の再配置で`stco`から`co64`への切替が必要になる境界は、実装時に大容量・faststart
+  以外のfixtureで追加検証する。保存前の元ファイルを置換しない契約は変更しない。
+- ffprobeが同名の通常itemとmdta itemをどう表示するかはffprobeの出力仕様に依存するため、
+  APIの優先順位判定には使わない。検証ではatom単位の値を正本とする。
 
 ## 決定事項
 
