@@ -331,20 +331,7 @@ module TagLib::MP4
 
       begin
         ::FileUtils.cp(source_path, temp_path)
-        temporary = self.class.new(temp_path, false)
-        begin
-          if chapters_only
-            apply_chapter_state_to(temporary)
-            result = temporary.send(:save_without_chapter_state)
-          else
-            copy_tag_state_to(temporary)
-            apply_chapter_state_to(temporary)
-            result = temporary.send(:save_without_chapter_state)
-          end
-          raise MdtaSaveError.new('TagLib failed to save temporary MP4', phase: :taglib_save) unless result
-        ensure
-          temporary.close
-        end
+        save_temporary_copy(temp_path, chapters_only: chapters_only)
 
         verify_saved_copy(temp_path, expected_metadata, source_mdat, chapters_only)
         ::FileUtils.mv(temp_path, source_path)
@@ -368,6 +355,19 @@ module TagLib::MP4
         raise MdtaSaveError.new(error.message, committed: committed, phase: :replace)
       ensure
         ::FileUtils.rm_f(temp_path) unless committed
+      end
+    end
+
+    def save_temporary_copy(path, chapters_only:)
+      temporary = self.class.new(path, false)
+      begin
+        copy_tag_state_to(temporary) unless chapters_only
+        apply_chapter_state_to(temporary)
+        unless temporary.send(:save_without_chapter_state)
+          raise MdtaSaveError.new('TagLib failed to save temporary MP4', phase: :taglib_save)
+        end
+      ensure
+        temporary.close
       end
     end
 

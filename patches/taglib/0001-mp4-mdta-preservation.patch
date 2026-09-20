@@ -13,7 +13,7 @@ index 5f8e5be..fff4dd9 100644
 
  bool
 diff --git a/taglib/mp4/mp4tag.cpp b/taglib/mp4/mp4tag.cpp
-index 4e6ea75..bb6b036 100644
+index 4e6ea75..ff8c4d5 100644
 --- a/taglib/mp4/mp4tag.cpp
 +++ b/taglib/mp4/mp4tag.cpp
 @@ -25,7 +25,10 @@
@@ -314,16 +314,23 @@ index 4e6ea75..bb6b036 100644
  }
 
  bool
-@@ -284,6 +494,50 @@ MP4::Tag::saveNew(ByteVector data)
-   path.back()->prependChild(new Atom(d->file));
+@@ -285,65 +495,72 @@ MP4::Tag::saveNew(ByteVector data)
  }
 
-+void
+ void
+-MP4::Tag::saveExisting(ByteVector data, const AtomList &path)
 +MP4::Tag::saveExistingAtom(ByteVector data, const AtomList &path)
-+{
+ {
+-  auto it = path.end();
+-
+-  MP4::Atom *ilst = *(--it);
+-  offset_t offset = ilst->offset();
+-  offset_t length = ilst->length();
 +  if(path.size() < 2)
 +    return;
-+
+
+-  MP4::Atom *meta = *(--it);
+-  auto index = meta->children().cfind(ilst);
 +  MP4::Atom *atom = path.back();
 +  auto parentIt = path.end();
 +  std::advance(parentIt, -2);
@@ -331,21 +338,27 @@ index 4e6ea75..bb6b036 100644
 +  offset_t offset = atom->offset();
 +  offset_t length = atom->length();
 +  auto index = parent->children().cfind(atom);
-+
+
+-  // check if there is an atom before 'ilst', and possibly use it as padding
+-  if(index != meta->children().cbegin()) {
 +  if(index != parent->children().cbegin()) {
-+    auto prevIndex = std::prev(index);
-+    if(const MP4::Atom *prev = *prevIndex; prev->name() == "free") {
-+      offset = prev->offset();
-+      length += prev->length();
-+    }
-+  }
-+  auto nextIndex = std::next(index);
+     auto prevIndex = std::prev(index);
+     if(const MP4::Atom *prev = *prevIndex; prev->name() == "free") {
+       offset = prev->offset();
+       length += prev->length();
+     }
+   }
+-  // check if there is an atom after 'ilst', and possibly use it as padding
+   auto nextIndex = std::next(index);
+-  if(nextIndex != meta->children().cend()) {
+-    if(const MP4::Atom *next = *nextIndex; next->name() == "free") {
 +  if(nextIndex != parent->children().cend()) {
 +    if(const MP4::Atom *next = *nextIndex; next->name() == "free")
-+      length += next->length();
-+  }
-+
-+  offset_t delta = data.size() - length;
+       length += next->length();
+-    }
+   }
+
+   offset_t delta = data.size() - length;
 +  if(delta > 0 || (delta < 0 && delta > -8)) {
 +    data.append(padIlst(data));
 +    delta = data.size() - length;
@@ -362,10 +375,57 @@ index 4e6ea75..bb6b036 100644
 +  }
 +}
 +
- void
- MP4::Tag::saveExisting(ByteVector data, const AtomList &path)
- {
-@@ -351,6 +605,10 @@ MP4::Tag::title() const
++void
++MP4::Tag::saveExisting(ByteVector data, const AtomList &path)
++{
+   if(!data.isEmpty()) {
+-    if(delta > 0 || (delta < 0 && delta > -8)) {
+-      data.append(padIlst(data));
+-      delta = data.size() - length;
+-    }
+-    else if(delta < 0) {
+-      data.append(padIlst(data, static_cast<int>(-delta - 8)));
+-      delta = 0;
+-    }
++    saveExistingAtom(std::move(data), path);
++    return;
++  }
+
+-    d->file->insert(data, offset, length);
++  auto it = path.end();
++  --it;
++  MP4::Atom *meta = *(--it);
++  // Strip meta if data is empty, only the case when called from strip().
++  if(MP4::Atom *udta = *std::prev(it); udta->removeChild(meta)) {
++    const offset_t offset = meta->offset();
++    const offset_t delta = - meta->length();
++    d->file->removeBlock(meta->offset(), meta->length());
++    delete meta;
+
+     if(delta) {
+-      updateParents(path, delta, 1);
++      updateParents(path, delta, 2);
+       updateOffsets(delta, offset);
+     }
+   }
+-  else {
+-    // Strip meta if data is empty, only the case when called from strip().
+-    if(MP4::Atom *udta = *std::prev(it); udta->removeChild(meta)) {
+-      offset = meta->offset();
+-      delta = - meta->length();
+-      d->file->removeBlock(meta->offset(), meta->length());
+-      delete meta;
+-
+-      if(delta) {
+-        updateParents(path, delta, 2);
+-        updateOffsets(delta, offset);
+-      }
+-    }
+-  }
+ }
+
+ String
+@@ -351,6 +568,10 @@ MP4::Tag::title() const
  {
    if(d->items.contains("\251nam"))
      return d->items["\251nam"].toStringList().toString(", ");
@@ -376,7 +436,7 @@ index 4e6ea75..bb6b036 100644
    return String();
  }
 
-@@ -359,6 +617,10 @@ MP4::Tag::artist() const
+@@ -359,6 +580,10 @@ MP4::Tag::artist() const
  {
    if(d->items.contains("\251ART"))
      return d->items["\251ART"].toStringList().toString(", ");
@@ -387,7 +447,7 @@ index 4e6ea75..bb6b036 100644
    return String();
  }
 
-@@ -474,6 +736,83 @@ const MP4::ItemMap &MP4::Tag::itemMap() const
+@@ -474,6 +699,83 @@ const MP4::ItemMap &MP4::Tag::itemMap() const
    return d->items;
  }
 
