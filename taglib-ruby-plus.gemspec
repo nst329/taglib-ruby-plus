@@ -25,7 +25,7 @@ Gem::Specification.new do |s|
   s.requirements = ['TagLib C++ >= 2.3.2 (libtag1-dev in Debian/Ubuntu, taglib-devel in Fedora/RHEL)']
 
   s.add_development_dependency 'bundler', '>= 2.4', '< 5'
-  s.add_development_dependency 'minitest', '~> 5.0'
+  s.add_development_dependency 'minitest', '>= 5.0', '< 7'
   s.add_development_dependency 'rake-compiler', '~> 0.9'
   s.add_development_dependency 'shoulda-context', '~> 2.0'
   s.add_development_dependency 'test-unit', '~> 3.5'
@@ -170,6 +170,7 @@ Gem::Specification.new do |s|
     'test/data/wav-dump.cpp',
     'test/data/wav-sample.wav',
     'test/file_test.rb',
+    'test/generate_mp4_mdta_fixture.rb',
     'test/fileref_open_test.rb',
     'test/fileref_properties_test.rb',
     'test/fileref_write_test.rb',
