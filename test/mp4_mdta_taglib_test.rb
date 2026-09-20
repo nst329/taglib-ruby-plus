@@ -131,6 +131,75 @@ class MP4MdtaTagLibTest < Test::Unit::TestCase
     assert_equal original, File.binread(@fixture)
   end
 
+  def test_chapter_changes_are_not_written_to_the_open_file_before_save
+    original = File.binread(@fixture)
+    open_file do |file|
+      file.set_chapters([TagLib::MP4::Chapter.new(start_time: 0, title: 'Opening')])
+      assert_equal ['Opening'], file.chapters.map(&:title)
+      assert_equal original, File.binread(@fixture)
+    end
+    assert_equal original, File.binread(@fixture)
+  end
+
+  def test_invalid_chapter_change_does_not_replace_pending_change
+    open_file do |file|
+      file.set_chapters([TagLib::MP4::Chapter.new(start_time: 0, title: 'Opening')])
+      invalid = [
+        TagLib::MP4::Chapter.new(start_time: 0, title: 'First'),
+        TagLib::MP4::Chapter.new(start_time: 0, title: 'Duplicate')
+      ]
+      assert_raise(ArgumentError) { file.set_chapters(invalid) }
+      assert_equal ['Opening'], file.chapters.map(&:title)
+    end
+  end
+
+  def test_normal_save_commits_metadata_and_chapters_together
+    open_file do |file|
+      file.tag.title = 'Combined save'
+      file.tag.set_mdta_item('audio_normalization', 'ebu-r128')
+      file.set_chapters([TagLib::MP4::Chapter.new(start_time: 0, title: 'Opening')])
+      assert file.save
+    end
+
+    open_file do |file|
+      assert_equal 'Combined save', file.tag.title
+      assert_equal 'ebu-r128', file.tag.mdta_item('audio_normalization').text
+      assert_equal ['Opening'], file.chapters.map(&:title)
+      assert_equal :both, file.chapter_style
+    end
+  end
+
+  def test_mdta_save_preserves_existing_chapters
+    open_file do |file|
+      file.set_chapters([TagLib::MP4::Chapter.new(start_time: 0, title: 'Opening')])
+      assert file.save_chapters
+      file.tag.set_mdta_item('audio_normalization', 'ebu-r128')
+      assert file.save
+    end
+
+    open_file do |file|
+      assert_equal ['Opening'], file.chapters.map(&:title)
+      assert_equal 'ebu-r128', file.tag.mdta_item('audio_normalization').text
+    end
+  end
+
+  def test_repeated_saves_refresh_the_metadata_baseline_for_chapter_save
+    open_file do |file|
+      file.tag.title = 'First save'
+      assert file.save
+      file.tag.set_mdta_item('audio_normalization', 'ebu-r128')
+      assert file.save
+      file.set_chapters([TagLib::MP4::Chapter.new(start_time: 0, title: 'Opening')])
+      assert file.save_chapters
+    end
+
+    open_file do |file|
+      assert_equal 'First save', file.tag.title
+      assert_equal 'ebu-r128', file.tag.mdta_item('audio_normalization').text
+      assert_equal ['Opening'], file.chapters.map(&:title)
+    end
+  end
+
   def test_chapter_only_save_preserves_mdta
     open_file do |file|
       file.set_chapters([TagLib::MP4::Chapter.new(start_time: 0, title: 'Opening')])

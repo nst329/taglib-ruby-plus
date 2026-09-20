@@ -610,6 +610,10 @@ namespace TagLib {
     taglib_mp4_set_chapters($self, chapters, style);
   }
 
+  void _validate_chapters(VALUE chapters) {
+    taglib_mp4_chapters_from_ruby(chapters, $self);
+  }
+
   VALUE _remove_chapters(int style) {
     if (!taglib_mp4_remove_chapters($self, style)) {
       VALUE error = rb_path2class("TagLib::MP4::ChapterSaveError");

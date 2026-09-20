@@ -14,6 +14,7 @@ e.g. cover art of ID3v2 or custom fields of Ogg Vorbis comments.
 * Reading/writing ID3v1 and ID3v2 including ID3v2.4 and Unicode
 * Reading/writing Ogg Vorbis comments
 * Reading/writing MP4 tags (.m4a)
+* Reading/writing FFmpeg `mdta` metadata in MP4 files
 * Reading/writing Nero and QuickTime MP4 chapters
 * Reading/writing MP4 iTunes properties and multiple artwork items
 * Reading audio properties (e.g. bitrate) of the above formats
@@ -25,15 +26,20 @@ Contributions for more coverage of the library are very welcome.
 
 ## Installation
 
-Before you install the gem, make sure to have [TagLib 2.3.2 or higher][taglib]
-installed with header files and a C++17 compiler. This is a source gem: its
-native extensions are compiled against the TagLib installed on your system.
+Before you install the gem, make sure to have the patched [TagLib 2.3.2][taglib]
+from `patches/taglib/0001-mp4-mdta-preservation.patch` installed with header
+files and a C++17 compiler. The MP4 extension checks the mdta API at build time
+and does not fall back to an unpatched TagLib. This is a source gem: its native
+extensions are compiled against the TagLib installed on your system.
 The TagLib shared library is also required at runtime.
 
 * Debian/Ubuntu: `sudo apt-get install libtag1-dev`
 * Fedora/RHEL: `sudo dnf install taglib-devel`
 * Brew: `brew install taglib`
 * MacPorts: `sudo port install taglib`
+
+パッケージマネージャー版のTagLibを使う場合も、MP4のmdta機能には上記パッチを
+適用したTagLibを別prefixへ構築して指定してください。
 
 Then install taglib-ruby-plus 2.3.2:
 
@@ -164,8 +170,9 @@ Build a specific version of Taglib:
 
     PLATFORM=x86_64-linux TAGLIB_VERSION=2.3.2 rake vendor
 
-The above command will automatically download TagLib 2.3.2, build it and
-install it in `tmp/x86_64-linux/taglib-2.3.2`.
+The above command will automatically download TagLib 2.3.2, apply the local
+mdta preservation patch, build it and install it in
+`tmp/x86_64-linux/taglib-2.3.2`.
 
 The `swig`, `compile` and `test` tasks can then be executed against that specific
 version of Taglib by setting the `TAGLIB_DIR` environment variable to

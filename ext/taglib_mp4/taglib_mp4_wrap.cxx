@@ -2828,6 +2828,9 @@ SWIGINTERN VALUE TagLib_MP4_File__chapters(TagLib::MP4::File *self,int style){
 SWIGINTERN void TagLib_MP4_File__set_chapters(TagLib::MP4::File *self,VALUE chapters,int style){
     taglib_mp4_set_chapters(self, chapters, style);
   }
+SWIGINTERN void TagLib_MP4_File__validate_chapters(TagLib::MP4::File *self,VALUE chapters){
+    taglib_mp4_chapters_from_ruby(chapters, self);
+  }
 SWIGINTERN VALUE TagLib_MP4_File__remove_chapters(TagLib::MP4::File *self,int style){
     if (!taglib_mp4_remove_chapters(self, style)) {
       VALUE error = rb_path2class("TagLib::MP4::ChapterSaveError");
@@ -6268,6 +6271,29 @@ fail:
 
 
 SWIGINTERN VALUE
+_wrap_File__validate_chapters(int argc, VALUE *argv, VALUE self) {
+  TagLib::MP4::File *arg1 = (TagLib::MP4::File *) 0 ;
+  VALUE arg2 = (VALUE) 0 ;
+  void *argp1 = 0 ;
+  int res1 = 0 ;
+
+  if ((argc < 1) || (argc > 1)) {
+    rb_raise(rb_eArgError, "wrong # of arguments(%d for 1)",argc); SWIG_fail;
+  }
+  res1 = SWIG_ConvertPtr(self, &argp1,SWIGTYPE_p_TagLib__MP4__File, 0 |  0 );
+  if (!SWIG_IsOK(res1)) {
+    SWIG_exception_fail(SWIG_ArgError(res1), Ruby_Format_TypeError( "", "TagLib::MP4::File *","_validate_chapters", 1, self ));
+  }
+  arg1 = reinterpret_cast< TagLib::MP4::File * >(argp1);
+  arg2 = argv[0];
+  TagLib_MP4_File__validate_chapters(arg1,arg2);
+  return Qnil;
+fail:
+  return Qnil;
+}
+
+
+SWIGINTERN VALUE
 _wrap_File__remove_chapters(int argc, VALUE *argv, VALUE self) {
   TagLib::MP4::File *arg1 = (TagLib::MP4::File *) 0 ;
   int arg2 ;
@@ -6828,6 +6854,7 @@ SWIGEXPORT void Init_taglib_mp4(void) {
   rb_define_method(SwigClassFile.klass, "_chapter_style", VALUEFUNC(_wrap_File__chapter_style), -1);
   rb_define_method(SwigClassFile.klass, "_chapters", VALUEFUNC(_wrap_File__chapters), -1);
   rb_define_method(SwigClassFile.klass, "_set_chapters", VALUEFUNC(_wrap_File__set_chapters), -1);
+  rb_define_method(SwigClassFile.klass, "_validate_chapters", VALUEFUNC(_wrap_File__validate_chapters), -1);
   rb_define_method(SwigClassFile.klass, "_remove_chapters", VALUEFUNC(_wrap_File__remove_chapters), -1);
   rb_define_method(SwigClassFile.klass, "_save_chapters", VALUEFUNC(_wrap_File__save_chapters), -1);
   SwigClassFile.mark = 0;

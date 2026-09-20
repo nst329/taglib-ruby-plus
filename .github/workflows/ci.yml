@@ -68,10 +68,8 @@ jobs:
         id: cache-taglib
         uses: actions/cache@v4
         with:
-          path: |
-            tmp/${{ env.PLATFORM }}/taglib-${{ env.TAGLIB_VERSION }}
-            tmp/taglib-${{ env.TAGLIB_VERSION }}.tar.gz
-          key: taglib-${{ matrix.os }}-v${{ env.TAGLIB_VERSION }}-mdta-patch.v1
+          path: tmp/${{ env.PLATFORM }}/taglib-${{ env.TAGLIB_VERSION }}
+          key: taglib-${{ matrix.os }}-v${{ env.TAGLIB_VERSION }}-${{ hashFiles('patches/taglib/*.patch', 'tasks/build.rb', 'tasks/ext.rake') }}
 
       - name: Install TagLib (C++)
         if: steps.cache-taglib.outputs.cache-hit != 'true'
@@ -90,9 +88,6 @@ jobs:
 
       - name: Run Tests (taglib-ruby-plus)
         run: bundle exec rake test
-
-      - name: Run MP4 metadata API test
-        run: bundle exec ruby -I. test/mp4_metadata_api_test.rb
 
       - name: Run MP4 mdta C++ API test
         env:

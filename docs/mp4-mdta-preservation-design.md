@@ -2,7 +2,8 @@
 
 ## 状態
 
-TagLib本体へのパッチ方式採用・簡易fixture検証反映・実装前（2026-09-19）
+TagLib本体パッチによる第一実装あり。責務整理の再設計・再レビューを追記（2026-09-20）。
+以下には実装前の調査記録と、実装後の責務整理を含む。実装済み範囲は末尾に明記する。
 
 ## 目的
 
@@ -549,3 +550,140 @@ track分類が必要な断片化／特殊レイアウトは、現時点では成
 
 互換性よりも保存安全性を優先し、temp + rename + SWIG Fileポインタ再生成を採用する。
 保存後に古い`tag`、`Item`、`Properties` wrapperを再利用できないことは仕様とする。
+
+### 保存処理とCIの責務整理
+
+一時保存・再読込検証のハンドル寿命は既存の`FileOpenable.open`に集約する。
+保存後のmetadata snapshotは再初期化時に一度だけ取得する。再open失敗の通知は
+`MdtaSaveError`の`committed`と`phase`で行い、参照されない状態フラグを持たない。
+metadata比較とmdat検証は保持安全性のため継続する。
+
+CIのRuby MP4 APIテストは`rake test`の全件実行に集約し、C++直接テストと
+配布gemのsmoke testはそれぞれ別の経路を検証するため維持する。
+TagLibキャッシュはインストール成果物だけを対象とし、パッチとビルド定義の
+ハッシュをキーに含めて、変更前のTagLibを再利用しない。
+
+保存API名と検証規則を分離する。`save`はmetadataと保留中chapterを保存し、
+`save_chapters`はmetadataの未保存変更を拒否してchapterだけを保存する。
+いずれも保留中chapterがある場合は元mdat列の順序付き保持を検証し、chapterが
+無変更ならmdat列の完全一致を要求する。chapter用mdat追加の許容を
+`save_chapters`という呼出名に結び付けない。これにより通常`save`でも
+metadataとchapterを一回のファイル置換で保存できる。
+
+## 責務整理の再設計と再レビュー（2026-09-20）
+
+この節は次のリファクタリングの設計と、その実装結果を記録する。
+保存対象とchapter編集有無の分離などを採用済みである。
+目的は安全性の検証を減らすことではなく、状態の正本と判定箇所を減らすこと。
+
+### 初案
+
+1. パッチ済みTagLibを必須にし、未対応環境向けfallbackを除去する。
+2. chapter編集状態をRubyに集約し、C++へは保存時だけ反映する。
+3. snapshotを必要なときに取得し、一時保存・検証の無駄な変換を減らす。
+
+### 再レビューでの修正
+
+| 初案への指摘 | 最終方針 |
+| --- | --- |
+| バージョン2.3.2だけではmdta対応を識別できない | MP4拡張の構築時に必要なC++ APIをコンパイル・リンクして確認する |
+| Rubyにchapter状態を移すだけではC++ setterの入力検証が消える | 既存のchapter変換・検証を副作用のないbindingへ切り出し、検証後だけRubyの状態を確定する |
+| snapshotを最初のsaveまで遅延すると、それ以前の直接ItemMap編集を見落とす | 公開Fileのopen直後のbaselineを維持する。内部openの重複取得だけを除去する |
+| chapter setter呼出しがあるだけでmdat検証を緩めるのは広すぎる | 変更対象の表現と期待chapterを記録し、再openでchapterの値と存在を検証する |
+| Rubyでmetadata全部を編集モデル化するとC++の保持モデルを重複する | ilst/mdtaの編集状態と不透明atomはC++を正本に据え置く |
+
+### 採用する責務分担
+
+| 層 | 所有する状態・責務 | 所有しない責務 |
+| --- | --- | --- |
+| TagLib本体 | ilst/mdtaの解析・編集・不透明データ保持、atom出力、I/O失敗通知 | Ruby APIの編集セッションやパス置換 |
+| C++ binding | 型変換、chapter入力検証、保存用native状態への適用 | 第二の永続的なchapter編集状態 |
+| Ruby MP4::File | metadata baseline、chapter編集要求、コピー・検証・置換の順序 | mdta atomの再構成 |
+
+汎用Transaction、Repository、Strategyなどの新しい階層は導入しない。
+既存Fileの非公開メソッドと小さな状態で表現する。将来ほかの形式にも共通の
+保存契約が必要になった場合にのみ、別クラスへの抽出を再検討する。
+
+### 1. 対応環境は一つにする
+
+MP4拡張のextconfで`mdtaItems`、`setMdtaItem`、`removeMdtaItem`、`copyStateTo`を
+確認する。ヘッダー検査だけでなくリンクまで行い、未対応なら
+専用TagLibのビルド方法を示して構築を止める。バージョン番号による推測はしない。
+実行時のヘッダー／共有ライブラリ取り違えも対象として、拡張ロードのsmoke testを行う。
+
+Rubyでは`mdta_items`の未対応時空配列と、`copy_tag_state_to`のItemMapだけの
+fallbackを削除する。未対応をmetadata空集合として扱わない。古い拡張がロードされた
+場合の入口検査は一箇所に置き、個々のsetterの能力判定を重複させない。
+gemspec・READMEの「通常TagLib 2.3.2以上でよい」という案内も同時に更新する。
+
+### 2. chapterはRubyの編集要求を正本にする
+
+未編集の表現はディスクから読む。変更要求は`:nero`／`:quicktime`ごとのHashに保持する。
+キーなしは未変更、空配列は削除、非空配列は置換を意味する。全表現を毎回コピーして
+書き戻さず、指定された表現だけを一時ファイルのnative setterへ適用する。
+
+setterはstyleと入力全体を検証し、独立した配列へ正規化した後に要求を確定する。
+不正入力では既存要求もnative状態も変えない。検証は既存bindingの変換処理を再利用し、
+Rubyに同じ検証ロジックを複製しない。元ハンドルのnative chapter setterは呼ばない。
+保存前の読取りは、変更要求がある表現だけ要求を返し、それ以外をディスクから読む。
+`:preserve`とNero/QuickTime競合検知は、この合成した状態を対象に判定する。
+空chapter atomの存在とchapter件数は別概念として扱い、未編集表現を勝手に正規化しない。
+
+一時ファイルへの適用は非公開native setterを直接使い、公開Ruby setterを再帰的に
+呼び出して第二の編集要求を作らない。旧`_save_chapters`経路は呼出元を調べた上で、
+不要ならhelperごと削除する。C++のchapter書込み能力そのものは残す。
+
+### 3. snapshotは用途を限定する
+
+公開Fileのbaselineはopen時に一度取得し、成功後の再初期化で更新する。
+これによりItemMapの直接insert/erase/clearも`save_chapters`で検知できる。
+setterのdirtyフラグへの置換や、最初の保存までの遅延は採用しない。
+
+一時書込み・再読込検証用の内部openにはbaselineが不要である。
+非公開の内部openでnative初期化とensure-closeだけを行い、公開コンストラクタに
+利用者向けのskipオプションは追加しない。検証時のactual snapshotは一度だけ取得する。
+期待値はrename前まで保持する。未知型の値を省略したsnapshotを完全な保持証明とは
+扱わず、不透明データはC++直接テストとatom比較でも検証する。
+
+### 保存時の契約
+
+保存対象決定 → 元ファイルをコピー → C++ metadata状態とchapter要求を適用 →
+native saveとclose → 再openしてmetadata・chapter・mediaを検証 → 置換 → 再open。
+
+`save_chapters`はmetadata変更があれば拒否し、`save`は両方を保存する。
+metadata比較とchapter比較は別に実施する。chapter比較は順序・時刻・タイトル・
+表現の存在を対象とし、変更しない表現も期待値に含める。
+変更なしならmdat列を完全一致で検証する。chapter変更時も元mediaの保持は必須とする。
+ただし、元mdat列の部分列一致だけでは追加mdatがchapter由来かまでは証明できない。
+この制約は現実装にもあり、今回の整理で「chapter追加だけを保証」と強く主張しない。
+追加mdatの所属検証や特殊レイアウトの許否は別の安全性実装課題として残す。
+
+rename前の失敗では元ファイルと未保存要求を維持する。成功後だけ要求を消す。
+rename後の再open失敗は`committed=true`を通知し、旧ハンドルへ戻さない。
+fsync、同時更新検知、一時ファイルの排他的作成は既存実装との差分を別途確認する。
+本再設計はそれらが実装済みという主張ではなく、コピーとハッシュの削除も行わない。
+
+### 実装順と必須検証
+
+1. 能力検査とfallback除去：パッチ有無、ヘッダー／ライブラリ不一致、空mdtaを検証。
+2. chapterの検証／適用分離：不正入力で状態不変、片方だけ更新・削除、競合、
+   preserve、metadata同時保存、保存失敗後の再試行を検証。
+3. 内部openの整理：直接ItemMap編集の検知、連続保存、例外時close、保存後再open失敗を検証。
+4. 呼出しのなくなった旧経路を削除し、SWIG生成物を同期する。
+
+各段階でRuby/C++の既存回帰テスト、通常MP4、mdta fixture、配布gem、Ruby 3.2/4.0の
+CIを確認する。設計契約テストのスキップを成功の代わりにせず、必要なC++ probeを
+構築して実行する。
+
+実装済みの範囲は、TagLib mdta APIのビルド時リンク検査、Ruby側のmdta fallback除去、
+chapter変更要求の遅延適用、通常saveとchapter saveの原子置換・再読込検証、既存の
+Ruby/C++ mdta回帰テストである。TagLibパッチなしの環境は拡張ビルド時に拒否する。
+
+### 再レビュー結論
+
+採用するのは能力判定の集約、chapter編集状態の単一化、内部baselineの省略である。
+削減量に対して新しい抽象化が増える全面的な保存フレームワーク化は採用しない。
+本整理のためのTagLib上流API追加は不要で、既存パッチとbinding/Rubyの責務整理で進める。
+既存mdtaパッチ自体の上流提案は別途必要である。なお、現時点ではローカルの
+TagLibパッチが依存契約であり、上流へ取り込まれるまでは通常TagLibとの互換性を
+要求しない。

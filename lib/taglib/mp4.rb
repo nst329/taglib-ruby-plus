@@ -238,42 +238,39 @@ module TagLib::MP4
     def initialize(*args)
       initialize_without_snapshot(*args)
       @mp4_metadata_snapshot = metadata_snapshot
+      @chapter_changes = {}
     end
 
     def chapters(style: nil)
       read_chapter_style_code(style) unless style.nil?
-      if @chapter_state
-        return chapter_state_chapters(style)
-      end
-      code = style.nil? ? CHAPTER_STYLE_CODES[:any] : CHAPTER_STYLE_CODES.fetch(style)
-      _chapters(code)
+      return chapter_values(style) if @chapter_changes.any?
+
+      _chapters(style.nil? ? CHAPTER_STYLE_CODES[:any] : CHAPTER_STYLE_CODES.fetch(style))
     end
 
     def chapter_style
-      return chapter_state_style if @chapter_state
+      return chapter_style_from_values if @chapter_changes.any?
 
       _chapter_style
     end
 
     def set_chapters(chapters, style: :preserve)
-      ensure_chapter_state
       if style == :preserve
         style = chapter_style
         style = :both if style == :none
       end
-      _set_chapters(chapters, chapter_style_code(style))
-      update_chapter_state(chapters, style)
+      _validate_chapters(chapters)
+      update_chapter_change(chapters, style)
       self
     end
 
     def remove_chapters(style: :both)
-      ensure_chapter_state
       if style == :preserve
         style = chapter_style
         style = :both if style == :none
       end
-      _remove_chapters(chapter_style_code(style))
-      update_chapter_state([], style)
+      chapter_style_code(style)
+      update_chapter_change([], style)
       self
     end
 
@@ -306,7 +303,7 @@ module TagLib::MP4
         raise ChapterSaveError, 'save metadata changes before save_chapters'
       end
 
-      atomic_save(chapters_only: true)
+      atomic_save(write_metadata: false)
     end
 
     alias save_without_chapter_state save
@@ -315,25 +312,29 @@ module TagLib::MP4
     def save(*args)
       raise ArgumentError, 'save does not accept arguments' unless args.empty?
 
-      atomic_save(chapters_only: false)
+      atomic_save(write_metadata: true)
     end
 
     private
 
-    def atomic_save(chapters_only:)
+    def atomic_save(write_metadata:)
       source_path = name
       raise MdtaSaveError.new('MP4 file has no path', phase: :prepare) if source_path.nil? || source_path.empty?
 
       expected_metadata = metadata_snapshot
+      expected_chapters = chapter_snapshot
+      # Chapter edits can append media regardless of which public save API is used.
+      chapter_edits = @chapter_changes.any?
       source_mdat = mdat_payload_signature(source_path)
       temp_path = "#{source_path}.taglib-mdta-#{Process.pid}-#{object_id}"
       committed = false
 
       begin
         ::FileUtils.cp(source_path, temp_path)
-        save_temporary_copy(temp_path, chapters_only: chapters_only)
+        save_temporary_copy(temp_path, write_metadata: write_metadata)
 
-        verify_saved_copy(temp_path, expected_metadata, source_mdat, chapters_only)
+        verify_saved_copy(temp_path, expected_metadata, expected_chapters, source_mdat,
+                          chapter_edits: chapter_edits)
         ::FileUtils.mv(temp_path, source_path)
         committed = true
 
@@ -341,13 +342,11 @@ module TagLib::MP4
         begin
           initialize(source_path, false)
         rescue StandardError => error
-          @mp4_invalid_after_commit = true
           raise MdtaSaveError.new("MP4 reopened failed after rename: #{error.message}",
                                   committed: true, phase: :reopen)
         end
 
-        @chapter_state = nil
-        @mp4_metadata_snapshot = metadata_snapshot
+        @chapter_changes.clear
         true
       rescue MdtaSaveError
         raise
@@ -358,59 +357,64 @@ module TagLib::MP4
       end
     end
 
-    def save_temporary_copy(path, chapters_only:)
-      temporary = self.class.new(path, false)
-      begin
-        copy_tag_state_to(temporary) unless chapters_only
+    def save_temporary_copy(path, write_metadata:)
+      self.class.open(path, false) do |temporary|
+        copy_tag_state_to(temporary) if write_metadata
         apply_chapter_state_to(temporary)
         unless temporary.send(:save_without_chapter_state)
           raise MdtaSaveError.new('TagLib failed to save temporary MP4', phase: :taglib_save)
         end
-      ensure
-        temporary.close
       end
     end
 
     def copy_tag_state_to(destination)
-      if tag.respond_to?(:_copy_state_to)
-        tag._copy_state_to(destination.tag)
-        return
-      end
-
-      destination_map = destination.tag.item_map
-      destination_map.clear
-      tag.item_map.to_a.each do |key, item|
-        destination_map.insert(key, item)
-      end
+      tag.send(:ensure_mdta_support!)
+      tag._copy_state_to(destination.tag)
     end
 
     def apply_chapter_state_to(destination)
-      return unless @chapter_state
+      return if @chapter_changes.empty?
 
-      @chapter_state.each do |style, chapters|
-        destination.set_chapters(chapters, style: style)
+      @chapter_changes.each do |style, chapters|
+        destination.send(:apply_chapter_change_to_native, chapters, style)
       end
     end
 
-    def verify_saved_copy(path, expected_metadata, source_mdat, chapters_only)
-      verification = self.class.new(path, false)
-      begin
+    def verify_saved_copy(path, expected_metadata, expected_chapters, source_mdat, chapter_edits:)
+      self.class.open(path, false) do |verification|
         actual_metadata = verification.send(:metadata_snapshot)
         unless actual_metadata == expected_metadata
           raise MdtaSaveError.new('temporary MP4 metadata verification failed', phase: :verify)
         end
+        actual_chapters = verification.send(:chapter_snapshot)
+        unless actual_chapters == expected_chapters
+          raise MdtaSaveError.new('temporary MP4 chapter verification failed', phase: :verify)
+        end
         actual_mdat = verification.send(:mdat_payload_signature, path)
-        media_preserved = chapters_only ? mdat_payloads_preserved?(source_mdat, actual_mdat) : actual_mdat == source_mdat
+        media_preserved = chapter_edits ? mdat_payloads_preserved?(source_mdat, actual_mdat) : actual_mdat == source_mdat
         unless media_preserved
           raise MdtaSaveError.new('temporary MP4 media payload changed', phase: :verify)
         end
-      ensure
-        verification.close
       end
     end
 
     def metadata_dirty?
       metadata_snapshot != @mp4_metadata_snapshot
+    end
+
+    def chapter_snapshot
+      {
+        nero: chapter_values_for(:nero),
+        quicktime: chapter_values_for(:quicktime)
+      }
+    end
+
+    def apply_chapter_change_to_native(chapters, style)
+      if chapters.empty?
+        _remove_chapters(chapter_style_code(style))
+      else
+        _set_chapters(chapters, chapter_style_code(style))
+      end
     end
 
     def metadata_snapshot
@@ -498,46 +502,50 @@ module TagLib::MP4
       end
     end
 
-    def ensure_chapter_state
-      return if @chapter_state
-
-      @chapter_state = {
-        nero: _chapters(CHAPTER_STYLE_CODES[:nero]),
-        quicktime: _chapters(CHAPTER_STYLE_CODES[:quicktime])
-      }
-    end
-
-    def update_chapter_state(chapters, style)
+    def update_chapter_change(chapters, style)
       values = Array(chapters).dup.freeze
-      @chapter_state[:nero] = values if style == :nero || style == :both
-      @chapter_state[:quicktime] = values if style == :quicktime || style == :both
+      @chapter_changes[:nero] = values if style == :nero || style == :both
+      @chapter_changes[:quicktime] = values if style == :quicktime || style == :both
     end
 
-    def chapter_state_style
-      nero = !@chapter_state[:nero].empty?
-      quicktime = !@chapter_state[:quicktime].empty?
+    def chapter_values(style)
+      return chapter_values_for(style) if style
+
+      nero = chapter_values_for(:nero)
+      quicktime = chapter_values_for(:quicktime)
+      if !nero.empty? && !quicktime.empty? && nero != quicktime
+        raise ChapterConflictError, 'Nero and QuickTime chapters differ'
+      end
+      (nero.empty? ? quicktime : nero).dup
+    end
+
+    def chapter_values_for(style)
+      return @chapter_changes.fetch(style) if @chapter_changes.key?(style)
+
+      _chapters(CHAPTER_STYLE_CODES.fetch(style))
+    end
+
+    def chapter_style_from_values
+      nero = !chapter_values_for(:nero).empty?
+      quicktime = !chapter_values_for(:quicktime).empty?
       return :both if nero && quicktime
       return :nero if nero
       return :quicktime if quicktime
 
       :none
     end
-
-    def chapter_state_chapters(style)
-      return @chapter_state[:nero].dup if style == :nero
-      return @chapter_state[:quicktime].dup if style == :quicktime
-
-      nero = @chapter_state[:nero]
-      quicktime = @chapter_state[:quicktime]
-      if !nero.empty? && !quicktime.empty? && nero != quicktime
-        raise ChapterConflictError, 'Nero and QuickTime chapters differ'
-      end
-      (nero.empty? ? quicktime : nero).dup
-    end
   end
 
   class Tag
     remove_method :save
+
+    def ensure_mdta_support!
+      return if respond_to?(:_mdta_items) && respond_to?(:_set_mdta_item) &&
+                respond_to?(:_remove_mdta_item) && respond_to?(:_copy_state_to)
+
+      raise MdtaItemError, 'patched TagLib with mdta support is required'
+    end
+    private :ensure_mdta_support!
 
     PROPERTY_ATOMS = {
       'title' => "©nam",
@@ -648,7 +656,7 @@ module TagLib::MP4
     end
 
     def mdta_items
-      return [] unless respond_to?(:_mdta_items)
+      ensure_mdta_support!
 
       _mdta_items.map do |entry|
         MdtaItem.new(**entry.transform_keys(&:to_sym))
@@ -660,7 +668,7 @@ module TagLib::MP4
     end
 
     def set_mdta_item(key, data, data_type: 1, locale: 0)
-      raise MdtaItemError, 'patched TagLib with mdta support is required' unless respond_to?(:_set_mdta_item)
+      ensure_mdta_support!
 
       key = normalize_mdta_key(key)
       validate_mdta_data!(data)
@@ -674,7 +682,7 @@ module TagLib::MP4
     end
 
     def remove_mdta_item(key)
-      raise MdtaItemError, 'patched TagLib with mdta support is required' unless respond_to?(:_remove_mdta_item)
+      ensure_mdta_support!
 
       key = normalize_mdta_key(key)
       _remove_mdta_item(key)
