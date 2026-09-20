@@ -8,6 +8,7 @@ mdta_api_check = <<~CPP
   using Tag = TagLib::MP4::Tag;
   void probe(Tag &source, Tag &destination) {
     source.copyStateTo(destination);
+    source.applyChanges(TagLib::MP4::ItemMap(), TagLib::StringList(), TagLib::StringList());
     source.mdtaItems();
     source.setMdtaItem(TagLib::String("probe"), 1, 0, TagLib::ByteVector("value"));
     source.removeMdtaItem(TagLib::String("probe"));

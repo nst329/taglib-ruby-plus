@@ -67,6 +67,7 @@ Gem::Specification.new do |s|
     'docs/mp4-atomicparsley-replacement-validation.md',
     'docs/mp4-mdta-preservation-design.md',
     'docs/mp4-mdta-taglib-core-proposal.md',
+    'docs/mp4-property-normalization-design.md',
     'docs/ADR/2026-08-28-taglib-ruby-plusへの名称変更.md',
     'docs/ADR/2026-08-28-mp4-chapter-read-ownership.md',
     'docs/ADR/2026-08-28-bundler4-ci-compatibility.md',

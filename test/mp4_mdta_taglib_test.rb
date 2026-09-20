@@ -65,6 +65,91 @@ class MP4MdtaTagLibTest < Test::Unit::TestCase
     end
   end
 
+  def test_set_properties_normalizes_selected_mdta_keys_and_preserves_typed_unknown_data
+    open_file do |file|
+      file.tag.set_mdta_item('com.example.taglib.typed', "\x00\xFF".b, data_type: 33, locale: 7)
+      file.tag.set_properties(
+        'title' => 'Normalized title',
+        'show' => 'Normalized show',
+        'artist' => 'Normalized artist',
+        'description' => 'Normalized description'
+      )
+
+      assert_equal 'Normalized title', file.tag.item_map['©nam'].to_string_list.first
+      assert_equal 'Normalized show', file.tag.item_map['tvsh'].to_string_list.first
+      assert_nil file.tag.mdta_item('title')
+      assert_nil file.tag.mdta_item('show')
+      assert_nil file.tag.mdta_item('artist')
+      assert_nil file.tag.mdta_item('description')
+      assert_equal 'loudnorm', file.tag.mdta_item('audio_normalization').text
+      assert_equal '-16-LUFS', file.tag.mdta_item('audio_normalization_target').text
+      assert file.save
+    end
+
+    open_file do |file|
+      assert_equal 'Normalized title', file.tag.title
+      assert_equal 'Normalized show', file.tag.property('show')
+      assert_equal 'Normalized artist', file.tag.artist
+      assert_equal 'Normalized description', file.tag.property('description')
+      assert_nil file.tag.mdta_item('title')
+      assert_nil file.tag.mdta_item('show')
+      assert_nil file.tag.mdta_item('artist')
+      assert_nil file.tag.mdta_item('description')
+      assert_equal 'loudnorm', file.tag.mdta_item('audio_normalization').text
+      assert_equal '-16-LUFS', file.tag.mdta_item('audio_normalization_target').text
+      unknown = file.tag.mdta_item('com.example.taglib.typed')
+      assert_equal 33, unknown.data_type
+      assert_equal 7, unknown.locale
+      assert_equal "\x00\xFF".b, unknown.data
+      assert_nil unknown.text
+    end
+  end
+
+  def test_set_properties_only_normalizes_the_properties_it_updates
+    open_file do |file|
+      file.tag.set_properties('artist' => 'Normalized artist')
+      assert_nil file.tag.mdta_item('artist')
+      assert_equal 'MDTA Title', file.tag.mdta_item('title').text
+      assert_equal 'MDTA Show', file.tag.mdta_item('show').text
+      assert_equal 'MDTA Description', file.tag.mdta_item('description').text
+      assert file.save
+    end
+
+    open_file do |file|
+      assert_equal 'Normalized artist', file.tag.artist
+      assert_nil file.tag.mdta_item('artist')
+      assert_equal 'MDTA Title', file.tag.mdta_item('title').text
+      assert_equal 'MDTA Show', file.tag.mdta_item('show').text
+      assert_equal 'MDTA Description', file.tag.mdta_item('description').text
+    end
+  end
+
+  def test_remove_property_removes_ilst_and_its_mdta_fallback
+    open_file do |file|
+      file.tag.remove_property('title')
+      assert_nil file.tag.property('title')
+      assert_nil file.tag.mdta_item('title')
+      assert_equal 'MDTA Artist', file.tag.artist
+      assert file.save
+    end
+
+    open_file do |file|
+      assert_nil file.tag.property('title')
+      assert_nil file.tag.mdta_item('title')
+      assert_equal 'MDTA Artist', file.tag.artist
+    end
+  end
+
+  def test_show_alias_collision_is_rejected_before_mutation
+    open_file do |file|
+      assert_raise(ArgumentError) do
+        file.tag.set_properties('show' => 'First', 'TVShowName' => 'Second')
+      end
+      assert_equal 'MDTA Show', file.tag.property('show')
+      assert_nil file.tag.item_map['tvsh']
+    end
+  end
+
   def test_mdta_update_preserves_normal_ilst_item
     open_file do |file|
       file.tag.item_map.insert('©nam', TagLib::MP4::Item.from_string_list(['Normal title']))
@@ -79,6 +164,27 @@ class MP4MdtaTagLibTest < Test::Unit::TestCase
       assert_equal ['Opaque normal value'], file.tag.item_map['zzzz'].to_string_list
       assert_equal 'ebu-r128', file.tag.mdta_item('audio_normalization').text
       assert_equal '-14-LUFS', file.tag.mdta_item('audio_normalization_target').text
+    end
+  end
+
+  def test_mdta_update_preserves_artwork_and_chapters
+    artwork = TagLib::MP4::Artwork.new(
+      format: :jpeg,
+      data: File.binread(File.expand_path('data/globe_east_90.jpg', __dir__))
+    )
+
+    open_file do |file|
+      file.tag.set_artwork(artwork)
+      file.set_chapters([TagLib::MP4::Chapter.new(start_time: 0, title: 'Opening')])
+      file.tag.set_mdta_item('audio_normalization', 'ebu-r128')
+      assert file.save
+    end
+
+    open_file do |file|
+      assert_equal [artwork], file.tag.artwork
+      assert_equal ['Opening'], file.chapters.map(&:title)
+      assert_equal 'ebu-r128', file.tag.mdta_item('audio_normalization').text
+      assert_equal '-16-LUFS', file.tag.mdta_item('audio_normalization_target').text
     end
   end
 
@@ -155,7 +261,7 @@ class MP4MdtaTagLibTest < Test::Unit::TestCase
 
   def test_normal_save_commits_metadata_and_chapters_together
     open_file do |file|
-      file.tag.title = 'Combined save'
+      file.tag.set_properties('title' => 'Combined save')
       file.tag.set_mdta_item('audio_normalization', 'ebu-r128')
       file.set_chapters([TagLib::MP4::Chapter.new(start_time: 0, title: 'Opening')])
       assert file.save

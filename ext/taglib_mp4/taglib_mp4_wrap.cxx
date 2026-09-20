@@ -2783,6 +2783,24 @@ SWIGINTERN VALUE _wrap_Tag__copy_state_to(int argc, VALUE *argv, VALUE self) {
     *reinterpret_cast<TagLib::MP4::Tag *>(destination_ptr));
   return Qnil;
 }
+SWIGINTERN VALUE _wrap_Tag__apply_changes(int argc, VALUE *argv, VALUE self) {
+  if(argc != 3)
+    rb_raise(rb_eArgError, "wrong # of arguments(%d for 3)", argc);
+  void *tag_ptr = 0;
+  void *items_ptr = 0;
+  if(!SWIG_IsOK(SWIG_ConvertPtr(self, &tag_ptr, SWIGTYPE_p_TagLib__MP4__Tag, 0)) ||
+     !SWIG_IsOK(SWIG_ConvertPtr(argv[0], &items_ptr,
+                                SWIGTYPE_p_TagLib__MapT_TagLib__String_TagLib__MP4__Item_t, 0)))
+    rb_raise(rb_eTypeError, "invalid TagLib::MP4::Tag or ItemMap");
+  Check_Type(argv[1], T_ARRAY);
+  Check_Type(argv[2], T_ARRAY);
+  TagLib::StringList remove_items = ruby_array_to_taglib_string_list(argv[1]);
+  TagLib::StringList remove_mdta_keys = ruby_array_to_taglib_string_list(argv[2]);
+  bool result = reinterpret_cast<TagLib::MP4::Tag *>(tag_ptr)->applyChanges(
+    *reinterpret_cast<TagLib::MP4::ItemMap *>(items_ptr),
+    remove_items, remove_mdta_keys);
+  return SWIG_From_bool(static_cast<bool>(result));
+}
 SWIGINTERN VALUE _wrap_Tag__set_mdta_item(int argc, VALUE *argv, VALUE self) {
   if(argc != 4)
     rb_raise(rb_eArgError, "wrong # of arguments(%d for 4)", argc);
@@ -6831,6 +6849,7 @@ SWIGEXPORT void Init_taglib_mp4(void) {
   rb_define_method(SwigClassTag.klass, "[]=", VALUEFUNC(_wrap_Tag___setitem__), -1);
   rb_define_method(SwigClassTag.klass, "remove_item", VALUEFUNC(_wrap_Tag_remove_item), -1);
   rb_define_method(SwigClassTag.klass, "_copy_state_to", VALUEFUNC(_wrap_Tag__copy_state_to), -1);
+  rb_define_method(SwigClassTag.klass, "_apply_changes", VALUEFUNC(_wrap_Tag__apply_changes), -1);
   rb_define_method(SwigClassTag.klass, "_mdta_items", VALUEFUNC(_wrap_Tag__mdta_items), -1);
   rb_define_method(SwigClassTag.klass, "_set_mdta_item", VALUEFUNC(_wrap_Tag__set_mdta_item), -1);
   rb_define_method(SwigClassTag.klass, "_remove_mdta_item", VALUEFUNC(_wrap_Tag__remove_mdta_item), -1);

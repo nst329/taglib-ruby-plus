@@ -1,5 +1,5 @@
 diff --git a/taglib/mp4/mp4file.cpp b/taglib/mp4/mp4file.cpp
-index 5f8e5be..fff4dd9 100644
+index 5f8e5becbfb075880e22e75cfcb8f26b624dd176..fff4dd9d049763e8bb87aaeb9fcbca514b510715 100644
 --- a/taglib/mp4/mp4file.cpp
 +++ b/taglib/mp4/mp4file.cpp
 @@ -174,7 +174,8 @@ MP4::File::save()
@@ -13,7 +13,7 @@ index 5f8e5be..fff4dd9 100644
 
  bool
 diff --git a/taglib/mp4/mp4tag.cpp b/taglib/mp4/mp4tag.cpp
-index 4e6ea75..08aece9 100644
+index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..9bb16ad125e156a1150c6dbba76b6c17ad6709d8 100644
 --- a/taglib/mp4/mp4tag.cpp
 +++ b/taglib/mp4/mp4tag.cpp
 @@ -25,7 +25,10 @@
@@ -27,7 +27,7 @@ index 4e6ea75..08aece9 100644
 
  #include "tdebug.h"
  #include "tpropertymap.h"
-@@ -36,6 +39,243 @@
+@@ -36,6 +39,268 @@
 
  using namespace TagLib;
 
@@ -70,8 +70,11 @@ index 4e6ea75..08aece9 100644
 +  return String();
 +}
 +
-+std::vector<String> metaKeys(TagLib::File *file, const MP4::Atom *meta)
++std::vector<String> metaKeys(TagLib::File *file, const MP4::Atom *meta,
++                             bool *valid = nullptr)
 +{
++  if(valid)
++    *valid = false;
 +  const MP4::Atom *keys = nullptr;
 +  for(const auto *child : meta->children()) {
 +    if(child->name() == "keys") {
@@ -96,7 +99,11 @@ index 4e6ea75..08aece9 100644
 +    result.emplace_back(data.mid(pos + 8, size - 8), String::UTF8);
 +    pos += size;
 +  }
-+  return result.size() == count ? result : std::vector<String>();
++  if(result.size() != count)
++    return {};
++  if(valid)
++    *valid = true;
++  return result;
 +}
 +
 +ParsedMdta parseMdtaItem(const ByteVector &bytes, unsigned int keyIndex,
@@ -160,11 +167,31 @@ index 4e6ea75..08aece9 100644
 +  std::set<String> removedKeys;
 +  MP4::Atom *ilst { nullptr };
 +  MP4::Atom *keysAtom { nullptr };
++  bool mdtaDocument { false };
++  bool keysValid { true };
 +  bool keysChanged { false };
 +
 +  bool present() const
 +  {
-+    return ilst != nullptr && keysAtom != nullptr;
++    return mdtaDocument && keysValid;
++  }
++
++  bool hasKey(const String &key) const
++  {
++    return std::find(keys.begin(), keys.end(), key) != keys.end();
++  }
++
++  unsigned int keyIndex(const String &key) const
++  {
++    const auto it = std::find(keys.begin(), keys.end(), key);
++    return it == keys.end() ? 0 : static_cast<unsigned int>(std::distance(keys.begin(), it)) + 1;
++  }
++
++  static ByteVector rewriteKeyIndex(const RawMdtaItem &raw, unsigned int keyIndex)
++  {
++    if(keyIndex == raw.keyIndex || raw.bytes.size() < 8)
++      return raw.bytes;
++    return raw.bytes.mid(0, 4) + ByteVector::fromUInt(keyIndex) + raw.bytes.mid(8);
 +  }
 +
 +  ByteVector renderItems() const
@@ -175,7 +202,7 @@ index 4e6ea75..08aece9 100644
 +      if(removedKeys.find(raw.key) != removedKeys.end())
 +        continue;
 +      if(changedKeys.find(raw.key) == changedKeys.end()) {
-+        result.append(raw.bytes);
++        result.append(rewriteKeyIndex(raw, keyIndex(raw.key)));
 +        continue;
 +      }
 +      if(emitted.insert(raw.key).second) {
@@ -257,8 +284,6 @@ index 4e6ea75..08aece9 100644
 +      else
 +        ++it;
 +    }
-+    for(const auto &remainingKey : keys)
-+      changedKeys.insert(remainingKey);
 +    keysChanged = true;
 +    changedKeys.insert(key);
 +    removedKeys.insert(key);
@@ -271,22 +296,36 @@ index 4e6ea75..08aece9 100644
  class MP4::Tag::TagPrivate
  {
  public:
-@@ -51,6 +291,8 @@ public:
+@@ -51,6 +316,9 @@ public:
    TagLib::File *file { nullptr };
    Atoms *atoms { nullptr };
    ItemMap items;
 +  MdtaState mdta;
++  bool mdtaAmbiguous { false };
 +  std::vector<ByteVector> rawOpaqueItems;
  };
 
  MP4::Tag::Tag() :
-@@ -66,13 +308,36 @@ MP4::Tag::Tag(TagLib::File *file, MP4::Atoms *atoms,
+@@ -66,13 +334,49 @@ MP4::Tag::Tag(TagLib::File *file, MP4::Atoms *atoms,
    d->atoms = atoms;
 
    const MP4::Atom *ilst = atoms->find("moov", "udta", "meta", "ilst");
 +  const MP4::Atom *meta = atoms->find("moov", "udta", "meta");
++  const MP4::Atom *udta = atoms->find("moov", "udta");
++  if(udta) {
++    unsigned int mdtaMetaCount = 0;
++    for(const auto *child : udta->children()) {
++      if(child->name() == "meta" && metaHandler(file, child) == "mdta") {
++        ++mdtaMetaCount;
++        if(!meta || metaHandler(file, meta) != "mdta")
++          meta = child;
++      }
++    }
++    d->mdtaAmbiguous = mdtaMetaCount > 1;
++  }
 +  const bool isMdta = meta && metaHandler(file, meta) == "mdta";
-+  d->mdta.keys = isMdta ? metaKeys(file, meta) : std::vector<String>();
++  d->mdta.mdtaDocument = isMdta;
++  d->mdta.keys = isMdta ? metaKeys(file, meta, &d->mdta.keysValid) : std::vector<String>();
 +  if(isMdta && meta) {
 +    for(const auto *child : meta->children()) {
 +      if(child->name() == "keys") {
@@ -319,7 +358,7 @@ index 4e6ea75..08aece9 100644
        }
      }
    }
-@@ -91,7 +356,7 @@ MP4::Tag::Tag(TagLib::File *file, MP4::Atoms *atoms,
+@@ -91,7 +395,7 @@ MP4::Tag::Tag(TagLib::File *file, MP4::Atoms *atoms,
  MP4::Tag::~Tag() = default;
 
  ByteVector
@@ -328,7 +367,7 @@ index 4e6ea75..08aece9 100644
  {
    if(length == -1) {
      length = ((data.size() + 1023) & ~1023) - data.size();
-@@ -110,34 +375,58 @@ MP4::Tag::save()
+@@ -110,34 +414,58 @@ MP4::Tag::save()
  {
    ByteVector ilstData, stemData;
    for(const auto &[name, itm] : std::as_const(d->items)) {
@@ -403,7 +442,7 @@ index 4e6ea75..08aece9 100644
  }
 
  bool
-@@ -285,65 +574,72 @@ MP4::Tag::saveNew(ByteVector data)
+@@ -285,65 +613,72 @@ MP4::Tag::saveNew(ByteVector data)
  }
 
  void
@@ -411,15 +450,12 @@ index 4e6ea75..08aece9 100644
 +MP4::Tag::saveExistingAtom(ByteVector data, const AtomList &path)
  {
 -  auto it = path.end();
--
--  MP4::Atom *ilst = *(--it);
--  offset_t offset = ilst->offset();
--  offset_t length = ilst->length();
 +  if(path.size() < 2)
 +    return;
 
--  MP4::Atom *meta = *(--it);
--  auto index = meta->children().cfind(ilst);
+-  MP4::Atom *ilst = *(--it);
+-  offset_t offset = ilst->offset();
+-  offset_t length = ilst->length();
 +  MP4::Atom *atom = path.back();
 +  auto parentIt = path.end();
 +  std::advance(parentIt, -2);
@@ -428,6 +464,9 @@ index 4e6ea75..08aece9 100644
 +  offset_t length = atom->length();
 +  auto index = parent->children().cfind(atom);
 
+-  MP4::Atom *meta = *(--it);
+-  auto index = meta->children().cfind(ilst);
+-
 -  // check if there is an atom before 'ilst', and possibly use it as padding
 -  if(index != meta->children().cbegin()) {
 +  if(index != parent->children().cbegin()) {
@@ -514,7 +553,7 @@ index 4e6ea75..08aece9 100644
  }
 
  String
-@@ -351,6 +647,10 @@ MP4::Tag::title() const
+@@ -351,6 +686,10 @@ MP4::Tag::title() const
  {
    if(d->items.contains("\251nam"))
      return d->items["\251nam"].toStringList().toString(", ");
@@ -525,7 +564,7 @@ index 4e6ea75..08aece9 100644
    return String();
  }
 
-@@ -359,6 +659,10 @@ MP4::Tag::artist() const
+@@ -359,6 +698,10 @@ MP4::Tag::artist() const
  {
    if(d->items.contains("\251ART"))
      return d->items["\251ART"].toStringList().toString(", ");
@@ -536,7 +575,7 @@ index 4e6ea75..08aece9 100644
    return String();
  }
 
-@@ -466,7 +770,7 @@ MP4::Tag::setTrack(unsigned int value)
+@@ -466,7 +809,7 @@ MP4::Tag::setTrack(unsigned int value)
 
  bool MP4::Tag::isEmpty() const
  {
@@ -545,7 +584,7 @@ index 4e6ea75..08aece9 100644
  }
 
  const MP4::ItemMap &MP4::Tag::itemMap() const
-@@ -474,6 +778,34 @@ const MP4::ItemMap &MP4::Tag::itemMap() const
+@@ -474,6 +817,59 @@ const MP4::ItemMap &MP4::Tag::itemMap() const
    return d->items;
  }
 
@@ -558,7 +597,32 @@ index 4e6ea75..08aece9 100644
 +  destination.d->rawOpaqueItems = d->rawOpaqueItems;
 +  destination.d->mdta.changedKeys = d->mdta.changedKeys;
 +  destination.d->mdta.removedKeys = d->mdta.removedKeys;
++  destination.d->mdta.mdtaDocument = d->mdta.mdtaDocument;
++  destination.d->mdta.keysValid = d->mdta.keysValid;
 +  destination.d->mdta.keysChanged = d->mdta.keysChanged;
++  destination.d->mdtaAmbiguous = d->mdtaAmbiguous;
++}
++
++bool MP4::Tag::applyChanges(const ItemMap &setItems,
++                            const StringList &removeItems,
++                            const StringList &removeMdtaKeys)
++{
++  if(!removeMdtaKeys.isEmpty() &&
++     (d->mdtaAmbiguous || (d->mdta.mdtaDocument && !d->mdta.keysValid)))
++    return false;
++
++  MP4::Tag candidate;
++  copyStateTo(candidate);
++  for(const auto &key : removeItems)
++    candidate.removeItem(key);
++  for(const auto &[key, item] : setItems)
++    candidate.setItem(key, item);
++  for(const auto &key : removeMdtaKeys) {
++    if(candidate.d->mdta.hasKey(key) && !candidate.d->mdta.remove(key))
++      return false;
++  }
++  candidate.copyStateTo(*this);
++  return true;
 +}
 +
 +const MP4::MdtaItemList &MP4::Tag::mdtaItems() const
@@ -581,7 +645,7 @@ index 4e6ea75..08aece9 100644
  {
    return d->items[key];
 diff --git a/taglib/mp4/mp4tag.h b/taglib/mp4/mp4tag.h
-index bae7d23..57e3cdd 100644
+index bae7d232fbf949fab0a8de1450bb10fd0cbd0c77..3094e91956b9ad0e2fbce341cc325857b1d2c0ab 100644
 --- a/taglib/mp4/mp4tag.h
 +++ b/taglib/mp4/mp4tag.h
 @@ -37,6 +37,17 @@
@@ -602,10 +666,15 @@ index bae7d23..57e3cdd 100644
      class ItemFactory;
 
      //! An MP4 tag implementation
-@@ -74,6 +85,19 @@ namespace TagLib {
+@@ -74,6 +85,24 @@ namespace TagLib {
           */
          const ItemMap &itemMap() const;
 
++        /*! Applies ilst replacements and mdta removals as one state change. */
++        bool applyChanges(const ItemMap &setItems,
++                          const StringList &removeItems,
++                          const StringList &removeMdtaKeys);
++
 +        /*! Copies the complete parsed/editable state into another MP4 tag. */
 +        void copyStateTo(Tag &destination) const;
 +
@@ -622,7 +691,7 @@ index bae7d23..57e3cdd 100644
          /*!
           * \return The item, if any, corresponding to \a key.
           */
-@@ -116,8 +140,9 @@ namespace TagLib {
+@@ -116,8 +145,9 @@ namespace TagLib {
          void setTextItem(const String &key, const String &value);
 
      private:
@@ -634,7 +703,7 @@ index bae7d23..57e3cdd 100644
 
          void updateParents(const AtomList &path, offset_t delta, int ignore = 0);
 diff --git a/taglib/toolkit/tfile.cpp b/taglib/toolkit/tfile.cpp
-index 81ba29e..9eba246 100644
+index 81ba29e7ca9c93de87b779f3c3b92dd34739f863..9eba246adf3de12d8548b529361f1815fb62c8d3 100644
 --- a/taglib/toolkit/tfile.cpp
 +++ b/taglib/toolkit/tfile.cpp
 @@ -332,6 +332,11 @@ void File::truncate(offset_t length)
@@ -650,7 +719,7 @@ index 81ba29e..9eba246 100644
  {
    d->stream->clear();
 diff --git a/taglib/toolkit/tfile.h b/taglib/toolkit/tfile.h
-index 196e262..2117bb5 100644
+index 196e262a96dfe886a599f8adb5937386d4232142..2117bb5a2ca1c56ae83f0e175b3e7bc3c682e677 100644
 --- a/taglib/toolkit/tfile.h
 +++ b/taglib/toolkit/tfile.h
 @@ -279,6 +279,9 @@ namespace TagLib {
@@ -664,7 +733,7 @@ index 196e262..2117bb5 100644
      /*!
       * Construct a File object and open the \a fileName.  \a fileName should be a
 diff --git a/taglib/toolkit/tfilestream.cpp b/taglib/toolkit/tfilestream.cpp
-index 9ace7c8..0f17658 100644
+index 9ace7c8590bf5972ebfd3c310875f0a105ffb8d6..0f17658932727250e2e7954df4ec2b48c5e3bfdb 100644
 --- a/taglib/toolkit/tfilestream.cpp
 +++ b/taglib/toolkit/tfilestream.cpp
 @@ -151,6 +151,7 @@ public:
@@ -755,7 +824,7 @@ index 9ace7c8..0f17658 100644
  #endif
  }
 diff --git a/taglib/toolkit/tfilestream.h b/taglib/toolkit/tfilestream.h
-index 36e1d54..1e55b8f 100644
+index 36e1d542a145fe002d1bcaa0458eadc50ebfe2d8..1e55b8f97bbb00040109cd8652b46282fa459939 100644
 --- a/taglib/toolkit/tfilestream.h
 +++ b/taglib/toolkit/tfilestream.h
 @@ -139,6 +139,8 @@ namespace TagLib {
@@ -768,7 +837,7 @@ index 36e1d54..1e55b8f 100644
 
      /*!
 diff --git a/taglib/toolkit/tiostream.cpp b/taglib/toolkit/tiostream.cpp
-index 6b7e3b1..49b24b6 100644
+index 6b7e3b1b6b5758d89ac2e4f09c470071df2e64af..49b24b6a213a3abcd22b6cee6e20c853222133ea 100644
 --- a/taglib/toolkit/tiostream.cpp
 +++ b/taglib/toolkit/tiostream.cpp
 @@ -93,3 +93,8 @@ IOStream::~IOStream() = default;
@@ -781,7 +850,7 @@ index 6b7e3b1..49b24b6 100644
 +  return false;
 +}
 diff --git a/taglib/toolkit/tiostream.h b/taglib/toolkit/tiostream.h
-index 5429f86..87fbef6 100644
+index 5429f86ee7904870660b446c3fcf525eef701db5..87fbef602f92c4cb46ab5b3e5ccc0a2dd9a2eef8 100644
 --- a/taglib/toolkit/tiostream.h
 +++ b/taglib/toolkit/tiostream.h
 @@ -165,6 +165,9 @@ namespace TagLib {

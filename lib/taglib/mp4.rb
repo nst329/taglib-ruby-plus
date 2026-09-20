@@ -541,7 +541,8 @@ module TagLib::MP4
 
     def ensure_mdta_support!
       return if respond_to?(:_mdta_items) && respond_to?(:_set_mdta_item) &&
-                respond_to?(:_remove_mdta_item) && respond_to?(:_copy_state_to)
+                respond_to?(:_remove_mdta_item) && respond_to?(:_copy_state_to) &&
+                respond_to?(:_apply_changes)
 
       raise MdtaItemError, 'patched TagLib with mdta support is required'
     end
@@ -570,8 +571,7 @@ module TagLib::MP4
       'title' => 'title',
       'artist' => 'artist',
       'description' => 'description',
-      'TVShowName' => 'show',
-      'show' => 'show'
+      'TVShowName' => 'show'
     }.freeze
 
     def property(name)
@@ -580,6 +580,7 @@ module TagLib::MP4
     end
 
     def property_values(name)
+      name = canonical_property_name(name)
       key = property_atom(name)
       item = item_map[key]
       if item
@@ -589,7 +590,7 @@ module TagLib::MP4
         return values.map { |value| ContentRating.parse(value) }
       end
 
-      mdta_key = MDTA_PROPERTY_KEYS[name.to_s]
+      mdta_key = MDTA_PROPERTY_KEYS[name]
       return [] unless mdta_key
 
       mdta_items.filter_map { |entry| entry.text if entry.key == mdta_key }
@@ -604,7 +605,6 @@ module TagLib::MP4
 
     def set_property(name, value)
       set_properties(name => value)
-      self
     end
 
     def set_properties(values)
@@ -612,18 +612,29 @@ module TagLib::MP4
         raise ArgumentError, 'properties must be a Hash'
       end
 
-      entries = values.map do |name, value|
-        [property_atom(name), validate_property_value(name, value)]
+      entries = {}
+      values.each do |name, value|
+        canonical_name = canonical_property_name(name)
+        if entries.key?(canonical_name)
+          raise ArgumentError, "duplicate MP4 property: #{canonical_name.inspect}"
+        end
+        entries[canonical_name] = [property_atom(canonical_name),
+                                   validate_property_value(canonical_name, value)]
       end
-      entries.each do |key, value|
-        item_map.insert(key, Item.from_string_list([value]))
+
+      return self if entries.empty?
+
+      set_items = ItemMap.new
+      entries.each_value do |key, value|
+        set_items.insert(key, Item.from_string_list([value]))
       end
-      self
+      apply_property_changes(set_items, [], entries.keys)
     end
 
     def remove_property(name)
-      item_map.erase(property_atom(name))
-      self
+      canonical_name = canonical_property_name(name)
+      atom = property_atom(canonical_name)
+      apply_property_changes(ItemMap.new, [atom], [canonical_name])
     end
 
     def artwork
@@ -691,9 +702,22 @@ module TagLib::MP4
 
     private
 
-    def property_atom(name)
+    def canonical_property_name(name)
       name = name.to_s
-      return PROPERTY_ATOMS.fetch('TVShowName') if name == 'show'
+      name == 'show' ? 'TVShowName' : name
+    end
+
+    def apply_property_changes(set_items, remove_items, names)
+      ensure_mdta_support!
+      remove_mdta_keys = names.filter_map { |name| MDTA_PROPERTY_KEYS[name] }
+      unless _apply_changes(set_items, remove_items, remove_mdta_keys)
+        raise MdtaItemError, 'cannot normalize MP4 metadata safely'
+      end
+      self
+    end
+
+    def property_atom(name)
+      name = canonical_property_name(name)
 
       PROPERTY_ATOMS.fetch(name) do
         raise ArgumentError, "unsupported MP4 property: #{name.inspect}"
@@ -720,7 +744,7 @@ module TagLib::MP4
     end
 
     def validate_property_value(name, value)
-      if name.to_s == CONTENT_RATING_PROPERTY
+      if canonical_property_name(name) == CONTENT_RATING_PROPERTY
         unless value.is_a?(ContentRating)
           raise ArgumentError, 'contentRating must be a TagLib::MP4::ContentRating'
         end

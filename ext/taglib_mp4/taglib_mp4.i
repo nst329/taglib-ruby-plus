@@ -374,6 +374,7 @@ namespace TagLib {
 
 %ignore TagLib::MP4::Tag::itemListMap; // Deprecated.
 %ignore TagLib::MP4::Tag::copyStateTo;
+%ignore TagLib::MP4::Tag::applyChanges;
 
 %rename("__getitem__") TagLib::MP4::Tag::item;
 
@@ -512,6 +513,12 @@ namespace TagLib {
 %extend TagLib::MP4::Tag {
   void _copy_state_to(TagLib::MP4::Tag *destination) {
     $self->copyStateTo(*destination);
+  }
+
+  bool _apply_changes(const TagLib::MP4::ItemMap &set_items,
+                      const TagLib::StringList &remove_items,
+                      const TagLib::StringList &remove_mdta_keys) {
+    return $self->applyChanges(set_items, remove_items, remove_mdta_keys);
   }
 
   VALUE _mdta_items() {

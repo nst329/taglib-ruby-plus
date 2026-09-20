@@ -266,6 +266,9 @@ module TagLib::MP4
 
     # Set multiple managed MP4/iTunes properties after validating all values.
     # Strings are transcoded to UTF-8 before any items are changed.
+    # For title, TVShowName, artist, and description, the corresponding
+    # FFmpeg mdta key is removed so the ilst value is the canonical value.
+    # Other mdta keys are preserved.
     # @raise [EncodingError] if transcoding fails
     # @raise [ArgumentError] if a name or value is invalid
     # @param values [Hash<String, String, ContentRating>]
@@ -274,6 +277,8 @@ module TagLib::MP4
     end
 
     # Remove one managed MP4/iTunes property in memory.
+    # This removes both the ilst value and its corresponding FFmpeg mdta
+    # fallback, when one exists.
     # @return [TagLib::MP4::Tag] self
     def remove_property(name)
     end

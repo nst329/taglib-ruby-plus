@@ -47,7 +47,13 @@ int main(int argc, char **argv)
   {
     TagLib::MP4::File output(argv[2], false);
     require(output.isValid(), "output is invalid");
-    output.tag()->setTitle("Changed by patched TagLib");
+    TagLib::MP4::ItemMap setItems;
+    setItems.insert("\251nam", TagLib::MP4::Item(TagLib::StringList("Changed by patched TagLib")));
+    TagLib::StringList removeItems;
+    TagLib::StringList removeMdtaKeys;
+    removeMdtaKeys.append("title");
+    require(output.tag()->applyChanges(setItems, removeItems, removeMdtaKeys),
+            "atomic normal/mdta changes failed");
     require(output.save(), "normal title save failed");
   }
 
@@ -61,6 +67,7 @@ int main(int argc, char **argv)
     require(find(afterTitle, "show") != nullptr, "show lost after title save");
     require(find(afterTitle, "artist") != nullptr, "artist lost after title save");
     require(find(afterTitle, "description") != nullptr, "description lost after title save");
+    require(find(afterTitle, "title") == nullptr, "normalized mdta title was not removed");
 
     require(reopened.tag()->setMdtaItem("audio_normalization", 1, 0,
                                         TagLib::ByteVector("ebu-r128", 8)),

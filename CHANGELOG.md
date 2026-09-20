@@ -8,7 +8,17 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
-## Unreleased
+## 2.3.2.2
+
+### Changed
+- Normalize high-level MP4 `set_property`/`set_properties` updates to ilst for
+  `title`, `TVShowName`, `artist`, and `description`, removing only the matching
+  FFmpeg mdta fallback while preserving other mdta keys and typed values.
+- Make `remove_property` remove the ilst value and matching mdta fallback together.
+
+### Added
+- Preserve unknown and typed FFmpeg mdta entries while high-level MP4 properties
+  are normalized.
 
 ## 2.3.2.1
 ### Added
