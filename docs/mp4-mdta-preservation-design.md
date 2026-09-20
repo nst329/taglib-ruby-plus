@@ -544,9 +544,10 @@ temp+rename保存、再open検証、通常saveのmdat payload hash検証、`save
 通常title／artistは通常ilst itemを優先し、通常itemが無いときだけmdta UTF-8値へfallbackする。
 
 TagLib本体には`IOStream::hasError()`と`File::ioError()`を追加し、短いwrite、seek、truncate、
-flushの失敗をsave結果へ伝播させた。chapter専用保存は、元のmdat payload列を出力側へ
-順序を保って含むことを検証し、chapter用mdatの追加だけを許可する。sample table単位の
-track分類が必要な断片化／特殊レイアウトは、現時点では成功扱いにしない。
+flushの失敗をsave結果へ伝播させた。chapter変更時の保存検証はtrackのsample tableを読み、
+元ファイルに存在する非chapter trackのsample payloadをtrack ID単位で比較する。
+chapter trackの追加・削除によるmdatの増減は許可し、sample tableを解釈できない対象は
+成功扱いにしない。
 
 互換性よりも保存安全性を優先し、temp + rename + SWIG Fileポインタ再生成を採用する。
 保存後に古い`tag`、`Item`、`Properties` wrapperを再利用できないことは仕様とする。
@@ -565,8 +566,8 @@ TagLibキャッシュはインストール成果物だけを対象とし、パ�
 
 保存API名と検証規則を分離する。`save`はmetadataと保留中chapterを保存し、
 `save_chapters`はmetadataの未保存変更を拒否してchapterだけを保存する。
-いずれも保留中chapterがある場合は元mdat列の順序付き保持を検証し、chapterが
-無変更ならmdat列の完全一致を要求する。chapter用mdat追加の許容を
+いずれも保留中chapterがある場合は非chapter trackのsample payload保持を検証し、chapterが
+無変更ならmdat列の完全一致を要求する。chapter用mdatの増減の許容を
 `save_chapters`という呼出名に結び付けない。これにより通常`save`でも
 metadataとchapterを一回のファイル置換で保存できる。
 

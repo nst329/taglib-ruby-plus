@@ -225,6 +225,9 @@ module TagLib::MP4
   class File
     extend ::TagLib::FileOpenable
 
+    MP4_TRACK_MEDIA_HANDLERS = %w[vide soun text].freeze
+    MP4_ATOM_CONTAINERS = %w[moov trak mdia minf stbl tref].freeze
+
     CHAPTER_STYLE_CODES = {
       nero: 1,
       quicktime: 2,
@@ -325,7 +328,11 @@ module TagLib::MP4
       expected_chapters = chapter_snapshot
       # Chapter edits can append media regardless of which public save API is used.
       chapter_edits = @chapter_changes.any?
-      source_mdat = mdat_payload_signature(source_path)
+      source_media = if chapter_edits
+                       chapter_media_signature(source_path)
+                     else
+                       mdat_payload_signature(source_path)
+                     end
       temp_path = "#{source_path}.taglib-mdta-#{Process.pid}-#{object_id}"
       committed = false
 
@@ -333,7 +340,7 @@ module TagLib::MP4
         ::FileUtils.cp(source_path, temp_path)
         save_temporary_copy(temp_path, write_metadata: write_metadata)
 
-        verify_saved_copy(temp_path, expected_metadata, expected_chapters, source_mdat,
+        verify_saved_copy(temp_path, expected_metadata, expected_chapters, source_media,
                           chapter_edits: chapter_edits)
         ::FileUtils.mv(temp_path, source_path)
         committed = true
@@ -380,7 +387,7 @@ module TagLib::MP4
       end
     end
 
-    def verify_saved_copy(path, expected_metadata, expected_chapters, source_mdat, chapter_edits:)
+    def verify_saved_copy(path, expected_metadata, expected_chapters, source_media, chapter_edits:)
       self.class.open(path, false) do |verification|
         actual_metadata = verification.send(:metadata_snapshot)
         unless actual_metadata == expected_metadata
@@ -390,8 +397,16 @@ module TagLib::MP4
         unless actual_chapters == expected_chapters
           raise MdtaSaveError.new('temporary MP4 chapter verification failed', phase: :verify)
         end
-        actual_mdat = verification.send(:mdat_payload_signature, path)
-        media_preserved = chapter_edits ? mdat_payloads_preserved?(source_mdat, actual_mdat) : actual_mdat == source_mdat
+        actual_media = if chapter_edits
+                         verification.send(:chapter_media_signature, path)
+                       else
+                         verification.send(:mdat_payload_signature, path)
+                       end
+        media_preserved = if chapter_edits
+                            media_tracks_preserved?(source_media, actual_media)
+                          else
+                            actual_media == source_media
+                          end
         unless media_preserved
           raise MdtaSaveError.new('temporary MP4 media payload changed', phase: :verify)
         end
@@ -400,6 +415,265 @@ module TagLib::MP4
 
     def metadata_dirty?
       metadata_snapshot != @mp4_metadata_snapshot
+    end
+
+    def chapter_media_signature(path)
+      tracks = track_media_signatures(path)
+      chapter_track_ids = tracks.flat_map { |track| track[:chapter_track_ids] }.uniq
+      tracks.each_with_object({}) do |track, result|
+        next if chapter_track_ids.include?(track[:track_id])
+
+        result[track[:track_id]] = [track[:handler], track[:samples]]
+      end
+    end
+
+    def media_tracks_preserved?(expected, actual)
+      expected.all? do |track_id, signature|
+        actual.key?(track_id) && actual.fetch(track_id) == signature
+      end
+    end
+
+    def track_media_signatures(path)
+      ::File.open(path, 'rb') do |io|
+        file_size = io.stat.size
+        atoms = parse_mp4_atoms(io, 0, file_size)
+        moov = atoms.find { |atom| atom[:type] == 'moov' }
+        raise MdtaSaveError.new('moov atom is missing', phase: :verify) unless moov
+
+        mdat_ranges = atoms.filter_map do |atom|
+          next unless atom[:type] == 'mdat'
+
+          [atom[:payload_offset], atom[:end_offset]]
+        end
+        moov[:children].filter_map do |atom|
+          next unless atom[:type] == 'trak'
+
+          handler = track_handler(io, atom)
+          next unless MP4_TRACK_MEDIA_HANDLERS.include?(handler)
+
+          track_id = track_id(io, atom)
+          raise MdtaSaveError.new('track ID is missing', phase: :verify) unless track_id
+
+          samples = track_sample_signature(io, atom, mdat_ranges)
+          raise MdtaSaveError.new("unsupported #{handler} sample table", phase: :verify) unless samples
+
+          {
+            track_id: track_id,
+            handler: handler,
+            chapter_track_ids: chapter_track_ids(io, atom),
+            samples: samples
+          }
+        end
+      end
+    end
+
+    def parse_mp4_atoms(io, start_offset, end_offset)
+      atoms = []
+      offset = start_offset
+      while offset < end_offset
+        header = read_mp4_bytes(io, offset, 8)
+        size32 = header.unpack1('N')
+        type = header.byteslice(4, 4)
+        header_size = 8
+        size = size32
+        if size32 == 1
+          size = read_mp4_uint64(io, offset + 8)
+          header_size = 16
+        elsif size32.zero?
+          size = end_offset - offset
+        end
+        if size < header_size || offset + size > end_offset
+          raise MdtaSaveError.new('invalid MP4 atom while reading tracks', phase: :verify)
+        end
+
+        atom = {
+          type: type,
+          offset: offset,
+          payload_offset: offset + header_size,
+          end_offset: offset + size,
+          children: []
+        }
+        if MP4_ATOM_CONTAINERS.include?(type)
+          atom[:children] = parse_mp4_atoms(io, atom[:payload_offset], atom[:end_offset])
+        end
+        atoms << atom
+        offset += size
+      end
+      unless offset == end_offset
+        raise MdtaSaveError.new('MP4 atom boundary mismatch while reading tracks', phase: :verify)
+      end
+
+      atoms
+    end
+
+    def read_mp4_bytes(io, offset, length)
+      io.seek(offset)
+      value = io.read(length)
+      unless value && value.bytesize == length
+        raise MdtaSaveError.new('truncated MP4 atom while reading tracks', phase: :verify)
+      end
+
+      value
+    end
+
+    def read_mp4_uint32(io, offset)
+      read_mp4_bytes(io, offset, 4).unpack1('N')
+    end
+
+    def read_mp4_uint64(io, offset)
+      read_mp4_bytes(io, offset, 8).unpack1('Q>')
+    end
+
+    def track_handler(io, trak)
+      mdia = trak[:children].find { |atom| atom[:type] == 'mdia' }
+      hdlr = mdia && mdia[:children].find { |atom| atom[:type] == 'hdlr' }
+      return unless hdlr
+
+      read_mp4_bytes(io, hdlr[:payload_offset] + 8, 4)
+    end
+
+    def track_id(io, trak)
+      tkhd = trak[:children].find { |atom| atom[:type] == 'tkhd' }
+      return unless tkhd
+
+      version = read_mp4_bytes(io, tkhd[:payload_offset], 1).getbyte(0)
+      read_mp4_uint32(io, tkhd[:payload_offset] + (version == 1 ? 20 : 12))
+    end
+
+    def chapter_track_ids(io, trak)
+      tref = trak[:children].find { |atom| atom[:type] == 'tref' }
+      chap = tref && tref[:children].find { |atom| atom[:type] == 'chap' }
+      return [] unless chap
+
+      payload_size = chap[:end_offset] - chap[:payload_offset]
+      unless (payload_size % 4).zero?
+        raise MdtaSaveError.new('invalid chapter track reference', phase: :verify)
+      end
+
+      Array.new(payload_size / 4) do |index|
+        read_mp4_uint32(io, chap[:payload_offset] + index * 4)
+      end
+    end
+
+    def track_sample_signature(io, trak, mdat_ranges)
+      mdia = trak[:children].find { |atom| atom[:type] == 'mdia' }
+      minf = mdia && mdia[:children].find { |atom| atom[:type] == 'minf' }
+      stbl = minf && minf[:children].find { |atom| atom[:type] == 'stbl' }
+      return nil unless stbl
+
+      chunk_offsets = parse_chunk_offsets(io, stbl)
+      sample_to_chunk = parse_sample_to_chunk(io, stbl)
+      sample_sizes = parse_sample_sizes(io, stbl)
+      return nil unless chunk_offsets && sample_to_chunk && sample_sizes
+
+      digest = Digest::SHA256.new
+      sample_index = 0
+      sample_to_chunk_index = 0
+      chunk_offsets.each_with_index do |chunk_offset, chunk_index|
+        while sample_to_chunk_index + 1 < sample_to_chunk.length &&
+              sample_to_chunk[sample_to_chunk_index + 1][:first_chunk] <= chunk_index + 1
+          sample_to_chunk_index += 1
+        end
+        entry = sample_to_chunk[sample_to_chunk_index]
+        raise MdtaSaveError.new('invalid sample-to-chunk table', phase: :verify) unless entry
+
+        entry[:samples_per_chunk].times do
+          break if sample_index >= sample_sizes.length
+
+          size = sample_sizes.fetch(sample_index)
+          unless media_range?(chunk_offset, size, mdat_ranges)
+            raise MdtaSaveError.new('track sample is outside mdat', phase: :verify)
+          end
+          digest.update([size].pack('Q>'))
+          append_sample_digest(io, digest, chunk_offset, size)
+          chunk_offset += size
+          sample_index += 1
+        end
+      end
+      unless sample_index == sample_sizes.length
+        raise MdtaSaveError.new('sample table count mismatch', phase: :verify)
+      end
+
+      [sample_index, digest.hexdigest]
+    end
+
+    def parse_chunk_offsets(io, stbl)
+      atom = stbl[:children].find { |child| %w[stco co64].include?(child[:type]) }
+      return unless atom
+
+      count = read_mp4_uint32(io, atom[:payload_offset] + 4)
+      width = atom[:type] == 'co64' ? 8 : 4
+      Array.new(count) do |index|
+        offset = atom[:payload_offset] + 8 + index * width
+        width == 8 ? read_mp4_uint64(io, offset) : read_mp4_uint32(io, offset)
+      end
+    end
+
+    def parse_sample_to_chunk(io, stbl)
+      atom = stbl[:children].find { |child| child[:type] == 'stsc' }
+      return unless atom
+
+      count = read_mp4_uint32(io, atom[:payload_offset] + 4)
+      Array.new(count) do |index|
+        offset = atom[:payload_offset] + 8 + index * 12
+        {
+          first_chunk: read_mp4_uint32(io, offset),
+          samples_per_chunk: read_mp4_uint32(io, offset + 4)
+        }
+      end
+    end
+
+    def parse_sample_sizes(io, stbl)
+      atom = stbl[:children].find { |child| child[:type] == 'stsz' }
+      if atom
+        sample_size = read_mp4_uint32(io, atom[:payload_offset] + 4)
+        count = read_mp4_uint32(io, atom[:payload_offset] + 8)
+        return Array.new(count, sample_size) if sample_size.positive?
+
+        return Array.new(count) do |index|
+          read_mp4_uint32(io, atom[:payload_offset] + 12 + index * 4)
+        end
+      end
+
+      atom = stbl[:children].find { |child| child[:type] == 'stz2' }
+      return unless atom
+
+      field_size = read_mp4_bytes(io, atom[:payload_offset] + 7, 1).getbyte(0)
+      count = read_mp4_uint32(io, atom[:payload_offset] + 8)
+      case field_size
+      when 4
+        bytes = read_mp4_bytes(io, atom[:payload_offset] + 12, (count + 1) / 2)
+        Array.new(count) do |index|
+          byte = bytes.getbyte(index / 2)
+          index.even? ? byte >> 4 : byte & 0x0f
+        end
+      when 8
+        read_mp4_bytes(io, atom[:payload_offset] + 12, count).bytes
+      when 16
+        Array.new(count) do |index|
+          read_mp4_bytes(io, atom[:payload_offset] + 12 + index * 2, 2).unpack1('n')
+        end
+      else
+        raise MdtaSaveError.new("unsupported stz2 field size: #{field_size}", phase: :verify)
+      end
+    end
+
+    def media_range?(offset, size, mdat_ranges)
+      mdat_ranges.any? { |start_offset, end_offset| offset >= start_offset && offset + size <= end_offset }
+    end
+
+    def append_sample_digest(io, digest, offset, size)
+      io.seek(offset)
+      remaining = size
+      while remaining.positive?
+        chunk = io.read([remaining, 1024 * 1024].min)
+        if chunk.nil? || chunk.empty?
+          raise MdtaSaveError.new('truncated sample while verifying media', phase: :verify)
+        end
+
+        digest.update(chunk)
+        remaining -= chunk.bytesize
+      end
     end
 
     def chapter_snapshot
@@ -474,17 +748,6 @@ module TagLib::MP4
         end
       end
       signatures
-    end
-
-    def mdat_payloads_preserved?(original, saved)
-      index = 0
-      original.all? do |signature|
-        index += 1 while index < saved.length && saved[index] != signature
-        next false if index >= saved.length
-
-        index += 1
-        true
-      end
     end
 
     def chapter_style_code(style)

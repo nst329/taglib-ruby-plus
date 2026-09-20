@@ -318,4 +318,24 @@ class MP4MdtaTagLibTest < Test::Unit::TestCase
       assert_equal '-16-LUFS', file.tag.mdta_item('audio_normalization_target').text
     end
   end
+
+  def test_chapter_removal_allows_chapter_mdat_to_be_removed
+    chapters = [TagLib::MP4::Chapter.new(start_time: 0, title: 'Opening')]
+    open_file do |file|
+      file.set_chapters(chapters)
+      assert file.save
+    end
+
+    open_file do |file|
+      assert_equal :both, file.chapter_style
+      file.remove_chapters
+      assert file.save_chapters
+    end
+
+    open_file do |file|
+      assert_equal :none, file.chapter_style
+      assert_empty file.chapters
+      assert_equal 'loudnorm', file.tag.mdta_item('audio_normalization').text
+    end
+  end
 end
