@@ -4,15 +4,25 @@ Changes in Releases of taglib-ruby-plus
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
-and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
+Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.html);
+four-component RubyGems versions are used when identifying a downstream
+revision of a specific TagLib release.
 
 ## Unreleased
+
+## 2.3.2.1
 ### Added
 - Rename the gem to `taglib-ruby-plus` and its public entry point to
   `require 'taglib_plus'` while retaining the `TagLib` namespace.
 - Add high-level MP4 iTunes property and artwork APIs.
 - Add Ruby-owned MP4 artwork and content-rating value objects.
 - Add CI coverage for the MP4 metadata API and packaged gem smoke test.
+- Preserve, read, and write FFmpeg `mdta` metadata in MP4 files when using
+  the patched TagLib 2.3.2.
+
+### Changed
+- The gem version uses the four-component `2.3.2.1` downstream revision while
+  the required TagLib C++ version remains `2.3.2`.
 
 ## 2.3.2
 ### Changed
