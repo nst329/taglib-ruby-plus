@@ -77,5 +77,10 @@ $CFLAGS << ' -DSWIG_TYPE_TABLE=taglib'
 # code.
 $CXXFLAGS << ' -std=c++17'
 
+if (extra_ldflags = ENV['TAGLIB_RUBY_LDFLAGS']) && !extra_ldflags.empty?
+  $LDFLAGS << " #{extra_ldflags}"
+  $DLDFLAGS << " #{extra_ldflags}" if defined?($DLDFLAGS) && $DLDFLAGS
+end
+
 # Allow users to override the Ruby runtime's preferred CXX
 RbConfig::MAKEFILE_CONFIG['CXX'] = ENV['TAGLIB_RUBY_CXX'] if ENV['TAGLIB_RUBY_CXX']

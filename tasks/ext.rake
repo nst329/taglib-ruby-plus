@@ -21,6 +21,13 @@ taglib_options = ['-DCMAKE_BUILD_TYPE=Release',
                   '-DWITH_MP4=ON', # WITH_MP4, WITH_ASF only needed with taglib 1.7, will be default in 1.8
                   '-DWITH_ASF=ON'].join(' ')
 
+if RbConfig::CONFIG['host_os'].include?('darwin')
+  taglib_options = [taglib_options,
+                    '-DCMAKE_MACOSX_RPATH=ON',
+                    '-DCMAKE_INSTALL_NAME_DIR=@rpath',
+                    "-DCMAKE_OSX_DEPLOYMENT_TARGET=#{ENV.fetch('MACOSX_DEPLOYMENT_TARGET', '12.0')}"].join(' ')
+end
+
 def configure_cross_compile(ext)
   ext.cross_compile = true
   ext.cross_platform = Build.plat

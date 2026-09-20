@@ -1,0 +1,62 @@
+name: native-gems
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: arm64-darwin
+          - os: macos-15-intel
+            platform: x86_64-darwin
+
+    runs-on: ${{ matrix.os }}
+
+    env:
+      MAKEFLAGS: -j2
+      PLATFORM: ${{ matrix.platform }}
+      TAGLIB_VERSION: 2.3.2
+      MACOSX_DEPLOYMENT_TARGET: '12.0'
+      SKIP_SWIG: 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '4.0'
+          bundler-cache: true
+
+      - name: Read gem version
+        run: echo "GEM_VERSION=$(ruby -Ilib -e 'require \"taglib/version\"; puts TagLib::Version::STRING')" >> "$GITHUB_ENV"
+
+      - name: Build patched TagLib
+        run: bundle exec rake vendor
+
+      - name: Build native platform gem
+        env:
+          TAGLIB_DIR: ${{ github.workspace }}/tmp/${{ env.PLATFORM }}/taglib-${{ env.TAGLIB_VERSION }}
+          TAGLIB_SOURCE_DIR: ${{ github.workspace }}/tmp/taglib-${{ env.TAGLIB_VERSION }}
+          TAGLIB_RUBY_NATIVE_PLATFORM: ${{ matrix.platform }}
+          NATIVE_GEM_OUTPUT_DIR: ${{ github.workspace }}/pkg
+        run: ruby tasks/build_native_gem.rb
+
+      - name: Install and smoke test native platform gem
+        env:
+          GEM_HOME: ${{ runner.temp }}/taglib-ruby-plus-gem-home
+        run: |
+          mkdir -p "$GEM_HOME"
+          gem install --local "pkg/taglib-ruby-plus-${GEM_VERSION}-${{ matrix.platform }}.gem" --no-document
+          ruby -e 'gem "taglib-ruby-plus", ENV.fetch("GEM_VERSION"); require "taglib_plus"; abort "MP4 API unavailable" unless TagLib::MP4::File'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: taglib-ruby-plus-${{ env.GEM_VERSION }}-${{ matrix.platform }}
+          path: pkg/taglib-ruby-plus-${{ env.GEM_VERSION }}-${{ matrix.platform }}.gem

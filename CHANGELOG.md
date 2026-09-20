@@ -8,6 +8,12 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.4
+
+### Added
+- Add self-contained macOS platform gem packaging for `arm64-darwin` and
+  `x86_64-darwin`, including the patched TagLib library and license files.
+
 ## 2.3.2.3
 
 ### Fixed

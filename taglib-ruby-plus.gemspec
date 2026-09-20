@@ -4,6 +4,8 @@ $LOAD_PATH.push File.expand_path('lib', __dir__)
 
 require 'taglib/version'
 
+native_platform = ENV['TAGLIB_RUBY_NATIVE_PLATFORM']
+
 Gem::Specification.new do |s|
   s.name        = 'taglib-ruby-plus'
   s.version     = TagLib::Version::STRING
@@ -22,7 +24,11 @@ Gem::Specification.new do |s|
 
   s.require_paths = ['lib']
   s.required_ruby_version = '>= 3.2'
-  s.requirements = ['TagLib C++ >= 2.3.2 (libtag1-dev in Debian/Ubuntu, taglib-devel in Fedora/RHEL)']
+  s.requirements = if native_platform
+                     []
+                   else
+                     ['TagLib C++ >= 2.3.2 (libtag1-dev in Debian/Ubuntu, taglib-devel in Fedora/RHEL)']
+                   end
 
   s.add_development_dependency 'bundler', '>= 2.4', '< 5'
   s.add_development_dependency 'minitest', '>= 5.0', '< 7'
@@ -44,6 +50,12 @@ Gem::Specification.new do |s|
     'ext/taglib_aiff/extconf.rb',
     'ext/taglib_wav/extconf.rb'
   ]
+
+  if native_platform
+    s.platform = Gem::Platform.new(native_platform)
+    s.required_ruby_version = '>= 4.0'
+    s.extensions = []
+  end
   s.extra_rdoc_files = [
     'CHANGELOG.md',
     'LICENSE.txt',
@@ -139,6 +151,7 @@ Gem::Specification.new do |s|
     'lib/taglib/wav.rb',
     'taglib-ruby-plus.gemspec',
     'tasks/docs_coverage.rake',
+    'tasks/build_native_gem.rb',
     'tasks/build.rb',
     'tasks/ext.rake',
     'tasks/gemspec_check.rake',
@@ -209,6 +222,13 @@ Gem::Specification.new do |s|
     'test/vorbis_tag_test.rb',
     'test/wav_examples_test.rb',
     'test/wav_file_test.rb',
-    'test/wav_file_write_test.rb'
+    'test/wav_file_write_test.rb',
+    'docs/native-gem-design.md'
   ]
+
+  if native_platform
+    s.files.concat(Dir['lib/*.bundle'])
+    s.files.concat(Dir['lib/taglib_plus/native/**/*'].select { |path| File.file?(path) })
+    s.files.concat(Dir['licenses/taglib/**/*'].select { |path| File.file?(path) })
+  end
 end

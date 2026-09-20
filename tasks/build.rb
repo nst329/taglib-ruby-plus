@@ -35,7 +35,8 @@ class Build
     end
 
     def library
-      "#{install_dir}/lib/libtag.#{RbConfig::CONFIG['SOEXT']}"
+      extension = RbConfig::CONFIG['host_os'].include?('darwin') ? 'dylib' : RbConfig::CONFIG['SOEXT']
+      "#{install_dir}/lib/libtag.#{extension}"
     end
   end
 end
