@@ -8,6 +8,12 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.3
+
+### Fixed
+- Allow chapter-only saves to remove chapter-track mdat payloads while
+  continuing to verify that nonchapter media samples are unchanged.
+
 ## 2.3.2.2
 
 ### Changed
