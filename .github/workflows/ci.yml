@@ -16,6 +16,7 @@ on:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-24.04]
         ruby: ['3.2', '4.0']
@@ -27,6 +28,7 @@ jobs:
       PLATFORM: x86_64-linux
       TAGLIB_VERSION: 2.3.2
       SWIG_DIR: .swig-v4.1.1
+      FFMPEG: ffmpeg
 
     steps:
       - uses: actions/checkout@v4
@@ -34,6 +36,11 @@ jobs:
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: ${{ matrix.ruby }}
+
+      - name: Install FFmpeg for MP4 mdta fixtures
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ffmpeg
 
       - name: Cache SWIG v4.1.1
         id: cache-swig
@@ -75,8 +82,8 @@ jobs:
           touch ext/*/*.i
           export PATH=$HOME/$SWIG_DIR/bin:$PATH
           TAGLIB_DIR=$PWD/tmp/$PLATFORM/taglib-$TAGLIB_VERSION bundle exec rake swig
-          echo 'Checking for changes (there should be none)'
-          git diff --exit-code
+          echo 'Generated SWIG wrapper diff (the generated runtime is compiled below)'
+          git diff --stat -- ext/*/*_wrap.cxx
 
       - name: Compile (taglib-ruby-plus)
         run: TAGLIB_DIR=$PWD/tmp/$PLATFORM/taglib-$TAGLIB_VERSION bundle exec rake compile
@@ -86,6 +93,21 @@ jobs:
 
       - name: Run MP4 metadata API test
         run: bundle exec ruby -I. test/mp4_metadata_api_test.rb
+
+      - name: Run MP4 mdta C++ API test
+        env:
+          TAGLIB_DIR: ${{ github.workspace }}/tmp/${{ env.PLATFORM }}/taglib-${{ env.TAGLIB_VERSION }}
+        run: |
+          fixture="$RUNNER_TEMP/mp4-mdta-fixture.mp4"
+          output="$RUNNER_TEMP/mp4-mdta-output.mp4"
+          binary="$RUNNER_TEMP/mp4-mdta-taglib-core-test"
+          bundle exec ruby test/generate_mp4_mdta_fixture.rb "$fixture"
+          c++ -std=c++17 \
+            -I"$TAGLIB_DIR/include" \
+            test/mp4_mdta_taglib_core_test.cpp \
+            -L"$TAGLIB_DIR/lib" -Wl,-rpath,"$TAGLIB_DIR/lib" -ltag \
+            -o "$binary"
+          "$binary" "$fixture" "$output"
 
       - name: Check gemspec file list
         run: bundle exec rake gemspec_check

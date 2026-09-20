@@ -15,10 +15,13 @@ require "taglib/mp4"
 
 class Mp4MdtaDesignContractTest < Minitest::Test
   def setup
+    @baseline = ENV["MDTA_BASELINE"]
+    @io_fault = ENV["MDTA_IO_FAULT"]
+    skip "set MDTA_BASELINE and MDTA_IO_FAULT to run design contract probes" unless @baseline && @io_fault
+
     @dir = Dir.mktmpdir("mdta-contract-")
     @source = File.join(@dir, "source.mp4")
     run!(RbConfig.ruby, File.join(__dir__, "generate_mp4_mdta_fixture.rb"), @source)
-    @baseline = ENV.fetch("MDTA_BASELINE")
   end
 
   def teardown
@@ -52,7 +55,7 @@ class Mp4MdtaDesignContractTest < Minitest::Test
 
   def test_discarded_writes_are_reported_as_save_failure
     before = Digest::SHA256.file(@source).hexdigest
-    output = run!(ENV.fetch("MDTA_IO_FAULT"), @source)
+    output = run!(@io_fault, @source)
     assert_match(/save=0 discarded=[1-9]/, output)
     assert_equal before, Digest::SHA256.file(@source).hexdigest
   end
