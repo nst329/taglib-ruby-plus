@@ -18,6 +18,11 @@
 通常の`ItemMap`へmdta itemを混在させないことが重要です。未知の型は生bytesとして
 保持し、文字列へ暗黙変換しません。
 
+本体側の編集状態は`MdtaState`へ集約し、keys、typed data、元の数値ilst atom、変更・削除
+状態を同じモデルで管理します。通常ilstとmdtaの再構成は`Tag::save()`内の共通render経路
+から行い、mdtaの複数data atomを更新する場合は指定キーの全dataを一つの新しい値群へ
+置き換えます。mdtaだけを持つTagも空タグとは判定しません。
+
 さらに`IOStream::hasError()`と`File::ioError()`で短いwrite、seek、truncate、flushの失敗を
 報告し、MP4保存の成功判定へ反映します。
 

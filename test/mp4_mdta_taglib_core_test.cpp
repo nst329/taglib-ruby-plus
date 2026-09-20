@@ -35,6 +35,7 @@ int main(int argc, char **argv)
     require(input.isValid(), "input is invalid");
     const auto &before = input.tag()->mdtaItems();
     require(before.size() >= 6, "expected FFmpeg mdta entries");
+    require(!input.tag()->isEmpty(), "mdta-only tag reported empty");
     require(find(before, "audio_normalization") != nullptr, "normalization key missing");
     require(find(before, "audio_normalization_target") != nullptr, "normalization target missing");
     require(input.tag()->title() == "MDTA Title", "mdta title fallback missing");

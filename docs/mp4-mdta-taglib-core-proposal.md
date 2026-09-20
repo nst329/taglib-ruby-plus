@@ -146,6 +146,20 @@ taglib-ruby-plusは同一ディレクトリの一時コピーを修正版TagLib�
 成功時に置換する。通常saveとsave_chaptersの双方で原本保護を検証する。
 本体の修正だけで電源断・書き込み失敗時の保護まで完了したとは報告しない。
 
+## 本体側リファクタリング結果（2026-09-20）
+
+第一実装の`TagPrivate`に分散していたmdta keys、typed data、元atom、変更・削除集合を
+`MdtaState`へ集約した。`MdtaState::renderItems()`が未変更atomのraw再利用と変更キーの
+再出力を担当し、`Tag::save()`は通常ItemMap、opaque item、mdta itemを同じilst出力へ
+組み立てるだけにした。汎用atom置換のpadding処理も`padAtom`へ改名した。
+
+`setMdtaItem()`は同一keyの複数data atomを全て削除してから新しい値を一つ追加し、
+`removeMdtaItem()`はkeysの再採番と残存値のkey index更新を`MdtaState`内で行う。これにより
+API操作の変更追跡と保存時の再構成が別実装へ分裂しない。
+
+この整理は`moov/udta`内の最初のmdta metaを対象とする現行スコープを変更しない。複数meta文書
+の保持・編集を上流へ提案する場合は、文書IDを含む別の公開モデルとして設計する。
+
 TagLib本体の`IOStream`は現行APIで書き込み成否を返さない。再open・atom検査だけでは
 書き込み成功を証明できないため、エラー状態の取得を初期パッチの必須範囲に変更する。
 パスベースのFileStreamでread/write/seek/insert/remove/truncate/flush/closeの失敗を

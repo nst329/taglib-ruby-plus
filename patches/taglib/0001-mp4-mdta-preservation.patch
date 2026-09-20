@@ -13,7 +13,7 @@ index 5f8e5be..fff4dd9 100644
 
  bool
 diff --git a/taglib/mp4/mp4tag.cpp b/taglib/mp4/mp4tag.cpp
-index 4e6ea75..ff8c4d5 100644
+index 4e6ea75..08aece9 100644
 --- a/taglib/mp4/mp4tag.cpp
 +++ b/taglib/mp4/mp4tag.cpp
 @@ -25,7 +25,10 @@
@@ -27,7 +27,7 @@ index 4e6ea75..ff8c4d5 100644
 
  #include "tdebug.h"
  #include "tpropertymap.h"
-@@ -36,6 +39,128 @@
+@@ -36,6 +39,243 @@
 
  using namespace TagLib;
 
@@ -151,54 +151,162 @@ index 4e6ea75..ff8c4d5 100644
 +  return ByteVector::fromUInt(8 + children.size()) + nameBytes + children;
 +}
 +
++struct MdtaState
++{
++  std::vector<String> keys;
++  MP4::MdtaItemList items;
++  std::vector<RawMdtaItem> rawItems;
++  std::set<String> changedKeys;
++  std::set<String> removedKeys;
++  MP4::Atom *ilst { nullptr };
++  MP4::Atom *keysAtom { nullptr };
++  bool keysChanged { false };
++
++  bool present() const
++  {
++    return ilst != nullptr && keysAtom != nullptr;
++  }
++
++  ByteVector renderItems() const
++  {
++    ByteVector result;
++    std::set<String> emitted;
++    for(const auto &raw : rawItems) {
++      if(removedKeys.find(raw.key) != removedKeys.end())
++        continue;
++      if(changedKeys.find(raw.key) == changedKeys.end()) {
++        result.append(raw.bytes);
++        continue;
++      }
++      if(emitted.insert(raw.key).second) {
++        for(const auto &item : items) {
++          if(item.key == raw.key)
++            result.append(renderMdtaItem(item.keyIndex, item.dataType,
++                                         item.locale, item.data));
++        }
++      }
++    }
++    for(const auto &item : items) {
++      if(changedKeys.find(item.key) != changedKeys.end() &&
++         emitted.insert(item.key).second)
++        result.append(renderMdtaItem(item.keyIndex, item.dataType,
++                                     item.locale, item.data));
++    }
++    return result;
++  }
++
++  bool replace(const String &key, unsigned int dataType, unsigned int locale,
++               const ByteVector &data)
++  {
++    if(!present())
++      return false;
++
++    unsigned int keyIndex = 0;
++    auto first = items.end();
++    for(auto it = items.begin(); it != items.end();) {
++      if(it->key != key) {
++        ++it;
++        continue;
++      }
++      if(first == items.end()) {
++        first = it++;
++        keyIndex = first->keyIndex;
++      }
++      else {
++        it = items.erase(it);
++      }
++    }
++    if(keyIndex == 0) {
++      auto keyIt = std::find(keys.begin(), keys.end(), key);
++      if(keyIt == keys.end()) {
++        keys.push_back(key);
++        keyIndex = static_cast<unsigned int>(keys.size());
++        keysChanged = true;
++      }
++      else {
++        keyIndex = static_cast<unsigned int>(std::distance(keys.begin(), keyIt)) + 1;
++      }
++    }
++    if(first == items.end())
++      items.append({key, keyIndex, dataType, locale, data});
++    else {
++      first->dataType = dataType;
++      first->locale = locale;
++      first->data = data;
++    }
++    changedKeys.insert(key);
++    removedKeys.erase(key);
++    return true;
++  }
++
++  bool remove(const String &key)
++  {
++    const auto keyIt = std::find(keys.begin(), keys.end(), key);
++    if(keyIt == keys.end())
++      return false;
++
++    const unsigned int removedIndex = static_cast<unsigned int>(std::distance(keys.begin(), keyIt)) + 1;
++    keys.erase(keyIt);
++    for(auto &item : items) {
++      if(item.keyIndex > removedIndex)
++        --item.keyIndex;
++    }
++    for(auto it = items.begin(); it != items.end();) {
++      if(it->key == key)
++        it = items.erase(it);
++      else
++        ++it;
++    }
++    for(const auto &remainingKey : keys)
++      changedKeys.insert(remainingKey);
++    keysChanged = true;
++    changedKeys.insert(key);
++    removedKeys.insert(key);
++    return true;
++  }
++};
++
 +} // namespace
 +
  class MP4::Tag::TagPrivate
  {
  public:
-@@ -51,6 +176,15 @@ public:
+@@ -51,6 +291,8 @@ public:
    TagLib::File *file { nullptr };
    Atoms *atoms { nullptr };
    ItemMap items;
-+  std::vector<String> mdtaKeys;
-+  MdtaItemList mdtaItems;
-+  std::vector<RawMdtaItem> rawMdtaItems;
++  MdtaState mdta;
 +  std::vector<ByteVector> rawOpaqueItems;
-+  std::set<String> changedMdtaKeys;
-+  std::set<String> removedMdtaKeys;
-+  Atom *mdtaIlst { nullptr };
-+  Atom *mdtaKeysAtom { nullptr };
-+  bool mdtaKeysChanged { false };
  };
 
  MP4::Tag::Tag() :
-@@ -66,13 +200,36 @@ MP4::Tag::Tag(TagLib::File *file, MP4::Atoms *atoms,
+@@ -66,13 +308,36 @@ MP4::Tag::Tag(TagLib::File *file, MP4::Atoms *atoms,
    d->atoms = atoms;
 
    const MP4::Atom *ilst = atoms->find("moov", "udta", "meta", "ilst");
 +  const MP4::Atom *meta = atoms->find("moov", "udta", "meta");
 +  const bool isMdta = meta && metaHandler(file, meta) == "mdta";
-+  d->mdtaKeys = isMdta ? metaKeys(file, meta) : std::vector<String>();
++  d->mdta.keys = isMdta ? metaKeys(file, meta) : std::vector<String>();
 +  if(isMdta && meta) {
 +    for(const auto *child : meta->children()) {
 +      if(child->name() == "keys") {
-+        d->mdtaKeysAtom = const_cast<MP4::Atom *>(child);
++        d->mdta.keysAtom = const_cast<MP4::Atom *>(child);
 +        break;
 +      }
 +    }
 +  }
-+  d->mdtaIlst = isMdta ? const_cast<MP4::Atom *>(ilst) : nullptr;
++  d->mdta.ilst = isMdta ? const_cast<MP4::Atom *>(ilst) : nullptr;
    if(ilst) {
      for(const auto &atom : ilst->children()) {
 -      file->seek(atom->offset() + 8);
 -      ByteVector data = d->file->readBlock(atom->length() - 8);
 +      if(isMdta && atom->name().size() == 4) {
 +        const unsigned int keyIndex = atom->name().toUInt();
-+        if(keyIndex > 0 && keyIndex <= d->mdtaKeys.size()) {
-+          ParsedMdta parsed = parseMdtaItem(atomBytes(file, atom), keyIndex, d->mdtaKeys[keyIndex - 1]);
-+          d->rawMdtaItems.insert(d->rawMdtaItems.end(), parsed.rawItems.begin(), parsed.rawItems.end());
++        if(keyIndex > 0 && keyIndex <= d->mdta.keys.size()) {
++          ParsedMdta parsed = parseMdtaItem(atomBytes(file, atom), keyIndex, d->mdta.keys[keyIndex - 1]);
++          d->mdta.rawItems.insert(d->mdta.rawItems.end(), parsed.rawItems.begin(), parsed.rawItems.end());
 +          for(const auto &item : parsed.items)
-+            d->mdtaItems.append(item);
++            d->mdta.items.append(item);
 +          continue;
 +        }
 +      }
@@ -211,7 +319,16 @@ index 4e6ea75..ff8c4d5 100644
        }
      }
    }
-@@ -110,34 +267,87 @@ MP4::Tag::save()
+@@ -91,7 +356,7 @@ MP4::Tag::Tag(TagLib::File *file, MP4::Atoms *atoms,
+ MP4::Tag::~Tag() = default;
+
+ ByteVector
+-MP4::Tag::padIlst(const ByteVector &data, int length) const
++MP4::Tag::padAtom(const ByteVector &data, int length) const
+ {
+   if(length == -1) {
+     length = ((data.size() + 1023) & ~1023) - data.size();
+@@ -110,34 +375,58 @@ MP4::Tag::save()
  {
    ByteVector ilstData, stemData;
    for(const auto &[name, itm] : std::as_const(d->items)) {
@@ -229,47 +346,19 @@ index 4e6ea75..ff8c4d5 100644
 -  AtomList path = d->atoms->path("moov", "udta", "meta", "ilst");
 -  if(path.size() == 4) {
 -    saveExisting(ilstData, path);
-+  if(!d->items.isEmpty()) {
-+    for(const auto &raw : d->rawOpaqueItems)
-+      ilstData.append(raw);
-   }
+-  }
 -  else {
 -    ByteVector metaData = renderAtom("meta", ByteVector(4, '\0') +
 -                      renderAtom("hdlr", ByteVector(8, '\0') + ByteVector("mdirappl") +
 -                                ByteVector(9, '\0')) +
 -                      ilstData + padIlst(ilstData));
 -    saveNew(metaData);
-+  if(d->mdtaIlst) {
-+    std::set<String> emitted;
-+    for(const auto &raw : d->rawMdtaItems) {
-+      if(raw.key.isEmpty()) {
-+        ilstData.append(raw.bytes);
-+        continue;
-+      }
-+      if(d->removedMdtaKeys.find(raw.key) != d->removedMdtaKeys.end())
-+        continue;
-+      if(d->changedMdtaKeys.find(raw.key) != d->changedMdtaKeys.end()) {
-+        if(emitted.find(raw.key) == emitted.end()) {
-+          for(const auto &item : d->mdtaItems) {
-+            if(item.key == raw.key)
-+              ilstData.append(renderMdtaItem(item.keyIndex, item.dataType, item.locale, item.data));
-+          }
-+          emitted.insert(raw.key);
-+        }
-+        continue;
-+      }
-+      ilstData.append(raw.bytes);
-+    }
-+    for(const auto &item : d->mdtaItems) {
-+      if(d->changedMdtaKeys.find(item.key) != d->changedMdtaKeys.end() &&
-+         emitted.find(item.key) == emitted.end()) {
-+        ilstData.append(renderMdtaItem(item.keyIndex, item.dataType, item.locale, item.data));
-+        emitted.insert(item.key);
-+      }
-+    }
-+  }
++  for(const auto &raw : d->rawOpaqueItems)
++    ilstData.append(raw);
++  if(d->mdta.ilst)
++    ilstData.append(d->mdta.renderItems());
 +  const ByteVector renderedIlst = renderAtom("ilst", ilstData);
-+  if(!d->mdtaKeysChanged) {
++  if(!d->mdta.keysChanged) {
 +    AtomList path = d->atoms->path("moov", "udta", "meta", "ilst");
 +    if(path.size() == 4) {
 +      saveExisting(renderedIlst, path);
@@ -278,7 +367,7 @@ index 4e6ea75..ff8c4d5 100644
 +      ByteVector metaData = renderAtom("meta", ByteVector(4, '\0') +
 +                        renderAtom("hdlr", ByteVector(8, '\0') + ByteVector("mdirappl") +
 +                                  ByteVector(9, '\0')) +
-+                        renderedIlst + padIlst(renderedIlst));
++                        renderedIlst + padAtom(renderedIlst));
 +      saveNew(metaData);
 +    }
    }
@@ -292,7 +381,7 @@ index 4e6ea75..ff8c4d5 100644
    }
 
 -  return true;
-+  if(d->mdtaKeysChanged) {
++  if(d->mdta.keysChanged) {
 +    const AtomList metaPath = d->atoms->path("moov", "udta", "meta");
 +    if(metaPath.size() == 3) {
 +      const MP4::Atom *meta = metaPath.back();
@@ -300,7 +389,7 @@ index 4e6ea75..ff8c4d5 100644
 +      ByteVector children = metaPayload.size() >= 4 ? metaPayload.mid(0, 4) : ByteVector(4, '\0');
 +      for(const auto *child : meta->children()) {
 +        if(child->name() == "keys")
-+          children.append(renderMdtaKeys(d->mdtaKeys));
++          children.append(renderMdtaKeys(d->mdta.keys));
 +        else if(child->name() == "ilst")
 +          children.append(renderedIlst);
 +        else
@@ -314,7 +403,7 @@ index 4e6ea75..ff8c4d5 100644
  }
 
  bool
-@@ -285,65 +495,72 @@ MP4::Tag::saveNew(ByteVector data)
+@@ -285,65 +574,72 @@ MP4::Tag::saveNew(ByteVector data)
  }
 
  void
@@ -360,11 +449,11 @@ index 4e6ea75..ff8c4d5 100644
 
    offset_t delta = data.size() - length;
 +  if(delta > 0 || (delta < 0 && delta > -8)) {
-+    data.append(padIlst(data));
++    data.append(padAtom(data));
 +    delta = data.size() - length;
 +  }
 +  else if(delta < 0) {
-+    data.append(padIlst(data, static_cast<int>(-delta - 8)));
++    data.append(padAtom(data, static_cast<int>(-delta - 8)));
 +    delta = 0;
 +  }
 +
@@ -425,114 +514,74 @@ index 4e6ea75..ff8c4d5 100644
  }
 
  String
-@@ -351,6 +568,10 @@ MP4::Tag::title() const
+@@ -351,6 +647,10 @@ MP4::Tag::title() const
  {
    if(d->items.contains("\251nam"))
      return d->items["\251nam"].toStringList().toString(", ");
-+  for(const auto &item : d->mdtaItems) {
++  for(const auto &item : d->mdta.items) {
 +    if(item.key == "title" && item.dataType == 1)
 +      return String(item.data, String::UTF8);
 +  }
    return String();
  }
 
-@@ -359,6 +580,10 @@ MP4::Tag::artist() const
+@@ -359,6 +659,10 @@ MP4::Tag::artist() const
  {
    if(d->items.contains("\251ART"))
      return d->items["\251ART"].toStringList().toString(", ");
-+  for(const auto &item : d->mdtaItems) {
++  for(const auto &item : d->mdta.items) {
 +    if(item.key == "artist" && item.dataType == 1)
 +      return String(item.data, String::UTF8);
 +  }
    return String();
  }
 
-@@ -474,6 +699,83 @@ const MP4::ItemMap &MP4::Tag::itemMap() const
+@@ -466,7 +770,7 @@ MP4::Tag::setTrack(unsigned int value)
+
+ bool MP4::Tag::isEmpty() const
+ {
+-  return d->items.isEmpty();
++  return d->items.isEmpty() && d->mdta.items.isEmpty();
+ }
+
+ const MP4::ItemMap &MP4::Tag::itemMap() const
+@@ -474,6 +778,34 @@ const MP4::ItemMap &MP4::Tag::itemMap() const
    return d->items;
  }
 
 +void MP4::Tag::copyStateTo(MP4::Tag &destination) const
 +{
 +  destination.d->items = d->items;
-+  destination.d->mdtaKeys = d->mdtaKeys;
-+  destination.d->mdtaItems = d->mdtaItems;
-+  destination.d->rawMdtaItems = d->rawMdtaItems;
++  destination.d->mdta.keys = d->mdta.keys;
++  destination.d->mdta.items = d->mdta.items;
++  destination.d->mdta.rawItems = d->mdta.rawItems;
 +  destination.d->rawOpaqueItems = d->rawOpaqueItems;
-+  destination.d->changedMdtaKeys = d->changedMdtaKeys;
-+  destination.d->removedMdtaKeys = d->removedMdtaKeys;
-+  destination.d->mdtaKeysChanged = d->mdtaKeysChanged;
++  destination.d->mdta.changedKeys = d->mdta.changedKeys;
++  destination.d->mdta.removedKeys = d->mdta.removedKeys;
++  destination.d->mdta.keysChanged = d->mdta.keysChanged;
 +}
 +
 +const MP4::MdtaItemList &MP4::Tag::mdtaItems() const
 +{
-+  return d->mdtaItems;
++  return d->mdta.items;
 +}
 +
 +bool MP4::Tag::setMdtaItem(const String &key, unsigned int dataType,
 +                           unsigned int locale, const ByteVector &data)
 +{
-+  for(auto &item : d->mdtaItems) {
-+    if(item.key == key) {
-+      item.dataType = dataType;
-+      item.locale = locale;
-+      item.data = data;
-+      d->changedMdtaKeys.insert(key);
-+      d->removedMdtaKeys.erase(key);
-+      return true;
-+    }
-+  }
-+  if(!d->mdtaIlst || !d->mdtaKeysAtom)
-+    return false;
-+  auto keyIt = std::find(d->mdtaKeys.begin(), d->mdtaKeys.end(), key);
-+  unsigned int keyIndex;
-+  if(keyIt == d->mdtaKeys.end()) {
-+    d->mdtaKeys.push_back(key);
-+    keyIndex = static_cast<unsigned int>(d->mdtaKeys.size());
-+    d->mdtaKeysChanged = true;
-+  }
-+  else {
-+    keyIndex = static_cast<unsigned int>(std::distance(d->mdtaKeys.begin(), keyIt)) + 1;
-+  }
-+  d->mdtaItems.append({key, keyIndex, dataType, locale, data});
-+  d->changedMdtaKeys.insert(key);
-+  d->removedMdtaKeys.erase(key);
-+  return true;
++  return d->mdta.replace(key, dataType, locale, data);
 +}
 +
 +bool MP4::Tag::removeMdtaItem(const String &key)
 +{
-+  const auto keyIt = std::find(d->mdtaKeys.begin(), d->mdtaKeys.end(), key);
-+  if(keyIt == d->mdtaKeys.end())
-+    return false;
-+
-+  const unsigned int removedIndex = static_cast<unsigned int>(std::distance(d->mdtaKeys.begin(), keyIt)) + 1;
-+  d->mdtaKeys.erase(keyIt);
-+  for(auto &item : d->mdtaItems) {
-+    if(item.keyIndex > removedIndex)
-+      --item.keyIndex;
-+  }
-+
-+  for(auto it = d->mdtaItems.begin(); it != d->mdtaItems.end();) {
-+    if(it->key == key) {
-+      it = d->mdtaItems.erase(it);
-+    }
-+    else {
-+      ++it;
-+    }
-+  }
-+  for(const auto &remainingKey : d->mdtaKeys)
-+    d->changedMdtaKeys.insert(remainingKey);
-+  d->mdtaKeysChanged = true;
-+  d->changedMdtaKeys.insert(key);
-+  d->removedMdtaKeys.insert(key);
-+  return true;
++  return d->mdta.remove(key);
 +}
 +
  MP4::Item MP4::Tag::item(const String &key) const
  {
    return d->items[key];
 diff --git a/taglib/mp4/mp4tag.h b/taglib/mp4/mp4tag.h
-index bae7d23..94e3792 100644
+index bae7d23..57e3cdd 100644
 --- a/taglib/mp4/mp4tag.h
 +++ b/taglib/mp4/mp4tag.h
 @@ -37,6 +37,17 @@
@@ -573,9 +622,12 @@ index bae7d23..94e3792 100644
          /*!
           * \return The item, if any, corresponding to \a key.
           */
-@@ -118,6 +142,7 @@ namespace TagLib {
+@@ -116,8 +140,9 @@ namespace TagLib {
+         void setTextItem(const String &key, const String &value);
+
      private:
-         ByteVector padIlst(const ByteVector &data, int length = -1) const;
+-        ByteVector padIlst(const ByteVector &data, int length = -1) const;
++        ByteVector padAtom(const ByteVector &data, int length = -1) const;
          ByteVector renderAtom(const ByteVector &name, const ByteVector &data) const;
 +        void saveExistingAtom(ByteVector data, const AtomList &path);
 
