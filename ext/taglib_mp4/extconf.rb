@@ -25,7 +25,7 @@ original_cflags = $CFLAGS
 begin
   # mkmf's normal probe is a .c source and therefore uses the C compiler.
   # TagLib's headers are C++, so force this one probe into C++ mode.
-  $CFLAGS = "#{original_cflags} -x c++"
+  $CFLAGS = "#{original_cflags} -x c++ -std=c++17"
   mdta_api_available = try_compile(mdta_api_check)
 ensure
   $CFLAGS = original_cflags
