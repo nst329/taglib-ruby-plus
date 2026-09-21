@@ -5,9 +5,12 @@ $LOAD_PATH.push File.expand_path('lib', __dir__)
 require 'taglib/version'
 
 native_platform = ENV['TAGLIB_RUBY_NATIVE_PLATFORM']
+gem_name = ENV.fetch('TAGLIB_RUBY_GEM_NAME') do
+  native_platform ? "taglib-ruby-plus-#{native_platform}" : 'taglib-ruby-plus'
+end
 
 Gem::Specification.new do |s|
-  s.name        = 'taglib-ruby-plus'
+  s.name        = gem_name
   s.version     = TagLib::Version::STRING
   s.authors     = ['Robin Stocker', 'Jacob Vosmaer', 'Thomas Chevereau']
   s.email       = ['robin@nibor.org']

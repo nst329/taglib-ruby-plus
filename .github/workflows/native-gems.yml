@@ -65,21 +65,23 @@ jobs:
           TAGLIB_DIR: ${{ github.workspace }}/tmp/${{ env.PLATFORM }}/taglib-${{ env.TAGLIB_VERSION }}
           TAGLIB_SOURCE_DIR: ${{ github.workspace }}/tmp/taglib-${{ env.TAGLIB_VERSION }}
           TAGLIB_RUBY_NATIVE_PLATFORM: ${{ matrix.platform }}
+          TAGLIB_RUBY_GEM_NAME: taglib-ruby-plus-${{ matrix.platform }}
           NATIVE_GEM_OUTPUT_DIR: ${{ github.workspace }}/pkg
         run: ruby tasks/build_native_gem.rb
 
       - name: Install and smoke test native platform gem
         env:
           GEM_HOME: ${{ runner.temp }}/taglib-ruby-plus-gem-home
+          GEM_NAME: taglib-ruby-plus-${{ matrix.platform }}
         run: |
           mkdir -p "$GEM_HOME"
-          gem install --local "pkg/taglib-ruby-plus-${GEM_VERSION}-${{ matrix.platform }}.gem" --no-document
-          ruby -e 'gem "taglib-ruby-plus", ENV.fetch("GEM_VERSION"); require "taglib_plus"; abort "MP4 API unavailable" unless TagLib::MP4::File'
+          gem install --local "pkg/${GEM_NAME}-${GEM_VERSION}-${{ matrix.platform }}.gem" --no-document
+          ruby -e 'gem ENV.fetch("GEM_NAME"), ENV.fetch("GEM_VERSION"); require "taglib_plus"; abort "MP4 API unavailable" unless TagLib::MP4::File'
 
       - uses: actions/upload-artifact@v4
         with:
           name: taglib-ruby-plus-${{ env.GEM_VERSION }}-${{ matrix.platform }}
-          path: pkg/taglib-ruby-plus-${{ env.GEM_VERSION }}-${{ matrix.platform }}.gem
+          path: pkg/taglib-ruby-plus-${{ matrix.platform }}-${{ env.GEM_VERSION }}-${{ matrix.platform }}.gem
 
   build-source:
     runs-on: ubuntu-24.04
@@ -95,12 +97,14 @@ jobs:
         run: echo "GEM_VERSION=$(ruby -Ilib -e 'require "taglib/version"; puts TagLib::Version::STRING')" >> "$GITHUB_ENV"
 
       - name: Build source gem
-        run: gem build taglib-ruby-plus.gemspec --output "taglib-ruby-plus-${GEM_VERSION}.gem"
+        env:
+          TAGLIB_RUBY_GEM_NAME: taglib-ruby-plus-source
+        run: gem build taglib-ruby-plus.gemspec --output "taglib-ruby-plus-source-${GEM_VERSION}.gem"
 
       - uses: actions/upload-artifact@v4
         with:
           name: taglib-ruby-plus-${{ env.GEM_VERSION }}-source
-          path: taglib-ruby-plus-${{ env.GEM_VERSION }}.gem
+          path: taglib-ruby-plus-source-${{ env.GEM_VERSION }}.gem
 
   publish:
     if: startsWith(github.ref, 'refs/tags/v') || inputs.publish == true

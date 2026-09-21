@@ -29,6 +29,7 @@ module NativeGem
 
   def run
     platform = ENV.fetch('TAGLIB_RUBY_NATIVE_PLATFORM')
+    gem_name = ENV.fetch('TAGLIB_RUBY_GEM_NAME', "taglib-ruby-plus-#{platform}")
     taglib_dir = File.expand_path(ENV.fetch('TAGLIB_DIR'))
     license_dir = File.expand_path(ENV.fetch('TAGLIB_SOURCE_DIR', taglib_dir))
     output_dir = File.expand_path(ENV.fetch('NATIVE_GEM_OUTPUT_DIR', 'pkg'), ROOT)
@@ -43,7 +44,7 @@ module NativeGem
       stage_taglib(stage, taglib_dir, platform)
       stage_extensions(stage, platform)
       stage_taglib_license(stage, license_dir)
-      build_gem(stage, platform, output_dir)
+      build_gem(stage, platform, output_dir, gem_name)
     end
   end
 
@@ -160,10 +161,13 @@ module NativeGem
     end
   end
 
-  def build_gem(stage, platform, output_dir)
+  def build_gem(stage, platform, output_dir, gem_name)
     FileUtils.mkdir_p(output_dir)
-    output = File.join(output_dir, "taglib-ruby-plus-#{TagLib::Version::STRING}-#{platform}.gem")
-    environment = { 'TAGLIB_RUBY_NATIVE_PLATFORM' => platform }
+    output = File.join(output_dir, "#{gem_name}-#{TagLib::Version::STRING}-#{platform}.gem")
+    environment = {
+      'TAGLIB_RUBY_NATIVE_PLATFORM' => platform,
+      'TAGLIB_RUBY_GEM_NAME' => gem_name
+    }
     Dir.chdir(stage) do
       abort 'Native gem build failed' unless system(environment, 'gem', 'build', 'taglib-ruby-plus.gemspec', '--output', output)
     end

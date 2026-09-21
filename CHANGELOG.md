@@ -12,6 +12,8 @@ revision of a specific TagLib release.
 
 ### Added
 - Publish source and macOS platform gems to the GitHub Packages RubyGems registry.
+- Use distinct GitHub Packages gem names for source, arm64-darwin, and
+  x86_64-darwin distributions.
 
 ### Fixed
 - Keep the native gem platform selector out of the source-gem extension build.

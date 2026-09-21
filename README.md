@@ -49,14 +49,15 @@ Then install taglib-ruby-plus 2.3.2.4:
 
 2.3.2.4から、macOS向けにパッチ済みTagLibを同梱したplatform gemを提供します。
 対象はApple Silicon（`arm64-darwin`）とIntel版OS X 12.7（`x86_64-darwin`）です。
-対応platformのRubyGemsは通常の`gem install`でplatform gemを自動選択するため、
-Homebrewや外部TagLibは不要です。
+platformごとに配布gem名が異なるため、利用環境に対応するgemを明示してください。
+これらのgemはパッチ済みTagLibを同梱するため、Homebrewや外部TagLibは不要です。
 現行platform gemはRuby 4.0以上を対象とし、Ruby 3.2系ではsource gemを使用します。
 
-platform gemはGitHub PackagesのRubyGems registryから取得します。GitHubリポジトリを
-`github:`で指定するとsource gemが再ビルドされるため、Bundlerでは次のようにregistryを
-指定してください。GitHub Packagesのローカル取得にはPAT classicの`read:packages`権限が
-必要です。
+platform gemはGitHub PackagesのRubyGems registryから取得します。GitHub Packagesは
+同じgem名・versionのplatform違いを登録できないため、配布名をplatformごとに分けています。
+GitHubリポジトリを`github:`で指定するとsource gemが再ビルドされるため、Bundlerでは
+次のようにregistryを指定してください。GitHub Packagesのローカル取得にはPAT classicの
+`read:packages`権限が必要です。
 
     bundle config set --global https://rubygems.pkg.github.com/nst329 USERNAME:TOKEN
 
@@ -64,11 +65,14 @@ Gemfile:
 
     source 'https://rubygems.org'
     source 'https://rubygems.pkg.github.com/nst329' do
-      gem 'taglib-ruby-plus', '2.3.2.4'
+      # Apple Siliconの場合
+      gem 'taglib-ruby-plus-arm64-darwin', '2.3.2.4'
+      # Intelの場合は上記の代わりに次を指定
+      # gem 'taglib-ruby-plus-x86_64-darwin', '2.3.2.4'
     end
 
-platform gemがまだ公開されていない環境、または対応外platformではsource gemが選択されるため、
-従来どおりパッチ済みTagLibを`TAGLIB_DIR`で指定してください。
+platform gemがまだ公開されていない環境、または対応外platformでは、同じregistryの
+`taglib-ruby-plus-source`を指定し、従来どおりパッチ済みTagLibを`TAGLIB_DIR`で指定してください。
 
 ### MacOS
 
