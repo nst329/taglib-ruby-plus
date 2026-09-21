@@ -101,6 +101,7 @@ module NativeGem
     EXTENSIONS.each do |extension|
       candidates = [
         File.join(ROOT, 'lib', "#{extension}.bundle"),
+        *Dir[File.join(ROOT, 'tmp', '**', 'stage', 'lib', "#{extension}.bundle")],
         File.join(ROOT, 'ext', extension, "#{extension}.bundle")
       ].select { |path| File.file?(path) }
       abort "Compiled extension is missing: #{extension}" if candidates.empty?

@@ -50,6 +50,16 @@ jobs:
       - name: Build patched TagLib
         run: bundle exec rake vendor
 
+      - name: Verify patched TagLib mdta API
+        env:
+          TAGLIB_DIR: ${{ github.workspace }}/tmp/${{ env.PLATFORM }}/taglib-${{ env.TAGLIB_VERSION }}
+        run: |
+          c++ -std=c++17 \
+            -I"$TAGLIB_DIR/include" \
+            test/mp4_mdta_taglib_core_test.cpp \
+            -L"$TAGLIB_DIR/lib" -Wl,-rpath,"$TAGLIB_DIR/lib" -ltag \
+            -o "$RUNNER_TEMP/mp4-mdta-taglib-core-test"
+
       - name: Build native platform gem
         env:
           TAGLIB_DIR: ${{ github.workspace }}/tmp/${{ env.PLATFORM }}/taglib-${{ env.TAGLIB_VERSION }}
