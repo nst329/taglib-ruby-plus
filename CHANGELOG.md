@@ -17,6 +17,8 @@ revision of a specific TagLib release.
 
 ### Fixed
 - Keep the native gem platform selector out of the source-gem extension build.
+- Remove the build Ruby libruby dependency from macOS native extensions so they
+  load with the user's Ruby installation.
 
 ## 2.3.2.4
 

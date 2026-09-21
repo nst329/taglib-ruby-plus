@@ -17,6 +17,14 @@ end
 
 require 'mkmf'
 
+# A macOS Ruby extension is loaded into the host Ruby process and must not
+# retain the build Ruby's libruby path. mkmf otherwise places
+# LIBRUBYARG_SHARED in the extension link command, which can encode an
+# absolute GitHub Actions runner path in the bundle's load commands.
+if RbConfig::CONFIG['host_os'].include?('darwin')
+  $LIBRUBYARG_SHARED = ''
+end
+
 def error(msg)
   message "#{msg}\n"
   abort

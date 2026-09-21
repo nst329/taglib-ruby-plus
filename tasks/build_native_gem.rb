@@ -130,6 +130,12 @@ module NativeGem
 
   def rewrite_extension_dependencies(bundle, platform)
     rpath = "@loader_path/taglib_plus/native/#{platform}"
+    ruby_dependencies = `otool -L #{Shellwords.escape(bundle)}`.lines.filter_map do |line|
+      dependency = line.strip.split.first
+      dependency if dependency&.match?(%r{(?:^/|^@rpath/)libruby(?:\.\d+)?\.dylib})
+    end
+    abort("Ruby runtime dependency remains in #{bundle}: #{ruby_dependencies.join(', ')}") unless ruby_dependencies.empty?
+
     dependencies = `otool -L #{Shellwords.escape(bundle)}`.lines.filter_map do |line|
       dependency = line.strip.split.first
       dependency if dependency&.match?(%r{(?:/|@rpath/)libtag(?:\.\d+)?\.dylib})
