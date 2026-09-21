@@ -75,6 +75,9 @@ module NativeGem
     rpath = "-Wl,-rpath,@loader_path/taglib_plus/native/#{platform}"
     ldflags = [ENV['TAGLIB_RUBY_LDFLAGS'], rpath].compact.reject(&:empty?).join(' ')
     environment = {
+      # The repository must resolve as the source gem while compiling its
+      # extensions. The platform gem setting is only needed when packaging.
+      'TAGLIB_RUBY_NATIVE_PLATFORM' => nil,
       'TAGLIB_DIR' => taglib_dir,
       'TAGLIB_RUBY_LDFLAGS' => ldflags,
       'MACOSX_DEPLOYMENT_TARGET' => ENV.fetch('MACOSX_DEPLOYMENT_TARGET', '12.0'),
