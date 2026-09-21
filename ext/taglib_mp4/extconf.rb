@@ -22,21 +22,13 @@ mdta_api_check = <<~CPP
 CPP
 
 original_cflags = $CFLAGS
-original_ldflags = $LDFLAGS
 begin
   # mkmf's normal probe is a .c source and therefore uses the C compiler.
   # TagLib's headers are C++, so force this one probe into C++ mode.
   $CFLAGS = "#{original_cflags} -x c++"
-  # During the probe the executable is still in mkmf's temporary directory.
-  # The bundled @loader_path RPATH is only valid after packaging, so provide
-  # the build-time TagLib location for this link check.
-  if (taglib_dir = ENV['TAGLIB_DIR'])
-    $LDFLAGS = "#{original_ldflags} -Wl,-rpath,#{File.join(taglib_dir, 'lib')}"
-  end
-  mdta_api_available = try_link(mdta_api_check)
+  mdta_api_available = try_compile(mdta_api_check)
 ensure
   $CFLAGS = original_cflags
-  $LDFLAGS = original_ldflags
 end
 
 unless mdta_api_available

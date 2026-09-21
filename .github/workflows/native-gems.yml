@@ -45,7 +45,7 @@ jobs:
           bundler-cache: true
 
       - name: Read gem version
-        run: echo "GEM_VERSION=$(ruby -Ilib -e 'require \"taglib/version\"; puts TagLib::Version::STRING')" >> "$GITHUB_ENV"
+        run: echo "GEM_VERSION=$(ruby -Ilib -e 'require "taglib/version"; puts TagLib::Version::STRING')" >> "$GITHUB_ENV"
 
       - name: Build patched TagLib
         run: bundle exec rake vendor
@@ -92,7 +92,7 @@ jobs:
           ruby-version: '4.0'
 
       - name: Read gem version
-        run: echo "GEM_VERSION=$(ruby -Ilib -e 'require \"taglib/version\"; puts TagLib::Version::STRING')" >> "$GITHUB_ENV"
+        run: echo "GEM_VERSION=$(ruby -Ilib -e 'require "taglib/version"; puts TagLib::Version::STRING')" >> "$GITHUB_ENV"
 
       - name: Build source gem
         run: gem build taglib-ruby-plus.gemspec --output "taglib-ruby-plus-${GEM_VERSION}.gem"
