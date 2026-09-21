@@ -117,9 +117,9 @@ jobs:
           LD_LIBRARY_PATH: ${{ github.workspace }}/tmp/${{ env.PLATFORM }}/taglib-${{ env.TAGLIB_VERSION }}/lib
         run: |
           mkdir -p "$GEM_HOME"
-          gem install --local taglib-ruby-plus-2.3.2.4.gem --no-document
+          gem install --local taglib-ruby-plus-2.3.2.5.gem --no-document
           ruby <<'RUBY'
-          gem 'taglib-ruby-plus', '= 2.3.2.4'
+          gem 'taglib-ruby-plus', '= 2.3.2.5'
           require 'fileutils'
           require 'tmpdir'
           require 'taglib_plus'

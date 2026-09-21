@@ -57,8 +57,8 @@ Apple Siliconなら`taglib-ruby-plus-arm64-darwin`、Intelなら
 `taglib-ruby-plus-x86_64-darwin`を明示する。source gemは
 `taglib-ruby-plus-source`として公開し、従来どおり外部のパッチ済みTagLibを要求する。
 
-この実装を含むgem versionは`2.3.2.4`とする。既存の`v2.3.2.3`は上書きせず、公開時は
-`v2.3.2.4`のタグを新規作成する。
+この実装を含むgem versionは`2.3.2.5`とする。既存の`v2.3.2.4`は上書きせず、公開時は
+`v2.3.2.5`のタグを新規作成する。
 
 ## 運用契約
 

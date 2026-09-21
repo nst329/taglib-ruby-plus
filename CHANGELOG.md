@@ -20,6 +20,11 @@ revision of a specific TagLib release.
 - Remove the build Ruby libruby dependency from macOS native extensions so they
   load with the user's Ruby installation.
 
+## 2.3.2.5
+
+### Fixed
+- Remove the GitHub Actions build Ruby dependency from macOS native extensions.
+
 ## 2.3.2.4
 
 ### Added
