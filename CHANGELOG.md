@@ -8,6 +8,11 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## Unreleased
+
+### Added
+- Publish source and macOS platform gems to the GitHub Packages RubyGems registry.
+
 ## 2.3.2.4
 
 ### Added

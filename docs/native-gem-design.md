@@ -51,7 +51,10 @@ Intel向けは`TAGLIB_RUBY_NATIVE_PLATFORM=x86_64-darwin`に変更する。
 ## 運用契約
 
 - GitHub Actionsの`native-gems` workflowでarm64 macOSとIntel macOSのTagLibビルド・
-  Ruby ABI検証を行い、platform gemをartifactとして出力する。
+  Ruby ABI検証を行い、source gemとplatform gemをGitHub PackagesのRubyGems registryへ
+  公開する。通常の手動実行では公開せず、既存タグを公開する場合だけ`publish=true`を
+  明示する。
 - Ruby 4.0のnative extension loadとMP4 mdta保存を各runnerで確認する。
 - Ruby 3.2向けplatform gemは、RubyGemsのplatform選択だけではABIを分けられないため別途設計する。
-- platform gemをRubyGemsへpushするrelease workflowは、artifact検証後に別途追加する。
+- GitHub Actions内の公開にはリポジトリに関連付いた`GITHUB_TOKEN`を使用する。利用者の
+  Bundlerは`https://rubygems.pkg.github.com/nst329`を明示し、PAT classicで認証する。

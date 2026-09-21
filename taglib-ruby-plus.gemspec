@@ -12,6 +12,9 @@ Gem::Specification.new do |s|
   s.authors     = ['Robin Stocker', 'Jacob Vosmaer', 'Thomas Chevereau']
   s.email       = ['robin@nibor.org']
   s.homepage    = 'https://github.com/nst329/taglib-ruby-plus'
+  s.metadata    = {
+    'github_repo' => 'ssh://github.com/nst329/taglib-ruby-plus'
+  }
   s.licenses    = ['MIT']
   s.summary     = 'Extended Ruby interface for the TagLib C++ library'
   s.description = <<~DESC

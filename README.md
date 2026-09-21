@@ -53,6 +53,20 @@ Then install taglib-ruby-plus 2.3.2.4:
 Homebrewや外部TagLibは不要です。
 現行platform gemはRuby 4.0以上を対象とし、Ruby 3.2系ではsource gemを使用します。
 
+platform gemはGitHub PackagesのRubyGems registryから取得します。GitHubリポジトリを
+`github:`で指定するとsource gemが再ビルドされるため、Bundlerでは次のようにregistryを
+指定してください。GitHub Packagesのローカル取得にはPAT classicの`read:packages`権限が
+必要です。
+
+    bundle config set --global https://rubygems.pkg.github.com/nst329 USERNAME:TOKEN
+
+Gemfile:
+
+    source 'https://rubygems.org'
+    source 'https://rubygems.pkg.github.com/nst329' do
+      gem 'taglib-ruby-plus', '2.3.2.4'
+    end
+
 platform gemがまだ公開されていない環境、または対応外platformではsource gemが選択されるため、
 従来どおりパッチ済みTagLibを`TAGLIB_DIR`で指定してください。
 
