@@ -99,7 +99,10 @@ module NativeGem
 
   def stage_extensions(stage, platform)
     EXTENSIONS.each do |extension|
-      candidates = Dir[File.join(ROOT, 'ext', extension, "#{extension}.bundle")]
+      candidates = [
+        File.join(ROOT, 'lib', "#{extension}.bundle"),
+        File.join(ROOT, 'ext', extension, "#{extension}.bundle")
+      ].select { |path| File.file?(path) }
       abort "Compiled extension is missing: #{extension}" if candidates.empty?
 
       destination = File.join(stage, 'lib', "#{extension}.bundle")
