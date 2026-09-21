@@ -15,7 +15,7 @@ GitHub PackagesのRubyGems registryは同じgem名・versionのplatform違いを
 - `taglib-ruby-plus-x86_64-darwin`
 - `taglib-ruby-plus-source`（source gem）
 
-platform gemには、パッチ済みTagLibの`libtag`とRuby native extensionを同梱する。
+配布名にCPUを含めたgemには、パッチ済みTagLibの`libtag`とRuby native extensionを同梱する。
 Ruby extensionのRPATHは`@loader_path/taglib_plus/native/<platform>`とし、Homebrewや
 システムのTagLibを実行時に参照しない。TagLibの`COPYING.LGPL`と`COPYING.MPL`も
 platform gemへ同梱する。
@@ -23,7 +23,7 @@ Ruby native extensionはビルド環境の`libruby`をリンクせず、利用�
 動的解決する。packaging時に`libruby`の絶対パスまたは`@rpath`依存が残っている場合は
 公開前に失敗させる。
 
-通常のsource gemは引き続き`TAGLIB_DIR`で外部TagLibを指定する。platform gemだけは
+通常のsource gemは引き続き`TAGLIB_DIR`で外部TagLibを指定する。CPU別配布gemだけは
 gemspecの`requirements`とextension buildを省略し、同梱済みの`.bundle`を使用する。
 
 ## ビルド契約
@@ -52,13 +52,15 @@ NATIVE_GEM_OUTPUT_DIR=pkg \
 
 Intel向けは`TAGLIB_RUBY_NATIVE_PLATFORM=x86_64-darwin`に変更する。
 
+CPU別配布gemのgemspec platformは`ruby`とする。CPUは配布名で分離し、RubyGemsのplatform
+選択には依存しない。成果物ファイル名も`<gem名>-<version>.gem`とし、platform suffixを重ねない。
 同じgem versionを維持しながら、GitHub Packages上のgem名を分けて公開する。利用者は
 Apple Siliconなら`taglib-ruby-plus-arm64-darwin`、Intelなら
 `taglib-ruby-plus-x86_64-darwin`を明示する。source gemは
 `taglib-ruby-plus-source`として公開し、従来どおり外部のパッチ済みTagLibを要求する。
 
-この実装を含むgem versionは`2.3.2.5`とする。既存の`v2.3.2.4`は上書きせず、公開時は
-`v2.3.2.5`のタグを新規作成する。
+この実装を含むgem versionは`2.3.2.6`とする。既存の`v2.3.2.5`は上書きせず、公開時は
+`v2.3.2.6`のタグを新規作成する。
 
 ## 運用契約
 

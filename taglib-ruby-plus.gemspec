@@ -58,7 +58,9 @@ Gem::Specification.new do |s|
   ]
 
   if native_platform
-    s.platform = Gem::Platform.new(native_platform)
+    # The CPU is encoded in the distribution name. Keep the RubyGems
+    # platform neutral so the registry and installed specification match.
+    s.platform = Gem::Platform::RUBY
     s.required_ruby_version = '>= 4.0'
     s.extensions = []
   end

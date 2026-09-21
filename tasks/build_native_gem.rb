@@ -169,7 +169,7 @@ module NativeGem
 
   def build_gem(stage, platform, output_dir, gem_name)
     FileUtils.mkdir_p(output_dir)
-    output = File.join(output_dir, "#{gem_name}-#{TagLib::Version::STRING}-#{platform}.gem")
+    output = File.join(output_dir, "#{gem_name}-#{TagLib::Version::STRING}.gem")
     environment = {
       'TAGLIB_RUBY_NATIVE_PLATFORM' => platform,
       'TAGLIB_RUBY_GEM_NAME' => gem_name

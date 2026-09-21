@@ -20,6 +20,13 @@ revision of a specific TagLib release.
 - Remove the build Ruby libruby dependency from macOS native extensions so they
   load with the user's Ruby installation.
 
+## 2.3.2.6
+
+### Fixed
+- Mark CPU-specific macOS distribution gems as Ruby-platform gems so their
+  package names, registry metadata, and installed specifications resolve
+  consistently through Bundler.
+
 ## 2.3.2.5
 
 ### Fixed

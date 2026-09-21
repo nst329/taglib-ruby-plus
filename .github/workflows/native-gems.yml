@@ -75,13 +75,22 @@ jobs:
           GEM_NAME: taglib-ruby-plus-${{ matrix.platform }}
         run: |
           mkdir -p "$GEM_HOME"
-          gem install --local "pkg/${GEM_NAME}-${GEM_VERSION}-${{ matrix.platform }}.gem" --no-document
-          ruby -e 'gem ENV.fetch("GEM_NAME"), ENV.fetch("GEM_VERSION"); require "taglib_plus"; abort "MP4 API unavailable" unless TagLib::MP4::File'
+          gem_file="pkg/${GEM_NAME}-${GEM_VERSION}.gem"
+          gem specification --local "$gem_file" platform | grep -qx -- '--- ruby'
+          gem install --local "$gem_file" --no-document
+          bundle_gemfile="$RUNNER_TEMP/Gemfile.native-gem"
+          printf '%s\n' \
+            "source 'https://rubygems.org'" \
+            "gem '${GEM_NAME}', '${GEM_VERSION}'" > "$bundle_gemfile"
+          BUNDLE_GEMFILE="$bundle_gemfile" bundle lock --local
+          BUNDLE_GEMFILE="$bundle_gemfile" bundle check
+          BUNDLE_GEMFILE="$bundle_gemfile" bundle exec ruby -e \
+            'require "taglib_plus"; abort "MP4 API unavailable" unless TagLib::MP4::File'
 
       - uses: actions/upload-artifact@v4
         with:
           name: taglib-ruby-plus-${{ env.GEM_VERSION }}-${{ matrix.platform }}
-          path: pkg/taglib-ruby-plus-${{ matrix.platform }}-${{ env.GEM_VERSION }}-${{ matrix.platform }}.gem
+          path: pkg/taglib-ruby-plus-${{ matrix.platform }}-${{ env.GEM_VERSION }}.gem
 
   build-source:
     runs-on: ubuntu-24.04
