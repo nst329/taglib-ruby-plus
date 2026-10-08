@@ -20,6 +20,19 @@ revision of a specific TagLib release.
 - Remove the build Ruby libruby dependency from macOS native extensions so they
   load with the user's Ruby installation.
 
+## 2.3.2.7
+
+### Added
+- Atomically replace all ordered, typed mdta values for a key with
+  `replace_mdta_items`, preserving duplicates, locale and binary data.
+- Adapt the proposed grouped native API without changing the Ruby mdta value layout,
+  single-value setter or atomic save boundary; keep binding state transfer separate.
+- Expose `mdta_status` for grouped native libraries, reporting `unknown` for legacy ones.
+
+### Fixed
+- Render every value when adding a new mdta key.
+- Reject ambiguous or malformed structures in the new replacement API.
+
 ## 2.3.2.6
 
 ### Fixed

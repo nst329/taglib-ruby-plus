@@ -811,6 +811,26 @@ module TagLib::MP4
     end
     private :ensure_mdta_support!
 
+    # Report explicit structural refusal where the native API supports classification.
+    def mdta_status
+      ensure_mdta_support!
+      _mdta_status
+    end
+
+    alias_method :title_without_mdta_adapter, :title
+    alias_method :artist_without_mdta_adapter, :artist
+    private :title_without_mdta_adapter, :artist_without_mdta_adapter
+
+    # Preserve the legacy title fallback when using the grouped native proposal.
+    def title
+      mdta_text_fallback('title', title_without_mdta_adapter)
+    end
+
+    # Preserve the legacy artist fallback without changing the native upstream proposal.
+    def artist
+      mdta_text_fallback('artist', artist_without_mdta_adapter)
+    end
+
     PROPERTY_ATOMS = {
       'title' => "©nam",
       'artist' => "©ART",
@@ -955,6 +975,33 @@ module TagLib::MP4
       self
     end
 
+    # Restore all typed values for one mdta key in order, preserving duplicates.
+    # Validate the complete input before native state changes; save commits separately.
+    def replace_mdta_items(key, values)
+      ensure_mdta_support!
+      unless respond_to?(:_replace_mdta_items)
+        raise MdtaItemError, 'patched TagLib with replaceMdtaItems support is required'
+      end
+      key = normalize_mdta_key(key)
+      raise MdtaItemError, 'mdta key must not be empty' if key.empty?
+      unless values.is_a?(Array) && !values.empty?
+        raise MdtaItemError, 'mdta values must be a non-empty Array'
+      end
+      normalized = values.map do |value|
+        unless value.is_a?(Hash) && value.keys.sort_by(&:to_s) == %i[data data_type locale]
+          raise MdtaItemError, 'each mdta value must contain exactly data_type, locale and data'
+        end
+        type = validate_mdta_integer!(value[:data_type], 'data_type')
+        locale = validate_mdta_integer!(value[:locale], 'locale')
+        validate_mdta_data!(value[:data])
+        [type, locale, value[:data].dup.force_encoding(Encoding::BINARY)]
+      end
+      unless _replace_mdta_items(key, normalized)
+        raise MdtaItemError, 'cannot replace mdta values safely in this MP4 structure'
+      end
+      self
+    end
+
     def remove_mdta_item(key)
       ensure_mdta_support!
 
@@ -964,6 +1011,14 @@ module TagLib::MP4
     end
 
     private
+
+    # An explicit ordinary item, including an empty value, takes precedence over mdta.
+    def mdta_text_fallback(key, native_value)
+      return native_value unless native_value.nil? || native_value.empty?
+      return native_value if item_map[PROPERTY_ATOMS.fetch(key)]
+
+      mdta_item(key)&.text || native_value
+    end
 
     def canonical_property_name(name)
       name = name.to_s

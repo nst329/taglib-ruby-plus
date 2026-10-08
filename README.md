@@ -249,3 +249,15 @@ version 2.1 (LGPL) and Mozilla Public License (MPL).
 [original]: https://github.com/robinst/taglib-ruby
 [gem-img]: https://badge.fury.io/rb/taglib-ruby-plus.svg
 [gem-link]: https://rubygems.org/gems/taglib-ruby-plus
+
+MP4の複数値mdta復元には、2.3.2.7と同改訂のTagLibパッチが必要です。
+`replace_mdta_items` の使用例・対応構造は
+[設計書](docs/mp4-mdta-replace-design.md)を参照してください。
+
+提案用のgrouped mdta APIにもRuby bindingを接続しています。native要件は
+TagLib 2.3.2基準＋`proposals/0001`＋binding用`proposals/0002`です。
+`TAGLIB_DIR`で指定したライブラリのAPIをビルド時に判別し、既存Ruby APIを維持します。
+本体への適用は行っておらず、一時コピーでの再現手順とMListNew向け使用例は
+[Ruby binding結合検証](docs/Memos/2026-10-08-mdtaのRubyBinding結合検証.md)を参照してください。
+`tag.mdta_status`はgrouped版で`:absent`、`:editable`、`:unsupported`を返し、
+legacy版では推測せず`:unknown`を返します。

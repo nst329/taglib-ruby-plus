@@ -13,7 +13,7 @@ index 5f8e5becbfb075880e22e75cfcb8f26b624dd176..fff4dd9d049763e8bb87aaeb9fcbca51
 
  bool
 diff --git a/taglib/mp4/mp4tag.cpp b/taglib/mp4/mp4tag.cpp
-index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..9bb16ad125e156a1150c6dbba76b6c17ad6709d8 100644
+index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..cdf58042100b8ea6993999fbc1b6123682baf975 100644
 --- a/taglib/mp4/mp4tag.cpp
 +++ b/taglib/mp4/mp4tag.cpp
 @@ -25,7 +25,10 @@
@@ -27,7 +27,7 @@ index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..9bb16ad125e156a1150c6dbba76b6c17
 
  #include "tdebug.h"
  #include "tpropertymap.h"
-@@ -36,6 +39,268 @@
+@@ -36,6 +39,307 @@
 
  using namespace TagLib;
 
@@ -44,6 +44,7 @@ index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..9bb16ad125e156a1150c6dbba76b6c17
 +{
 +  std::vector<RawMdtaItem> rawItems;
 +  MP4::MdtaItemList items;
++  bool valid { false };
 +};
 +
 +ByteVector readAtomData(TagLib::File *file, const MP4::Atom *atom)
@@ -94,12 +95,13 @@ index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..9bb16ad125e156a1150c6dbba76b6c17
 +  size_t pos = 8;
 +  for(unsigned int i = 0; i < count && pos + 8 <= data.size(); ++i) {
 +    const unsigned int size = data.toUInt(static_cast<unsigned int>(pos), true);
-+    if(size < 8 || pos + size > data.size())
++    if(size < 8 || pos + size > data.size() || data.mid(pos + 4, 4) != "mdta")
 +      return {};
 +    result.emplace_back(data.mid(pos + 8, size - 8), String::UTF8);
 +    pos += size;
 +  }
-+  if(result.size() != count)
++  if(result.size() != count || pos != data.size() ||
++     std::set<String>(result.begin(), result.end()).size() != result.size())
 +    return {};
 +  if(valid)
 +    *valid = true;
@@ -121,6 +123,7 @@ index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..9bb16ad125e156a1150c6dbba76b6c17
 +                         bytes.mid(pos + 16, size - 16)});
 +    pos += size;
 +  }
++  result.valid = pos == bytes.size() && !result.items.isEmpty();
 +  return result;
 +}
 +
@@ -215,9 +218,13 @@ index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..9bb16ad125e156a1150c6dbba76b6c17
 +    }
 +    for(const auto &item : items) {
 +      if(changedKeys.find(item.key) != changedKeys.end() &&
-+         emitted.insert(item.key).second)
-+        result.append(renderMdtaItem(item.keyIndex, item.dataType,
-+                                     item.locale, item.data));
++         emitted.insert(item.key).second) {
++        for(const auto &value : items) {
++          if(value.key == item.key)
++            result.append(renderMdtaItem(value.keyIndex, value.dataType,
++                                         value.locale, value.data));
++        }
++      }
 +    }
 +    return result;
 +  }
@@ -266,6 +273,38 @@ index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..9bb16ad125e156a1150c6dbba76b6c17
 +    return true;
 +  }
 +
++  // Replace a complete value sequence, retaining the keys table index and item position.
++  bool replaceAll(const String &key, const MP4::MdtaItemList &values)
++  {
++    if(!present() || !ilst || values.isEmpty() || key.isEmpty())
++      return false;
++    unsigned int index = keyIndex(key);
++    if(index == 0) {
++      keys.push_back(key);
++      index = static_cast<unsigned int>(keys.size());
++      keysChanged = true;
++    }
++    MP4::MdtaItemList replacement;
++    bool inserted = false;
++    for(const auto &item : items) {
++      if(item.key != key)
++        replacement.append(item);
++      else if(!inserted) {
++        for(const auto &value : values)
++          replacement.append({key, index, value.dataType, value.locale, value.data});
++        inserted = true;
++      }
++    }
++    if(!inserted) {
++      for(const auto &value : values)
++        replacement.append({key, index, value.dataType, value.locale, value.data});
++    }
++    items = replacement;
++    changedKeys.insert(key);
++    removedKeys.erase(key);
++    return true;
++  }
++
 +  bool remove(const String &key)
 +  {
 +    const auto keyIt = std::find(keys.begin(), keys.end(), key);
@@ -296,7 +335,7 @@ index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..9bb16ad125e156a1150c6dbba76b6c17
  class MP4::Tag::TagPrivate
  {
  public:
-@@ -51,6 +316,9 @@ public:
+@@ -51,6 +355,9 @@ public:
    TagLib::File *file { nullptr };
    Atoms *atoms { nullptr };
    ItemMap items;
@@ -306,7 +345,7 @@ index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..9bb16ad125e156a1150c6dbba76b6c17
  };
 
  MP4::Tag::Tag() :
-@@ -66,13 +334,49 @@ MP4::Tag::Tag(TagLib::File *file, MP4::Atoms *atoms,
+@@ -66,13 +373,66 @@ MP4::Tag::Tag(TagLib::File *file, MP4::Atoms *atoms,
    d->atoms = atoms;
 
    const MP4::Atom *ilst = atoms->find("moov", "udta", "meta", "ilst");
@@ -314,14 +353,17 @@ index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..9bb16ad125e156a1150c6dbba76b6c17
 +  const MP4::Atom *udta = atoms->find("moov", "udta");
 +  if(udta) {
 +    unsigned int mdtaMetaCount = 0;
++    unsigned int metaCount = 0;
 +    for(const auto *child : udta->children()) {
++      if(child->name() == "meta")
++        ++metaCount;
 +      if(child->name() == "meta" && metaHandler(file, child) == "mdta") {
 +        ++mdtaMetaCount;
 +        if(!meta || metaHandler(file, meta) != "mdta")
 +          meta = child;
 +      }
 +    }
-+    d->mdtaAmbiguous = mdtaMetaCount > 1;
++    d->mdtaAmbiguous = mdtaMetaCount > 1 || metaCount > 1;
 +  }
 +  const bool isMdta = meta && metaHandler(file, meta) == "mdta";
 +  d->mdta.mdtaDocument = isMdta;
@@ -335,6 +377,16 @@ index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..9bb16ad125e156a1150c6dbba76b6c17
 +    }
 +  }
 +  d->mdta.ilst = isMdta ? const_cast<MP4::Atom *>(ilst) : nullptr;
++  if(isMdta) {
++    unsigned int keysCount = 0, ilstCount = 0, handlerCount = 0;
++    for(const auto *child : meta->children()) {
++      keysCount += child->name() == "keys";
++      ilstCount += child->name() == "ilst";
++      handlerCount += child->name() == "hdlr";
++    }
++    if(keysCount != 1 || ilstCount != 1 || handlerCount != 1)
++      d->mdta.keysValid = false;
++  }
    if(ilst) {
      for(const auto &atom : ilst->children()) {
 -      file->seek(atom->offset() + 8);
@@ -343,11 +395,15 @@ index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..9bb16ad125e156a1150c6dbba76b6c17
 +        const unsigned int keyIndex = atom->name().toUInt();
 +        if(keyIndex > 0 && keyIndex <= d->mdta.keys.size()) {
 +          ParsedMdta parsed = parseMdtaItem(atomBytes(file, atom), keyIndex, d->mdta.keys[keyIndex - 1]);
++          if(!parsed.valid)
++            d->mdta.keysValid = false;
 +          d->mdta.rawItems.insert(d->mdta.rawItems.end(), parsed.rawItems.begin(), parsed.rawItems.end());
 +          for(const auto &item : parsed.items)
 +            d->mdta.items.append(item);
 +          continue;
 +        }
++        if(atom->name()[0] == 0)
++          d->mdta.keysValid = false;
 +      }
 +      ByteVector data = readAtomData(file, atom);
        if(const auto &[name, itm] = d->factory->parseItem(atom, data);
@@ -358,7 +414,7 @@ index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..9bb16ad125e156a1150c6dbba76b6c17
        }
      }
    }
-@@ -91,7 +395,7 @@ MP4::Tag::Tag(TagLib::File *file, MP4::Atoms *atoms,
+@@ -91,7 +451,7 @@ MP4::Tag::Tag(TagLib::File *file, MP4::Atoms *atoms,
  MP4::Tag::~Tag() = default;
 
  ByteVector
@@ -367,7 +423,7 @@ index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..9bb16ad125e156a1150c6dbba76b6c17
  {
    if(length == -1) {
      length = ((data.size() + 1023) & ~1023) - data.size();
-@@ -110,34 +414,58 @@ MP4::Tag::save()
+@@ -110,34 +470,58 @@ MP4::Tag::save()
  {
    ByteVector ilstData, stemData;
    for(const auto &[name, itm] : std::as_const(d->items)) {
@@ -442,7 +498,7 @@ index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..9bb16ad125e156a1150c6dbba76b6c17
  }
 
  bool
-@@ -285,65 +613,72 @@ MP4::Tag::saveNew(ByteVector data)
+@@ -285,65 +669,72 @@ MP4::Tag::saveNew(ByteVector data)
  }
 
  void
@@ -450,12 +506,15 @@ index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..9bb16ad125e156a1150c6dbba76b6c17
 +MP4::Tag::saveExistingAtom(ByteVector data, const AtomList &path)
  {
 -  auto it = path.end();
-+  if(path.size() < 2)
-+    return;
-
+-
 -  MP4::Atom *ilst = *(--it);
 -  offset_t offset = ilst->offset();
 -  offset_t length = ilst->length();
++  if(path.size() < 2)
++    return;
+
+-  MP4::Atom *meta = *(--it);
+-  auto index = meta->children().cfind(ilst);
 +  MP4::Atom *atom = path.back();
 +  auto parentIt = path.end();
 +  std::advance(parentIt, -2);
@@ -464,9 +523,6 @@ index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..9bb16ad125e156a1150c6dbba76b6c17
 +  offset_t length = atom->length();
 +  auto index = parent->children().cfind(atom);
 
--  MP4::Atom *meta = *(--it);
--  auto index = meta->children().cfind(ilst);
--
 -  // check if there is an atom before 'ilst', and possibly use it as padding
 -  if(index != meta->children().cbegin()) {
 +  if(index != parent->children().cbegin()) {
@@ -553,7 +609,7 @@ index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..9bb16ad125e156a1150c6dbba76b6c17
  }
 
  String
-@@ -351,6 +686,10 @@ MP4::Tag::title() const
+@@ -351,6 +742,10 @@ MP4::Tag::title() const
  {
    if(d->items.contains("\251nam"))
      return d->items["\251nam"].toStringList().toString(", ");
@@ -564,7 +620,7 @@ index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..9bb16ad125e156a1150c6dbba76b6c17
    return String();
  }
 
-@@ -359,6 +698,10 @@ MP4::Tag::artist() const
+@@ -359,6 +754,10 @@ MP4::Tag::artist() const
  {
    if(d->items.contains("\251ART"))
      return d->items["\251ART"].toStringList().toString(", ");
@@ -575,7 +631,7 @@ index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..9bb16ad125e156a1150c6dbba76b6c17
    return String();
  }
 
-@@ -466,7 +809,7 @@ MP4::Tag::setTrack(unsigned int value)
+@@ -466,7 +865,7 @@ MP4::Tag::setTrack(unsigned int value)
 
  bool MP4::Tag::isEmpty() const
  {
@@ -584,7 +640,7 @@ index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..9bb16ad125e156a1150c6dbba76b6c17
  }
 
  const MP4::ItemMap &MP4::Tag::itemMap() const
-@@ -474,6 +817,59 @@ const MP4::ItemMap &MP4::Tag::itemMap() const
+@@ -474,6 +873,72 @@ const MP4::ItemMap &MP4::Tag::itemMap() const
    return d->items;
  }
 
@@ -636,6 +692,19 @@ index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..9bb16ad125e156a1150c6dbba76b6c17
 +  return d->mdta.replace(key, dataType, locale, data);
 +}
 +
++// Validate structure and build a candidate before committing any editable state.
++bool MP4::Tag::replaceMdtaItems(const String &key, const MdtaItemList &values)
++{
++  const ByteVector keyBytes = key.data(String::UTF8);
++  if(d->mdtaAmbiguous || std::find(keyBytes.begin(), keyBytes.end(), '\0') != keyBytes.end())
++    return false;
++  MdtaState candidate = d->mdta;
++  if(!candidate.replaceAll(key, values))
++    return false;
++  d->mdta = std::move(candidate);
++  return true;
++}
++
 +bool MP4::Tag::removeMdtaItem(const String &key)
 +{
 +  return d->mdta.remove(key);
@@ -645,7 +714,7 @@ index 4e6ea7534ea53d35c49f03da38b88ccede6af8fd..9bb16ad125e156a1150c6dbba76b6c17
  {
    return d->items[key];
 diff --git a/taglib/mp4/mp4tag.h b/taglib/mp4/mp4tag.h
-index bae7d232fbf949fab0a8de1450bb10fd0cbd0c77..3094e91956b9ad0e2fbce341cc325857b1d2c0ab 100644
+index bae7d232fbf949fab0a8de1450bb10fd0cbd0c77..a0abfbd64cab923a08034c7102c52b02c6b5076c 100644
 --- a/taglib/mp4/mp4tag.h
 +++ b/taglib/mp4/mp4tag.h
 @@ -37,6 +37,17 @@
@@ -666,7 +735,7 @@ index bae7d232fbf949fab0a8de1450bb10fd0cbd0c77..3094e91956b9ad0e2fbce341cc325857
      class ItemFactory;
 
      //! An MP4 tag implementation
-@@ -74,6 +85,24 @@ namespace TagLib {
+@@ -74,6 +85,30 @@ namespace TagLib {
           */
          const ItemMap &itemMap() const;
 
@@ -685,13 +754,19 @@ index bae7d232fbf949fab0a8de1450bb10fd0cbd0c77..3094e91956b9ad0e2fbce341cc325857
 +        bool setMdtaItem(const String &key, unsigned int dataType,
 +                         unsigned int locale, const ByteVector &data);
 +
++        /*! Replaces a key's ordered values atomically; key/keyIndex in values are ignored.
++         * Example: replaceMdtaItems("example", {{String(), 0, 1, 0, ByteVector("a")}}).
++         * Requires one valid mdta meta with keys and ilst; empty lists are rejected.
++         */
++        bool replaceMdtaItems(const String &key, const MdtaItemList &values);
++
 +        /*! Removes all data atoms for an mdta key. */
 +        bool removeMdtaItem(const String &key);
 +
          /*!
           * \return The item, if any, corresponding to \a key.
           */
-@@ -116,8 +145,9 @@ namespace TagLib {
+@@ -116,8 +151,9 @@ namespace TagLib {
          void setTextItem(const String &key, const String &value);
 
      private:

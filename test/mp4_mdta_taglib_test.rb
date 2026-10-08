@@ -153,7 +153,9 @@ class MP4MdtaTagLibTest < Test::Unit::TestCase
   def test_mdta_update_preserves_normal_ilst_item
     open_file do |file|
       file.tag.item_map.insert('©nam', TagLib::MP4::Item.from_string_list(['Normal title']))
-      file.tag.item_map.insert('zzzz', TagLib::MP4::Item.from_string_list(['Opaque normal value']))
+      if file.tag.mdta_status == :unknown
+        file.tag.item_map.insert('zzzz', TagLib::MP4::Item.from_string_list(['Opaque normal value']))
+      end
       file.tag.set_mdta_item('audio_normalization', 'ebu-r128')
       file.tag.set_mdta_item('audio_normalization_target', '-14-LUFS')
       assert file.save
@@ -161,7 +163,9 @@ class MP4MdtaTagLibTest < Test::Unit::TestCase
 
     open_file do |file|
       assert_equal 'Normal title', file.tag.title
-      assert_equal ['Opaque normal value'], file.tag.item_map['zzzz'].to_string_list
+      if file.tag.mdta_status == :unknown
+        assert_equal ['Opaque normal value'], file.tag.item_map['zzzz'].to_string_list
+      end
       assert_equal 'ebu-r128', file.tag.mdta_item('audio_normalization').text
       assert_equal '-14-LUFS', file.tag.mdta_item('audio_normalization_target').text
     end

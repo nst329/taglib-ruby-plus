@@ -1,0 +1,1124 @@
+diff --git a/taglib/CMakeLists.txt b/taglib/CMakeLists.txt
+--- a/taglib/CMakeLists.txt
++++ b/taglib/CMakeLists.txt
+@@ -191,6 +191,7 @@
+     mp4/mp4file.h
+     mp4/mp4atom.h
+     mp4/mp4tag.h
++    mp4/mp4mdtavalue.h
+     mp4/mp4item.h
+     mp4/mp4properties.h
+     mp4/mp4coverart.h
+diff --git a/taglib/mp4/mp4tag.cpp b/taglib/mp4/mp4tag.cpp
+--- a/taglib/mp4/mp4tag.cpp
++++ b/taglib/mp4/mp4tag.cpp
+@@ -24,8 +24,14 @@
+  ***************************************************************************/
+
+ #include "mp4tag.h"
+-
++#include "mp4file.h"
++#include "mp4mdtalimits.h"
++#include <limits>
++
++#include <algorithm>
++#include <set>
+ #include <utility>
++#include <vector>
+
+ #include "tdebug.h"
+ #include "tpropertymap.h"
+@@ -34,7 +40,285 @@
+ #include "mp4coverart.h"
+ #include "mp4stem.h"
+
++namespace TagLib::MP4 {
++    struct MdtaRecord
++    {
++      String key;
++      unsigned int keyIndex { 0 };
++      unsigned int dataType { 0 };
++      unsigned int locale { 0 };
++      ByteVector data;
++    };
++
++    using MdtaRecordList = List<MdtaRecord>;
++
++}
++
+ using namespace TagLib;
++
++namespace {
++
++struct RawMdtaRecord
++{
++  unsigned int keyIndex { 0 };
++  String key;
++  ByteVector bytes;
++};
++
++struct ParsedMdta
++{
++  std::vector<RawMdtaRecord> rawItems;
++  MP4::MdtaRecordList items;
++  bool valid { false };
++};
++
++ByteVector readAtomData(TagLib::File *file, const MP4::Atom *atom)
++{
++  file->seek(atom->offset() + 8);
++  return file->readBlock(atom->length() - 8);
++}
++
++ByteVector atomBytes(TagLib::File *file, const MP4::Atom *atom)
++{
++  file->seek(atom->offset());
++  return file->readBlock(atom->length());
++}
++
++String metaHandler(TagLib::File *file, const MP4::Atom *meta)
++{
++  for(const auto *child : meta->children()) {
++    if(child->name() != "hdlr")
++      continue;
++    const ByteVector data = readAtomData(file, child);
++    if(data.size() >= 12)
++      return String(data.mid(8, 4), String::Latin1);
++  }
++  return String();
++}
++
++std::vector<String> metaKeys(TagLib::File *file, const MP4::Atom *meta,
++                             bool *valid = nullptr)
++{
++  if(valid)
++    *valid = false;
++  const MP4::Atom *keys = nullptr;
++  for(const auto *child : meta->children()) {
++    if(child->name() == "keys") {
++      keys = child;
++      break;
++    }
++  }
++  if(!keys)
++    return {};
++
++  const ByteVector data = readAtomData(file, keys);
++  if(data.size() < 8)
++    return {};
++  const unsigned int count = data.toUInt(4U, true);
++  std::vector<String> result;
++  result.reserve(count);
++  size_t pos = 8;
++  for(unsigned int i = 0; i < count && pos + 8 <= data.size(); ++i) {
++    const unsigned int size = data.toUInt(static_cast<unsigned int>(pos), true);
++    if(size < 8 || pos + size > data.size() || data.mid(pos + 4, 4) != "mdta")
++      return {};
++    const ByteVector keyBytes = data.mid(pos + 8, size - 8);
++    const String key(keyBytes, String::UTF8);
++    if(keyBytes.isEmpty() || key.data(String::UTF8) != keyBytes ||
++       std::find(keyBytes.begin(), keyBytes.end(), '\0') != keyBytes.end())
++      return {};
++    result.push_back(key);
++    pos += size;
++  }
++  if(result.size() != count || pos != data.size() ||
++     std::set<String>(result.begin(), result.end()).size() != result.size())
++    return {};
++  if(valid)
++    *valid = true;
++  return result;
++}
++
++ParsedMdta parseMdtaRecord(const ByteVector &bytes, unsigned int keyIndex,
++                         const String &key)
++{
++  ParsedMdta result;
++  result.rawItems.push_back({keyIndex, key, bytes});
++  size_t pos = 8;
++  while(pos + 8 <= bytes.size()) {
++    const unsigned int size = bytes.toUInt(static_cast<unsigned int>(pos), true);
++    if(size < 16 || pos + size > bytes.size() || bytes.mid(pos + 4, 4) != "data")
++      return result;
++    result.items.append({key, keyIndex, bytes.toUInt(static_cast<unsigned int>(pos + 8), true),
++                         bytes.toUInt(static_cast<unsigned int>(pos + 12), true),
++                         bytes.mid(pos + 16, size - 16)});
++    pos += size;
++  }
++  result.valid = pos == bytes.size() && !result.items.isEmpty();
++  return result;
++}
++
++ByteVector renderMdtaRecord(unsigned int keyIndex, unsigned int dataType,
++                          unsigned int locale, const ByteVector &payload)
++{
++  const ByteVector data = ByteVector::fromUInt(16 + payload.size()) + ByteVector("data", 4) +
++                          ByteVector::fromUInt(dataType) + ByteVector::fromUInt(locale) + payload;
++  return ByteVector::fromUInt(8 + data.size()) + ByteVector::fromUInt(keyIndex) + data;
++}
++
++// Keep a changed key's value sequence in a single numeric parent item.
++ByteVector renderMdtaRecords(unsigned int index, const String &key,
++                             const MP4::MdtaRecordList &items)
++{
++  ByteVector children;
++  for(const auto &item : items) {
++    if(item.key == key)
++      children.append(renderMdtaRecord(index, item.dataType, item.locale, item.data).mid(8));
++  }
++  return ByteVector::fromUInt(8 + children.size()) + ByteVector::fromUInt(index) + children;
++}
++
++ByteVector renderMdtaKeys(const std::vector<String> &keys)
++{
++  ByteVector data = ByteVector(4, '\0') + ByteVector::fromUInt(keys.size());
++  for(const auto &key : keys) {
++    const ByteVector value = ByteVector("mdta", 4) + key.data(String::UTF8);
++    data.append(ByteVector::fromUInt(4 + value.size()) + value);
++  }
++  return ByteVector::fromUInt(8 + data.size()) + ByteVector("keys", 4) + data;
++}
++
++ByteVector renderOpaqueTextItem(const String &name, const MP4::Item &item)
++{
++  if(name.data(String::Latin1).size() != 4 || item.type() != MP4::Item::Type::StringList)
++    return {};
++
++  ByteVector children;
++  for(const auto &value : item.toStringList()) {
++    const ByteVector payload = value.data(String::UTF8);
++    const ByteVector data = ByteVector::fromUInt(16 + payload.size()) + ByteVector("data", 4) +
++                            ByteVector::fromUInt(1) + ByteVector::fromUInt(0) + payload;
++    children.append(data);
++  }
++  const ByteVector nameBytes = name.data(String::Latin1);
++  return ByteVector::fromUInt(8 + children.size()) + nameBytes + children;
++}
++
++struct MdtaState
++{
++  std::vector<String> keys;
++  MP4::MdtaRecordList items;
++  std::vector<RawMdtaRecord> rawItems;
++  std::set<String> changedKeys;
++  std::set<String> removedKeys;
++  MP4::Atom *ilst { nullptr };
++  MP4::Atom *keysAtom { nullptr };
++  bool mdtaDocument { false };
++  bool keysValid { true };
++  bool keysChanged { false };
++
++  bool present() const
++  {
++    return mdtaDocument && keysValid;
++  }
++
++  bool hasKey(const String &key) const
++  {
++    return std::find(keys.begin(), keys.end(), key) != keys.end();
++  }
++
++  unsigned int keyIndex(const String &key) const
++  {
++    const auto it = std::find(keys.begin(), keys.end(), key);
++    return it == keys.end() ? 0 : static_cast<unsigned int>(std::distance(keys.begin(), it)) + 1;
++  }
++
++  static ByteVector rewriteKeyIndex(const RawMdtaRecord &raw, unsigned int keyIndex)
++  {
++    if(keyIndex == raw.keyIndex || raw.bytes.size() < 8)
++      return raw.bytes;
++    return raw.bytes.mid(0, 4) + ByteVector::fromUInt(keyIndex) + raw.bytes.mid(8);
++  }
++
++  ByteVector renderItems() const
++  {
++    ByteVector result;
++    std::set<String> emitted;
++    for(const auto &raw : rawItems) {
++      if(removedKeys.find(raw.key) != removedKeys.end())
++        continue;
++      if(changedKeys.find(raw.key) == changedKeys.end()) {
++        result.append(rewriteKeyIndex(raw, keyIndex(raw.key)));
++        continue;
++      }
++      if(emitted.insert(raw.key).second)
++        result.append(renderMdtaRecords(keyIndex(raw.key), raw.key, items));
++    }
++    for(const auto &item : items) {
++      if(changedKeys.find(item.key) != changedKeys.end() &&
++         emitted.insert(item.key).second)
++        result.append(renderMdtaRecords(item.keyIndex, item.key, items));
++    }
++    return result;
++  }
++
++  // Replace a complete value sequence, retaining the keys table index and item position.
++  bool replaceAll(const String &key, const MP4::MdtaRecordList &values)
++  {
++    if(!present() || !ilst || values.isEmpty() || key.isEmpty())
++      return false;
++    unsigned int index = keyIndex(key);
++    if(index == 0) {
++      keys.push_back(key);
++      index = static_cast<unsigned int>(keys.size());
++      keysChanged = true;
++    }
++    MP4::MdtaRecordList replacement;
++    bool inserted = false;
++    for(const auto &item : items) {
++      if(item.key != key)
++        replacement.append(item);
++      else if(!inserted) {
++        for(const auto &value : values)
++          replacement.append({key, index, value.dataType, value.locale, value.data});
++        inserted = true;
++      }
++    }
++    if(!inserted) {
++      for(const auto &value : values)
++        replacement.append({key, index, value.dataType, value.locale, value.data});
++    }
++    items = replacement;
++    changedKeys.insert(key);
++    removedKeys.erase(key);
++    return true;
++  }
++
++  bool remove(const String &key)
++  {
++    const auto keyIt = std::find(keys.begin(), keys.end(), key);
++    if(keyIt == keys.end())
++      return false;
++
++    const unsigned int removedIndex = static_cast<unsigned int>(std::distance(keys.begin(), keyIt)) + 1;
++    keys.erase(keyIt);
++    for(auto &item : items) {
++      if(item.keyIndex > removedIndex)
++        --item.keyIndex;
++    }
++    for(auto it = items.begin(); it != items.end();) {
++      if(it->key == key)
++        it = items.erase(it);
++      else
++        ++it;
++    }
++    keysChanged = true;
++    changedKeys.insert(key);
++    removedKeys.insert(key);
++    return true;
++  }
++};
++
++} // namespace
+
+ class MP4::Tag::TagPrivate
+ {
+@@ -51,6 +335,10 @@
+   TagLib::File *file { nullptr };
+   Atoms *atoms { nullptr };
+   ItemMap items;
++  MdtaState mdta;
++  bool mdtaAmbiguous { false };
++  bool detectedMdta { false };
++  std::vector<ByteVector> rawOpaqueItems;
+ };
+
+ MP4::Tag::Tag() :
+@@ -66,13 +354,75 @@
+   d->atoms = atoms;
+
+   const MP4::Atom *ilst = atoms->find("moov", "udta", "meta", "ilst");
++  const MP4::Atom *meta = atoms->find("moov", "udta", "meta");
++  const MP4::Atom *udta = atoms->find("moov", "udta");
++  if(udta) {
++    unsigned int mdtaMetaCount = 0;
++    unsigned int metaCount = 0;
++    for(const auto *child : udta->children()) {
++      if(child->name() == "meta")
++        ++metaCount;
++      if(child->name() == "meta" && metaHandler(file, child) == "mdta") {
++        ++mdtaMetaCount;
++        if(!meta || metaHandler(file, meta) != "mdta")
++          meta = child;
++      }
++    }
++    d->mdtaAmbiguous = mdtaMetaCount > 1 || metaCount > 1;
++  }
++  const bool isMdta = meta && metaHandler(file, meta) == "mdta";
++  d->mdta.mdtaDocument = isMdta;
++  d->mdta.keys = isMdta ? metaKeys(file, meta, &d->mdta.keysValid) : std::vector<String>();
++  if(isMdta && meta) {
++    for(const auto *child : meta->children()) {
++      if(child->name() == "keys") {
++        d->mdta.keysAtom = const_cast<MP4::Atom *>(child);
++        break;
++      }
++    }
++  }
++  d->mdta.ilst = isMdta ? const_cast<MP4::Atom *>(ilst) : nullptr;
++  if(isMdta) {
++    unsigned int keysCount = 0, ilstCount = 0, handlerCount = 0;
++    for(const auto *child : meta->children()) {
++      keysCount += child->name() == "keys";
++      ilstCount += child->name() == "ilst";
++      handlerCount += child->name() == "hdlr";
++    }
++    if(keysCount != 1 || ilstCount != 1 || handlerCount != 1)
++      d->mdta.keysValid = false;
++  }
+   if(ilst) {
++    const auto knownHandlers = d->factory->nameHandlerMap();
+     for(const auto &atom : ilst->children()) {
+-      file->seek(atom->offset() + 8);
+-      ByteVector data = d->file->readBlock(atom->length() - 8);
++      if(isMdta && atom->name().size() == 4) {
++        const unsigned int keyIndex = atom->name().toUInt();
++        if(keyIndex > 0 && keyIndex <= d->mdta.keys.size()) {
++          ParsedMdta parsed = parseMdtaRecord(atomBytes(file, atom), keyIndex, d->mdta.keys[keyIndex - 1]);
++          if(!parsed.valid)
++            d->mdta.keysValid = false;
++          d->mdta.rawItems.insert(d->mdta.rawItems.end(), parsed.rawItems.begin(), parsed.rawItems.end());
++          for(const auto &item : parsed.items)
++            d->mdta.items.append(item);
++          continue;
++        }
++        if(atom->name()[0] == 0)
++          d->mdta.keysValid = false;
++      }
++      if(isMdta && !knownHandlers.contains(atom->name()) &&
++         d->factory->propertyKeyForName(atom->name()).isEmpty()) {
++        d->mdta.keysValid = false;
++        d->rawOpaqueItems.push_back(atomBytes(file, atom));
++        if(isMdta) d->mdta.keysValid = false;
++        continue;
++      }
++      ByteVector data = readAtomData(file, atom);
+       if(const auto &[name, itm] = d->factory->parseItem(atom, data);
+         itm.isValid()) {
+         addItem(name, itm);
++      } else {
++        d->rawOpaqueItems.push_back(atomBytes(file, atom));
++        if(isMdta) d->mdta.keysValid = false;
+       }
+     }
+   }
+@@ -86,12 +436,42 @@
+       addItem(name, itm);
+     }
+   }
++  const auto *moov = atoms->find("moov");
++  unsigned int udtaCount = 0, mdtaCount = 0;
++  if(moov) {
++    for(const auto *child : moov->children())
++      udtaCount += child->name() == "udta";
++  }
++  for(const auto *root : atoms->atoms()) {
++    for(const auto *candidate : root->findall("meta", true)) {
++      if(metaHandler(file, candidate) != "mdta") {
++        // keys is evidence of indexed metadata even when the handler is damaged.
++        if(std::any_of(candidate->children().begin(), candidate->children().end(),
++                       [](const auto *child) { return child->name() == "keys"; })) {
++          d->detectedMdta = true;
++          d->mdtaAmbiguous = true;
++        }
++        continue;
++      }
++      ++mdtaCount;
++      d->detectedMdta = true;
++      if(candidate != meta) d->mdtaAmbiguous = true;
++    }
++  }
++  if(d->mdta.mdtaDocument && meta) {
++    file->seek(meta->offset());
++    if(file->readBlock(4).toUInt() == 1 || readAtomData(file, meta).toUInt() != 0)
++      d->mdtaAmbiguous = true;
++  }
++  if(d->detectedMdta && (udtaCount != 1 || mdtaCount != 1 || atoms->find("moof")))
++    d->mdtaAmbiguous = true;
++
+ }
+
+ MP4::Tag::~Tag() = default;
+
+ ByteVector
+-MP4::Tag::padIlst(const ByteVector &data, int length) const
++MP4::Tag::padAtom(const ByteVector &data, int length) const
+ {
+   if(length == -1) {
+     length = ((data.size() + 1023) & ~1023) - data.size();
+@@ -108,54 +488,100 @@
+ bool
+ MP4::Tag::save()
+ {
++  return saveMetadata(false);
++}
++
++// A File save defers committing metadata until the chapter writes also succeed.
++bool MP4::Tag::saveMetadata(bool deferCommit, uint64_t extraGrowth, bool require32BitFile)
++{
++  if(mdtaStatus() == MdtaStatus::Unsupported)
++    return false;
++  if(!d->file || !d->file->isValid() || d->file->readOnly()) return false;
+   ByteVector ilstData, stemData;
++  uint64_t ilstLength = 8;
++  const auto appendItem = [&](const ByteVector &bytes) {
++    if(!MdtaInternal::appendLength(ilstLength, bytes.size())) return false;
++    ilstData.append(bytes);
++    return true;
++  };
++  const auto knownHandlers = d->factory->nameHandlerMap();
+   for(const auto &[name, itm] : std::as_const(d->items)) {
++    const ByteVector atomName = name.data(String::Latin1).mid(0, 4);
++    if(mdtaStatus() == MdtaStatus::Editable && !knownHandlers.contains(atomName) &&
++       d->factory->propertyKeyForName(atomName).isEmpty()) return false;
++    const ByteVector rendered = d->factory->renderItem(name, itm);
+     if(name == "stem"){
+-      stemData.append(d->factory->renderItem(name, itm));
++      stemData.append(rendered);
+     } else {
+-      ilstData.append(d->factory->renderItem(name, itm));
+-    }
+-  }
+-  ilstData = renderAtom("ilst", ilstData);
+-
+-  AtomList path = d->atoms->path("moov", "udta", "meta", "ilst");
+-  if(path.size() == 4) {
+-    saveExisting(ilstData, path);
+-  }
+-  else {
+-    ByteVector metaData = renderAtom("meta", ByteVector(4, '\0') +
+-                      renderAtom("hdlr", ByteVector(8, '\0') + ByteVector("mdirappl") +
+-                                ByteVector(9, '\0')) +
+-                      ilstData + padIlst(ilstData));
+-    saveNew(metaData);
+-  }
+-
+-  path = d->atoms->path("moov", "udta", "stem");
++      if(!appendItem(rendered.isEmpty() ? renderOpaqueTextItem(name, itm) : rendered)) return false;
++    }
++  }
++  for(const auto &raw : d->rawOpaqueItems)
++    if(!appendItem(raw)) return false;
++  if(d->mdta.ilst && !appendItem(d->mdta.renderItems())) return false;
++  const ByteVector renderedIlst = renderAtom("ilst", ilstData);
++  if(mdtaStatus() == MdtaStatus::Editable) {
++    // One metadata replacement avoids stale offsets between keys and ilst writes.
++    const auto path = d->atoms->path("moov", "udta", "meta");
++    if(path.size() != 3 || !stemData.isEmpty()) return false;
++    ByteVector payload(4, '\0');
++    uint64_t planned = 12;
++    for(const auto *child : path.back()->children()) {
++      ByteVector bytes;
++      if(child->name() == "keys") bytes = renderMdtaKeys(d->mdta.keys);
++      else if(child->name() == "ilst") bytes = renderedIlst;
++      else bytes = atomBytes(d->file, child);
++      if(!MdtaInternal::appendLength(planned, bytes.size())) return false;
++      payload.append(bytes);
++    }
++    const ByteVector replacement = renderAtom("meta", payload);
++    const offset_t delta = static_cast<offset_t>(replacement.size()) - path.back()->length();
++    if(!preflightGrowth(extraGrowth + (delta > 0 ? delta : 0), require32BitFile)) return false;
++    d->file->insert(replacement, path.back()->offset(), path.back()->length());
++    if(delta) {
++      updateParents(path, delta, 1);
++      updateOffsets(delta, path.back()->offset());
++    }
++    auto *file = dynamic_cast<MP4::File *>(d->file);
++    return file && file->refreshMetadata(!deferCommit);
++  }
++  if(!d->mdta.keysChanged) {
++    AtomList path = d->atoms->path("moov", "udta", "meta", "ilst");
++    if(path.size() == 4) {
++      saveExisting(renderedIlst, path);
++    }
++    else {
++      ByteVector metaData = renderAtom("meta", ByteVector(4, '\0') +
++                        renderAtom("hdlr", ByteVector(8, '\0') + ByteVector("mdirappl") +
++                                  ByteVector(9, '\0')) +
++                        renderedIlst + padAtom(renderedIlst));
++      saveNew(metaData);
++    }
++  }
++
++  AtomList path = d->atoms->path("moov", "udta", "stem");
+   if(path.size() == 3) {
+     saveExisting(stemData, path);
+   } else if (!stemData.isEmpty()) {
+     saveNew(stemData);
+   }
+
+-  return true;
++  if(auto *file = dynamic_cast<MP4::File *>(d->file))
++    return file->refreshMetadata(!deferCommit);
++  return false;
+ }
+
+ bool
+ MP4::Tag::strip()
+ {
++  if(mdtaStatus() == MdtaStatus::Unsupported) return false;
+   d->items.clear();
+-
+-  AtomList path = d->atoms->path("moov", "udta", "meta", "ilst");
+-  if(path.size() == 4) {
+-    saveExisting(ByteVector(), path);
+-  }
+-
+-  path = d->atoms->path("moov", "udta", "stem");
+-  if(path.size() == 3) {
+-    saveExisting(ByteVector(), path);
+-  }
+-
+-  return true;
++  d->rawOpaqueItems.clear();
++  d->mdta.items.clear();
++  d->mdta.rawItems.clear();
++  d->mdta.changedKeys.clear();
++  d->mdta.removedKeys.clear();
++  return save();
+ }
+
+ void
+@@ -285,63 +711,70 @@
+ }
+
+ void
+-MP4::Tag::saveExisting(ByteVector data, const AtomList &path)
+-{
+-  auto it = path.end();
+-
+-  MP4::Atom *ilst = *(--it);
+-  offset_t offset = ilst->offset();
+-  offset_t length = ilst->length();
+-
+-  MP4::Atom *meta = *(--it);
+-  auto index = meta->children().cfind(ilst);
+-
+-  // check if there is an atom before 'ilst', and possibly use it as padding
+-  if(index != meta->children().cbegin()) {
++MP4::Tag::saveExistingAtom(ByteVector data, const AtomList &path)
++{
++  if(path.size() < 2)
++    return;
++
++  MP4::Atom *atom = path.back();
++  auto parentIt = path.end();
++  std::advance(parentIt, -2);
++  MP4::Atom *parent = *parentIt;
++  offset_t offset = atom->offset();
++  offset_t length = atom->length();
++  auto index = parent->children().cfind(atom);
++
++  if(index != parent->children().cbegin()) {
+     auto prevIndex = std::prev(index);
+     if(const MP4::Atom *prev = *prevIndex; prev->name() == "free") {
+       offset = prev->offset();
+       length += prev->length();
+     }
+   }
+-  // check if there is an atom after 'ilst', and possibly use it as padding
+   auto nextIndex = std::next(index);
+-  if(nextIndex != meta->children().cend()) {
+-    if(const MP4::Atom *next = *nextIndex; next->name() == "free") {
++  if(nextIndex != parent->children().cend()) {
++    if(const MP4::Atom *next = *nextIndex; next->name() == "free")
+       length += next->length();
+-    }
+   }
+
+   offset_t delta = data.size() - length;
++  if(delta > 0 || (delta < 0 && delta > -8)) {
++    data.append(padAtom(data));
++    delta = data.size() - length;
++  }
++  else if(delta < 0) {
++    data.append(padAtom(data, static_cast<int>(-delta - 8)));
++    delta = 0;
++  }
++
++  d->file->insert(data, offset, length);
++  if(delta) {
++    updateParents(path, delta, 1);
++    updateOffsets(delta, offset);
++  }
++}
++
++void
++MP4::Tag::saveExisting(ByteVector data, const AtomList &path)
++{
+   if(!data.isEmpty()) {
+-    if(delta > 0 || (delta < 0 && delta > -8)) {
+-      data.append(padIlst(data));
+-      delta = data.size() - length;
+-    }
+-    else if(delta < 0) {
+-      data.append(padIlst(data, static_cast<int>(-delta - 8)));
+-      delta = 0;
+-    }
+-
+-    d->file->insert(data, offset, length);
++    saveExistingAtom(std::move(data), path);
++    return;
++  }
++
++  auto it = path.end();
++  --it;
++  MP4::Atom *meta = *(--it);
++  // Strip meta if data is empty, only the case when called from strip().
++  if(MP4::Atom *udta = *std::prev(it); udta->removeChild(meta)) {
++    const offset_t offset = meta->offset();
++    const offset_t delta = - meta->length();
++    d->file->removeBlock(meta->offset(), meta->length());
++    delete meta;
+
+     if(delta) {
+-      updateParents(path, delta, 1);
++      updateParents(path, delta, 2);
+       updateOffsets(delta, offset);
+-    }
+-  }
+-  else {
+-    // Strip meta if data is empty, only the case when called from strip().
+-    if(MP4::Atom *udta = *std::prev(it); udta->removeChild(meta)) {
+-      offset = meta->offset();
+-      delta = - meta->length();
+-      d->file->removeBlock(meta->offset(), meta->length());
+-      delete meta;
+-
+-      if(delta) {
+-        updateParents(path, delta, 2);
+-        updateOffsets(delta, offset);
+-      }
+     }
+   }
+ }
+@@ -466,12 +899,140 @@
+
+ bool MP4::Tag::isEmpty() const
+ {
+-  return d->items.isEmpty();
++  return mdtaStatus() != MdtaStatus::Unsupported && d->rawOpaqueItems.empty() &&
++    d->items.isEmpty() && d->mdta.items.isEmpty();
+ }
+
+ const MP4::ItemMap &MP4::Tag::itemMap() const
+ {
+   return d->items;
++}
++
++MP4::MdtaStatus MP4::Tag::mdtaStatus() const
++{
++  if(!d->detectedMdta && !d->mdta.mdtaDocument)
++    return MdtaStatus::Absent;
++  return !d->mdtaAmbiguous && d->mdta.present() && d->mdta.ilst
++    ? MdtaStatus::Editable : MdtaStatus::Unsupported;
++}
++
++MP4::MdtaItemList MP4::Tag::mdtaItems() const
++{
++  MdtaItemList result;
++  if(mdtaStatus() != MdtaStatus::Editable) return result;
++  for(unsigned int i = 0; i < d->mdta.keys.size(); ++i) {
++    MdtaValueList values;
++    for(const auto &record : d->mdta.items) {
++      if(record.keyIndex == i + 1)
++        values.append(MdtaValue(record.dataType, record.locale, record.data));
++    }
++    result.append(MdtaItem(d->mdta.keys[i], i + 1, values));
++  }
++  return result;
++}
++
++bool MP4::Tag::replaceMdtaItems(const String &key, const MdtaValueList &values)
++{
++  const ByteVector keyBytes = key.data(String::UTF8);
++  if(mdtaStatus() != MdtaStatus::Editable || key.isEmpty() || values.isEmpty() ||
++     std::find(keyBytes.begin(), keyBytes.end(), '\0') != keyBytes.end())
++    return false;
++  uint64_t total = 8;
++  MdtaRecordList records;
++  for(const auto &value : values) {
++    const ByteVector data = value.data();
++    if(!MdtaInternal::appendDataLength(total, data.size())) return false;
++    records.append({key, 0, value.dataType(), value.locale(), data});
++  }
++  MdtaState candidate = d->mdta;
++  if(!candidate.replaceAll(key, records)) return false;
++  uint64_t keysLength = 16;
++  for(const auto &entry : candidate.keys) {
++    if(!MdtaInternal::appendLength(keysLength, 8ULL + entry.data(String::UTF8).size())) return false;
++  }
++  uint64_t ilstLength = 8;
++  std::set<String> checked;
++  for(const auto &record : candidate.items) {
++    if(!checked.insert(record.key).second) continue;
++    uint64_t itemLength = 8;
++    for(const auto &value : candidate.items) {
++      if(value.key == record.key && !MdtaInternal::appendDataLength(itemLength, value.data.size()))
++        return false;
++    }
++    if(!MdtaInternal::appendLength(ilstLength, itemLength)) return false;
++  }
++  d->mdta = std::move(candidate);
++  return true;
++}
++
++bool MP4::Tag::removeMdtaItem(const String &key)
++{
++  if(mdtaStatus() != MdtaStatus::Editable) return false;
++  if(!d->mdta.hasKey(key)) return true;
++  MdtaState candidate = d->mdta;
++  if(!candidate.remove(key)) return false;
++  d->mdta = std::move(candidate);
++  return true;
++}
++
++// Validate disk state before rebinding; keep pending edits until the whole save commits.
++bool MP4::Tag::rebindAtoms(Atoms *atoms, bool commit)
++{
++  Tag parsed(d->file, atoms, d->factory);
++  if(parsed.mdtaStatus() != mdtaStatus() || parsed.mdtaItems() != mdtaItems() ||
++     parsed.d->items.size() != d->items.size()) return false;
++  for(const auto &[name, item] : std::as_const(d->items)) {
++    if(!parsed.d->items.contains(name)) return false;
++    if(d->factory->renderItem(name, item) !=
++       d->factory->renderItem(name, parsed.d->items[name])) return false;
++  }
++  if(commit) {
++    d->items = parsed.d->items;
++    d->mdta = std::move(parsed.d->mdta);
++    d->rawOpaqueItems = std::move(parsed.d->rawOpaqueItems);
++  }
++  else {
++    d->mdta.ilst = parsed.d->mdta.ilst;
++    d->mdta.keysAtom = parsed.d->mdta.keysAtom;
++  }
++  d->mdtaAmbiguous = parsed.d->mdtaAmbiguous;
++  d->detectedMdta = parsed.d->detectedMdta;
++  d->atoms = atoms;
++  return true;
++}
++
++// A conservative upper bound protects every parent and chunk offset before any write.
++bool MP4::Tag::preflightGrowth(uint64_t growth, bool require32BitFile) const
++{
++  if(d->file->length() < 0 || !MdtaInternal::fitsGrowth(d->file->length(), growth,
++        require32BitFile ? 0xffffffffULL :
++          static_cast<uint64_t>(std::numeric_limits<offset_t>::max()))) return false;
++  const auto *moov = d->atoms->find("moov");
++  if(!moov) return false;
++  std::vector<const Atom *> pending {moov};
++  while(!pending.empty()) {
++    const auto *atom = pending.back(); pending.pop_back();
++    if(atom->length() < 8 || !MdtaInternal::fitsGrowth(atom->length(), growth, 0xffffffffULL))
++      return false;
++    d->file->seek(atom->offset());
++    if(d->file->readBlock(4).toUInt() == 1) return false;
++    for(const auto *child : atom->children()) pending.push_back(child);
++    if(atom->name() != "stco" && atom->name() != "co64") continue;
++    if(atom->length() < 16) return false;
++    d->file->seek(atom->offset() + 12);
++    const ByteVector data = d->file->readBlock(atom->length() - 12);
++    const unsigned int width = atom->name() == "stco" ? 4 : 8;
++    if(data.size() < 4 || data.toUInt() > (data.size() - 4) / width) return false;
++    const uint64_t limit = width == 4 ? 0xffffffffULL :
++      static_cast<uint64_t>(std::numeric_limits<offset_t>::max());
++    for(unsigned int i = 0; i < data.toUInt(); ++i) {
++      const unsigned int pos = 4 + i * width;
++      const uint64_t offset = width == 4 ? data.toUInt(pos) : data.toULongLong(pos);
++      if(offset > static_cast<uint64_t>(d->file->length()) ||
++         !MdtaInternal::fitsGrowth(offset, growth, limit)) return false;
++    }
++  }
++  return true;
+ }
+
+ MP4::Item MP4::Tag::item(const String &key) const
+@@ -636,3 +1197,42 @@
+     debug("MP4: Ignoring duplicate atom \"" + name + "\"");
+   }
+ }
++
++// Implement proposal value types for the isolated native experiment only.
++namespace TagLib::MP4 {
++class MdtaValue::MdtaValuePrivate {
++public:
++  unsigned int type, locale;
++  ByteVector data;
++};
++MdtaValue::MdtaValue(unsigned int type, unsigned int locale, const ByteVector &data)
++  : d(std::make_shared<MdtaValuePrivate>(MdtaValuePrivate{type, locale, data})) {}
++MdtaValue::MdtaValue(const MdtaValue &) = default;
++MdtaValue &MdtaValue::operator=(const MdtaValue &) = default;
++MdtaValue::~MdtaValue() = default;
++void MdtaValue::swap(MdtaValue &other) noexcept { d.swap(other.d); }
++unsigned int MdtaValue::dataType() const { return d->type; }
++unsigned int MdtaValue::locale() const { return d->locale; }
++ByteVector MdtaValue::data() const { return d->data; }
++bool MdtaValue::operator==(const MdtaValue &other) const {
++  return d->type == other.d->type && d->locale == other.d->locale && d->data == other.d->data;
++}
++class MdtaItem::MdtaItemPrivate {
++public:
++  String key;
++  unsigned int index;
++  MdtaValueList values;
++};
++MdtaItem::MdtaItem(const String &key, unsigned int index, const MdtaValueList &values)
++  : d(std::make_shared<MdtaItemPrivate>(MdtaItemPrivate{key, index, values})) {}
++MdtaItem::MdtaItem(const MdtaItem &) = default;
++MdtaItem &MdtaItem::operator=(const MdtaItem &) = default;
++MdtaItem::~MdtaItem() = default;
++void MdtaItem::swap(MdtaItem &other) noexcept { d.swap(other.d); }
++String MdtaItem::key() const { return d->key; }
++unsigned int MdtaItem::keyIndex() const { return d->index; }
++MdtaValueList MdtaItem::values() const { return d->values; }
++bool MdtaItem::operator==(const MdtaItem &other) const {
++  return d->key == other.d->key && d->index == other.d->index && d->values == other.d->values;
++}
++}
+diff --git a/taglib/mp4/mp4tag.h b/taglib/mp4/mp4tag.h
+--- a/taglib/mp4/mp4tag.h
++++ b/taglib/mp4/mp4tag.h
+@@ -33,6 +33,7 @@
+ #include "tag.h"
+ #include "mp4atom.h"
+ #include "mp4item.h"
++#include "mp4mdtavalue.h"
+
+ namespace TagLib {
+   namespace MP4 {
+@@ -73,6 +74,21 @@
+          * Returns a string-keyed map of the MP4::Items for this tag.
+          */
+         const ItemMap &itemMap() const;
++
++        /*! Returns detached key snapshots in keys-table order, including key-only entries.
++         * Check mdtaStatus() first; Unsupported never exposes a partial backup.
++         */
++        MdtaItemList mdtaItems() const;
++        /*! Distinguishes absent indexed metadata from supported and rejected structures. */
++        MdtaStatus mdtaStatus() const;
++
++        /*! Replaces all values atomically in memory; never appends or deduplicates.
++         * Rejects empty lists, invalid keys, absent/unsupported structures and overflow.
++         */
++        bool replaceMdtaItems(const String &key, const MdtaValueList &values);
++
++        /*! Removes all data atoms for an mdta key. */
++        bool removeMdtaItem(const String &key);
+
+         /*!
+          * \return The item, if any, corresponding to \a key.
+@@ -116,8 +132,13 @@
+         void setTextItem(const String &key, const String &value);
+
+     private:
+-        ByteVector padIlst(const ByteVector &data, int length = -1) const;
++        friend class File;
++        bool rebindAtoms(Atoms *atoms, bool commit);
++        bool saveMetadata(bool deferCommit, uint64_t extraGrowth = 0, bool require32BitFile = false);
++        bool preflightGrowth(uint64_t growth, bool require32BitFile = false) const;
++        ByteVector padAtom(const ByteVector &data, int length = -1) const;
+         ByteVector renderAtom(const ByteVector &name, const ByteVector &data) const;
++        void saveExistingAtom(ByteVector data, const AtomList &path);
+
+
+         void updateParents(const AtomList &path, offset_t delta, int ignore = 0);
+diff --git a/taglib/mp4/mp4file.cpp b/taglib/mp4/mp4file.cpp
+--- a/taglib/mp4/mp4file.cpp
++++ b/taglib/mp4/mp4file.cpp
+@@ -24,6 +24,7 @@
+  ***************************************************************************/
+
+ #include "mp4file.h"
++#include "mp4mdtalimits.h"
+
+ #include "tdebug.h"
+ #include "tpropertymap.h"
+@@ -172,9 +173,49 @@
+     return false;
+   }
+
+-  return d->tag->save() &&
+-    saveChaptersIfModified(d->neroChapterList, this) &&
+-    saveChaptersIfModified(d->qtChapterList, this);
++  if(d->tag->mdtaStatus() == MdtaStatus::Unsupported) return false;
++  const bool neroModified = d->neroChapterList && d->neroChapterList->isModified();
++  const bool qtModified = d->qtChapterList && d->qtChapterList->isModified();
++  const auto expectedNero = neroChapters();
++  const auto expectedQt = qtChapters();
++  uint64_t chapterBudget = 0;
++  // The fixed allowance exceeds the existing QT writer's box overhead; each title
++  // and table entry is bounded separately. Removal never increases this bound.
++  if(neroModified || qtModified) {
++    chapterBudget = 1024 * 1024;
++    if(expectedNero.size() > 255) return false;
++    for(const auto &ch : expectedNero) {
++      if(ch.title().data(String::UTF8).size() > 255 || ch.startTime() < 0) return false;
++    }
++    long long previous = -1;
++    for(const auto &ch : expectedQt) {
++      const auto bytes = ch.title().data(String::UTF8).size();
++      if(bytes > 65535 || ch.startTime() < 0 || ch.startTime() <= previous ||
++         !MdtaInternal::appendLength(chapterBudget, 512ULL + bytes * 4ULL)) return false;
++      previous = ch.startTime();
++    }
++    // QT writes a 32-bit stco pointing into a new mdat at EOF.
++    if(qtModified && !expectedQt.isEmpty() &&
++       !MdtaInternal::fitsGrowth(length(), chapterBudget, 0xffffffffULL)) return false;
++  }
++  if(!d->tag->preflightGrowth(chapterBudget)) return false;
++  if(!d->tag->saveMetadata(true, chapterBudget, qtModified && !expectedQt.isEmpty())) return false;
++  // From this point, every failure can follow a partial write: invalidate the File
++  // and retain all pending chapter flags instead of allowing an in-place retry.
++  const auto fail = [&]() {
++    if(neroModified) d->neroChapterList->setModified(true);
++    if(qtModified) d->qtChapterList->setModified(true);
++    setValid(false);
++    return false;
++  };
++  if(!saveChaptersIfModified(d->neroChapterList, this) || !refreshMetadata(false) ||
++     !saveChaptersIfModified(d->qtChapterList, this) || !refreshMetadata(false)) return fail();
++  NeroChapterList actualNero;
++  QtChapterList actualQt;
++  actualNero.read(this); actualQt.read(this);
++  if(actualNero.chapters() != expectedNero || actualQt.chapters() != expectedQt) return fail();
++  if(!refreshMetadata(true)) return fail();
++  return true;
+ }
+
+ bool
+@@ -202,3 +243,19 @@
+ {
+   return d->atoms->find("moov", "udta", "meta", "ilst") != nullptr;
+ }
++
++// Replace the stale atom tree after successful metadata or chapter writes.
++bool MP4::File::refreshMetadata(bool commit)
++{
++  auto atoms = std::make_unique<Atoms>(this);
++  if(!atoms->checkRootLevelAtoms() || !atoms->find("moov")) {
++    setValid(false);
++    return false;
++  }
++  if(!d->tag->rebindAtoms(atoms.get(), commit)) {
++    setValid(false);
++    return false;
++  }
++  d->atoms = std::move(atoms);
++  return true;
++}
+diff --git a/taglib/mp4/mp4file.h b/taglib/mp4/mp4file.h
+--- a/taglib/mp4/mp4file.h
++++ b/taglib/mp4/mp4file.h
+@@ -183,6 +183,8 @@
+       static bool isSupported(IOStream *stream);
+
+     private:
++      friend class Tag;
++      bool refreshMetadata(bool commit);
+       void read(bool readProperties);
+
+       class FilePrivate;
+diff --git a/taglib/mp4/mp4itemfactory.h b/taglib/mp4/mp4itemfactory.h
+--- a/taglib/mp4/mp4itemfactory.h
++++ b/taglib/mp4/mp4itemfactory.h
+@@ -125,6 +125,7 @@
+       virtual ByteVector nameForPropertyKey(const String &key) const;
+
+     protected:
++      friend class Tag;
+       /*!
+        * Type that determines the parsing and rendering between the data and
+        * the item representation of an atom.
+diff --git a/taglib/mp4/mp4mdtavalue.h b/taglib/mp4/mp4mdtavalue.h
+new file mode 100644
+--- /dev/null
++++ b/taglib/mp4/mp4mdtavalue.h
+@@ -0,0 +1,49 @@
++#ifndef MP4_MDTA_UPSTREAM_PROTOTYPE_API_H
++#define MP4_MDTA_UPSTREAM_PROTOTYPE_API_H
++#include <memory>
++#include "taglib_export.h"
++#include "tbytevector.h"
++#include "tstring.h"
++#include "tlist.h"
++
++namespace TagLib::MP4 {
++// Carry one wire value without embedding keys table identity.
++class TAGLIB_EXPORT MdtaValue {
++public:
++  MdtaValue(unsigned int dataType, unsigned int locale, const ByteVector &data);
++  MdtaValue(const MdtaValue &other);
++  MdtaValue &operator=(const MdtaValue &other);
++  ~MdtaValue();
++  void swap(MdtaValue &other) noexcept;
++  unsigned int dataType() const;
++  unsigned int locale() const;
++  ByteVector data() const;
++  bool operator==(const MdtaValue &other) const;
++private:
++  class MdtaValuePrivate;
++  std::shared_ptr<MdtaValuePrivate> d;
++};
++// Example: values.append(MdtaValue(1, 1041, ByteVector("text", 4))).
++using MdtaValueList = List<MdtaValue>;
++
++// Expose a detached snapshot of one key and its ordered values.
++class TAGLIB_EXPORT MdtaItem {
++public:
++  MdtaItem(const String &key, unsigned int keyIndex, const MdtaValueList &values);
++  MdtaItem(const MdtaItem &other);
++  MdtaItem &operator=(const MdtaItem &other);
++  ~MdtaItem();
++  void swap(MdtaItem &other) noexcept;
++  String key() const;
++  unsigned int keyIndex() const;
++  MdtaValueList values() const;
++  bool operator==(const MdtaItem &other) const;
++private:
++  class MdtaItemPrivate;
++  std::shared_ptr<MdtaItemPrivate> d;
++};
++// Example: iterate tag.mdtaItems(), then item.values(); empty values are preserved.
++using MdtaItemList = List<MdtaItem>;
++enum class MdtaStatus { Absent, Editable, Unsupported };
++}
++#endif
+diff --git a/taglib/mp4/mp4mdtalimits.h b/taglib/mp4/mp4mdtalimits.h
+new file mode 100644
+--- /dev/null
++++ b/taglib/mp4/mp4mdtalimits.h
+@@ -0,0 +1,30 @@
++#ifndef TAGLIB_MP4MDTALIMITS_H
++#define TAGLIB_MP4MDTALIMITS_H
++#include <cstdint>
++namespace TagLib::MP4::MdtaInternal {
++// Validate a growth bound without evaluating a potentially overflowing addition.
++constexpr bool fitsGrowth(uint64_t current, uint64_t growth, uint64_t maximum)
++{
++  return current <= maximum && growth <= maximum - current;
++}
++
++// Accumulate an atom length only when its 32-bit representation remains exact.
++constexpr bool appendLength(uint64_t &length, uint64_t addition)
++{
++  if(!fitsGrowth(length, addition, 0xffffffffULL)) return false;
++  length += addition;
++  return true;
++}
++
++// Reject overflowing data/item lengths before an edit candidate is committed.
++constexpr bool appendDataLength(uint64_t &itemLength, uint64_t payloadLength)
++{
++  constexpr uint64_t maximum = 0xffffffffULL;
++  if(itemLength > maximum || payloadLength > maximum - 16 ||
++     itemLength > maximum - 16 - payloadLength)
++    return false;
++  itemLength += 16 + payloadLength;
++  return true;
++}
++}
++#endif

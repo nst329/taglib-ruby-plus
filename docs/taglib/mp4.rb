@@ -276,6 +276,24 @@ module TagLib::MP4
     def set_properties(values)
     end
 
+    # Classify indexed metadata when the grouped native API is selected.
+    # Legacy native libraries return :unknown rather than guessing :absent.
+    # @return [Symbol] :absent, :editable, :unsupported, or :unknown
+    def mdta_status; end
+
+    # Replace every value of a single mdta key after validating the entire input.
+    # Preserves type, locale, bytes, order and duplicates; requires a supported mdta structure.
+    # @param key [String] non-empty valid UTF-8 key without NUL
+    # @param values [Array<Hash>] symbol fields: data_type, locale, data
+    # @return [Tag] self
+    # @raise [MdtaItemError] invalid input or unsupported MP4 structure
+    # @example Restore two values
+    #   tag.replace_mdta_items('example', [
+    #     { data_type: 1, locale: 0, data: 'first'.b },
+    #     { data_type: 1, locale: 1041, data: 'second'.b }
+    #   ])
+    def replace_mdta_items(key, values); end
+
     # Remove one managed MP4/iTunes property in memory.
     # This removes both the ilst value and its corresponding FFmpeg mdta
     # fallback, when one exists.

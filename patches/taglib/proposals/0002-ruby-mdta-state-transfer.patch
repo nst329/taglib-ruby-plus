@@ -1,0 +1,58 @@
+diff --git a/taglib/mp4/mp4tag.h b/taglib/mp4/mp4tag.h
+--- a/taglib/mp4/mp4tag.h
++++ b/taglib/mp4/mp4tag.h
+@@ -74,6 +74,12 @@
+          * Returns a string-keyed map of the MP4::Items for this tag.
+          */
+         const ItemMap &itemMap() const;
++
++        /*! Binding-only state transfer for atomic saves; excluded from upstream API. */
++        void copyStateTo(Tag &destination) const;
++        /*! Apply property normalization as one in-memory candidate edit. */
++        bool applyChanges(const ItemMap &setItems, const StringList &removeItems,
++                          const StringList &removeMdtaKeys);
+
+         /*! Returns detached key snapshots in keys-table order, including key-only entries.
+          * Check mdtaStatus() first; Unsupported never exposes a partial backup.
+diff --git a/taglib/mp4/mp4tag.cpp b/taglib/mp4/mp4tag.cpp
+--- a/taglib/mp4/mp4tag.cpp
++++ b/taglib/mp4/mp4tag.cpp
+@@ -902,6 +902,38 @@
+ const MP4::ItemMap &MP4::Tag::itemMap() const
+ {
+   return d->items;
++}
++
++// Copy all preservation state, retaining the destination File's own atom references.
++void MP4::Tag::copyStateTo(MP4::Tag &destination) const
++{
++  auto items = d->items;
++  auto state = d->mdta;
++  auto opaque = d->rawOpaqueItems;
++  state.ilst = destination.d->mdta.ilst;
++  state.keysAtom = destination.d->mdta.keysAtom;
++  destination.d->items = std::move(items);
++  destination.d->mdta = std::move(state);
++  destination.d->rawOpaqueItems = std::move(opaque);
++  destination.d->mdtaAmbiguous = d->mdtaAmbiguous;
++  destination.d->detectedMdta = d->detectedMdta;
++}
++
++// Normalize ordinary items and indexed key removals without leaving a partial edit.
++bool MP4::Tag::applyChanges(const ItemMap &setItems, const StringList &removeItems,
++                            const StringList &removeMdtaKeys)
++{
++  if(mdtaStatus() == MdtaStatus::Unsupported) return false;
++  auto items = d->items;
++  auto state = d->mdta;
++  for(const auto &key : removeItems) items.erase(key);
++  for(const auto &[key, item] : setItems) items[key] = item;
++  for(const auto &key : removeMdtaKeys) {
++    if(state.hasKey(key) && !state.remove(key)) return false;
++  }
++  d->items = std::move(items);
++  d->mdta = std::move(state);
++  return true;
+ }
+
+ MP4::MdtaStatus MP4::Tag::mdtaStatus() const

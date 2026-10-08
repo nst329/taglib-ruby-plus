@@ -213,19 +213,7 @@ static VALUE taglib_mp4_chapters(TagLib::MP4::File *file, int style) {
   return taglib_mp4_chapters_to_ruby(chapters);
 }
 
-static VALUE taglib_mp4_mdta_items(TagLib::MP4::Tag *tag) {
-  VALUE result = rb_ary_new2(tag->mdtaItems().size());
-  for (const auto &item : tag->mdtaItems()) {
-    VALUE entry = rb_hash_new();
-    rb_hash_aset(entry, ID2SYM(rb_intern("key")), taglib_string_to_ruby_string(item.key));
-    rb_hash_aset(entry, ID2SYM(rb_intern("key_index")), UINT2NUM(item.keyIndex));
-    rb_hash_aset(entry, ID2SYM(rb_intern("data_type")), UINT2NUM(item.dataType));
-    rb_hash_aset(entry, ID2SYM(rb_intern("locale")), UINT2NUM(item.locale));
-    rb_hash_aset(entry, ID2SYM(rb_intern("data")), taglib_bytevector_to_ruby_string(item.data));
-    rb_ary_push(result, entry);
-  }
-  return result;
-}
+#include "mdta_adapter.h"
 
 static void taglib_mp4_set_chapters(TagLib::MP4::File *file, VALUE value, int style) {
   TagLib::MP4::ChapterList chapters = taglib_mp4_chapters_from_ruby(value, file);
@@ -375,6 +363,9 @@ namespace TagLib {
 %ignore TagLib::MP4::Tag::itemListMap; // Deprecated.
 %ignore TagLib::MP4::Tag::copyStateTo;
 %ignore TagLib::MP4::Tag::applyChanges;
+%ignore TagLib::MP4::Tag::replaceMdtaItems;
+%ignore TagLib::MP4::Tag::mdtaStatus;
+%ignore TagLib::MP4::Tag::mdtaItems;
 
 %rename("__getitem__") TagLib::MP4::Tag::item;
 
@@ -521,17 +512,25 @@ namespace TagLib {
     return $self->applyChanges(set_items, remove_items, remove_mdta_keys);
   }
 
+  VALUE _mdta_status() {
+    return taglib_mp4_mdta_status($self);
+  }
+
   VALUE _mdta_items() {
     return taglib_mp4_mdta_items($self);
   }
 
   bool _set_mdta_item(const String &key, unsigned int data_type,
                       unsigned int locale, const ByteVector &data) {
-    return $self->setMdtaItem(key, data_type, locale, data);
+    return taglib_mp4_set_mdta_item($self, key, data_type, locale, data);
+  }
+
+  bool _replace_mdta_items(const String &key, VALUE values) {
+    return taglib_mp4_replace_mdta_items($self, key, values);
   }
 
   bool _remove_mdta_item(const String &key) {
-    return $self->removeMdtaItem(key);
+    return taglib_mp4_remove_mdta_item($self, key);
   }
 
   VALUE __setitem__(const String& string, const MP4::Item &item) {
