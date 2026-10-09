@@ -361,6 +361,10 @@ namespace TagLib {
 }
 
 %ignore TagLib::MP4::Tag::itemListMap; // Deprecated.
+%ignore TagLib::MP4::Tag::metadataStatus;
+%ignore TagLib::MP4::Tag::metadataKeys;
+%ignore TagLib::MP4::Tag::metadataItemSupported;
+%ignore TagLib::MP4::Tag::restoreMetadata;
 %ignore TagLib::MP4::Tag::copyStateTo;
 %ignore TagLib::MP4::Tag::applyChanges;
 %ignore TagLib::MP4::Tag::replaceMdtaItems;
@@ -502,6 +506,18 @@ namespace TagLib {
 }
 
 %extend TagLib::MP4::Tag {
+  VALUE _metadata_status() { return taglib_mp4_metadata_status($self); }
+  VALUE _metadata_keys() { return taglib_mp4_metadata_keys($self); }
+  bool _metadata_item_supported(const String &key, const MP4::Item &item) {
+    return taglib_mp4_metadata_item_supported($self, key, item);
+  }
+  bool _restore_metadata(const MP4::ItemMap &items, VALUE groups) {
+    try { return taglib_mp4_restore_metadata($self, items, groups); }
+    catch(const std::exception &error) {
+      rb_raise(rb_eRuntimeError, "native metadata candidate failed: %s", error.what());
+    }
+    return false;
+  }
   void _copy_state_to(TagLib::MP4::Tag *destination) {
     $self->copyStateTo(*destination);
   }
@@ -634,3 +650,11 @@ namespace TagLib {
 }
 
 // vim: set filetype=cpp sw=2 ts=2 expandtab:
+
+// Preserve the ilst data encoding as well as Item::type in detached snapshots.
+%extend TagLib::MP4::Item {
+  VALUE _snapshot_strings() { return taglib_mp4_snapshot_strings(*$self); }
+  void _set_snapshot_strings(VALUE rows) { taglib_mp4_set_snapshot_strings($self, rows); }
+  unsigned int atom_data_type() { return static_cast<unsigned int>($self->atomDataType()); }
+  void set_atom_data_type(unsigned int type) { $self->setAtomDataType(static_cast<MP4::AtomDataType>(type)); }
+}

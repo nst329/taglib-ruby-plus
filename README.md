@@ -261,3 +261,20 @@ TagLib 2.3.2基準＋`proposals/0001`＋binding用`proposals/0002`です。
 [Ruby binding結合検証](docs/Memos/2026-10-08-mdtaのRubyBinding結合検証.md)を参照してください。
 `tag.mdta_status`はgrouped版で`:absent`、`:editable`、`:unsupported`を返し、
 legacy版では推測せず`:unknown`を返します。
+
+公開MP4 snapshot／一括復元／構造診断は2.3.2.8から利用できます。
+
+```ruby
+snapshot = TagLib::MP4::File.open(source, false) { |f| f.tag.metadata_snapshot }
+TagLib::MP4::File.open(output, false) do |f|
+  raise 'snapshot native API unavailable' unless f.tag.metadata_capabilities[:atomic_restore_v1]
+  raise 'unsupported metadata' unless f.tag.metadata_diagnostics.restorable?
+  f.tag.restore_metadata_snapshot(snapshot)
+  f.save
+  raise 'metadata mismatch' unless snapshot.logical_equal?(f.tag.metadata_snapshot)
+end
+```
+
+字幕mux／音声変換後の一時出力へ復元する例です。字幕の保持検証と原本置換はMListNew側で行います。
+対応構造・native要件・保存失敗時の契約は[設計書](docs/mp4-metadata-snapshot-design.md)、
+判断理由は[ADR](docs/ADR/2026-10-08-mp4公開snapshotの実装.md)を参照してください。

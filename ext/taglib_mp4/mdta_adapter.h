@@ -96,4 +96,111 @@ static VALUE taglib_mp4_mdta_status(TagLib::MP4::Tag *tag) {
 #endif
   return ID2SYM(rb_intern("unknown"));
 }
+// Report the real keys table rather than reconstructing it from visible values.
+static VALUE taglib_mp4_metadata_keys(TagLib::MP4::Tag *tag) {
+#ifdef TAGLIB_RUBY_METADATA_SNAPSHOT
+  return taglib_string_list_to_ruby_array(tag->metadataKeys());
+#else
+  return Qnil;
+#endif
+}
+
+static VALUE taglib_mp4_metadata_status(TagLib::MP4::Tag *tag) {
+#ifdef TAGLIB_RUBY_METADATA_SNAPSHOT
+  const char *states[] = {"absent", "editable", "unsupported"};
+  const int status = tag->metadataStatus();
+  return ID2SYM(rb_intern(status >= 0 && status <= 2 ? states[status] : "unknown"));
+#else
+  return ID2SYM(rb_intern("unknown"));
+#endif
+}
+
+static bool taglib_mp4_metadata_item_supported(TagLib::MP4::Tag *tag,
+                                               const TagLib::String &key,
+                                               const TagLib::MP4::Item &item) {
+#ifdef TAGLIB_RUBY_METADATA_SNAPSHOT
+  return tag->metadataItemSupported(key, item);
+#else
+  return false;
+#endif
+}
+
+// Ruby has already validated the full snapshot; convert groups without touching the live Tag.
+static bool taglib_mp4_restore_metadata(TagLib::MP4::Tag *tag,
+                                       const TagLib::MP4::ItemMap &items, VALUE groups) {
+#ifdef TAGLIB_RUBY_METADATA_SNAPSHOT
+  Check_Type(groups, T_ARRAY);
+  // Complete shape/type validation before allocating native lists.
+  for(long i = 0; i < RARRAY_LEN(groups); ++i) {
+    VALUE group = rb_ary_entry(groups, i);
+    Check_Type(group, T_ARRAY);
+    if(RARRAY_LEN(group) != 3) rb_raise(rb_eArgError, "invalid mdta group");
+    Check_Type(rb_ary_entry(group, 0), T_STRING);
+    Check_Type(rb_ary_entry(group, 2), T_ARRAY);
+    VALUE rows = rb_ary_entry(group, 2);
+    for(long j = 0; j < RARRAY_LEN(rows); ++j) {
+      VALUE row = rb_ary_entry(rows, j);
+      Check_Type(row, T_ARRAY);
+      if(RARRAY_LEN(row) != 3) rb_raise(rb_eArgError, "invalid mdta value");
+      NUM2UINT(rb_ary_entry(row, 0)); NUM2UINT(rb_ary_entry(row, 1));
+      Check_Type(rb_ary_entry(row, 2), T_STRING);
+    }
+  }
+  TagLib::StringList keys;
+  TagLib::MP4::MdtaItemList values;
+  for(long i = 0; i < RARRAY_LEN(groups); ++i) {
+    VALUE group = rb_ary_entry(groups, i);
+    const auto key = ruby_string_to_taglib_string(rb_ary_entry(group, 0));
+    keys.append(key);
+    VALUE rows = rb_ary_entry(group, 2);
+#ifdef TAGLIB_RUBY_GROUPED_MDTA
+    TagLib::MP4::MdtaValueList sequence;
+#endif
+    for(long j = 0; j < RARRAY_LEN(rows); ++j) {
+      VALUE row = rb_ary_entry(rows, j);
+      const auto data = ruby_string_to_taglib_bytevector(rb_ary_entry(row, 2));
+#ifdef TAGLIB_RUBY_GROUPED_MDTA
+      sequence.append(TagLib::MP4::MdtaValue(NUM2UINT(rb_ary_entry(row, 0)), NUM2UINT(rb_ary_entry(row, 1)), data));
+#else
+      values.append({key, 0, NUM2UINT(rb_ary_entry(row, 0)), NUM2UINT(rb_ary_entry(row, 1)), data});
+#endif
+    }
+#ifdef TAGLIB_RUBY_GROUPED_MDTA
+    values.append(TagLib::MP4::MdtaItem(key, 0, sequence));
+#endif
+  }
+  // Hold old nodes alive until successful commit, then invalidate only borrowed item wrappers.
+  const auto oldItems = tag->itemMap();
+  if(!tag->restoreMetadata(items, keys, values)) return false;
+  for(auto it = oldItems.begin(); it != oldItems.end(); ++it)
+    unlink_taglib_mp4_item_map_iterator(it);
+  return true;
+#else
+  return false;
+#endif
+}
+
+// Length-aware strings preserve embedded NUL without changing legacy string-list getters.
+static VALUE taglib_mp4_snapshot_strings(const TagLib::MP4::Item &item) {
+  VALUE rows = rb_ary_new();
+  for(const auto &text : item.toStringList()) {
+    const auto bytes = text.data(TagLib::String::UTF8);
+    VALUE value = rb_str_new(bytes.data(), bytes.size());
+    ASSOCIATE_UTF8_ENCODING(value);
+    rb_ary_push(rows, value);
+  }
+  return rows;
+}
+
+static void taglib_mp4_set_snapshot_strings(TagLib::MP4::Item *item, VALUE rows) {
+  Check_Type(rows, T_ARRAY);
+  for(long i = 0; i < RARRAY_LEN(rows); ++i) Check_Type(rb_ary_entry(rows, i), T_STRING);
+  TagLib::StringList strings;
+  for(long i = 0; i < RARRAY_LEN(rows); ++i)
+    {
+      VALUE value = rb_ary_entry(rows, i);
+      strings.append(TagLib::String(std::string(RSTRING_PTR(value), RSTRING_LEN(value)), TagLib::String::UTF8));
+    }
+  *item = TagLib::MP4::Item(strings);
+}
 #endif

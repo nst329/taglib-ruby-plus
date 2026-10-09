@@ -11,7 +11,9 @@ $cross_config_options = ["--with-opt-dir=#{Build.install_dir}"]
 
 taglib_url = "https://github.com/taglib/taglib/archive/v#{Build.version}.tar.gz"
 taglib_base_commit = 'deadc2990767dfbda0701e0ab35fdeea653db08f'
-taglib_patch = File.expand_path('../patches/taglib/0001-mp4-mdta-preservation.patch', __dir__)
+taglib_patches = %w[0001-mp4-mdta-preservation.patch 0002-metadata-snapshot.patch].map do |name|
+  File.expand_path("../patches/taglib/#{name}", __dir__)
+end
 taglib_options = ['-DCMAKE_BUILD_TYPE=Release',
                   '-DBUILD_EXAMPLES=OFF',
                   '-DBUILD_TESTS=OFF',
@@ -37,13 +39,18 @@ def configure_cross_compile(ext)
   end
 end
 
-def ensure_taglib_patch(source, patch, expected_commit)
+def ensure_taglib_patch(source, patches, expected_commit)
   actual_commit = `git -C #{source} rev-parse HEAD`.strip
   abort "Unexpected TagLib source commit: #{actual_commit}" unless actual_commit == expected_commit
-  return if system("git -C #{source} apply --reverse --check #{patch}")
+  # The final patch overlaps the first; a reverse check of the final layer identifies a complete build.
+  return if system("git -C #{source} apply --reverse --check #{patches.last}")
 
-  abort 'TagLib mdta patch cannot be applied' unless system("git -C #{source} apply --check #{patch}")
-  sh "git -C #{source} apply #{patch}"
+  patches.each do |patch|
+    next if system("git -C #{source} apply --reverse --check #{patch}")
+
+    abort 'TagLib metadata patch cannot be applied' unless system("git -C #{source} apply --check #{patch}")
+    sh "git -C #{source} apply #{patch}"
+  end
 end
 
 require 'rake/extensiontask'
@@ -101,8 +108,8 @@ end
 
 task vendor: [Build.library]
 
-file Build.library => [Build.install_dir, Build.build_dir, Build.source] do
-  ensure_taglib_patch(Build.source, taglib_patch, taglib_base_commit)
+file Build.library => [Build.install_dir, Build.build_dir, Build.source, *taglib_patches] do
+  ensure_taglib_patch(Build.source, taglib_patches, taglib_base_commit)
   chdir Build.build_dir do
     sh %(cmake -DCMAKE_INSTALL_PREFIX=#{Build.install_dir} #{taglib_options} #{Build.source})
     sh 'make install -j 4 VERBOSE=1'
@@ -119,6 +126,5 @@ file Build.source do
   sh "git -C #{Build.source} submodule update --depth=1"
   actual_commit = `git -C #{Build.source} rev-parse HEAD`.strip
   abort "Unexpected TagLib source commit: #{actual_commit}" unless actual_commit == taglib_base_commit
-  sh "git -C #{Build.source} apply --check #{taglib_patch}"
-  sh "git -C #{Build.source} apply #{taglib_patch}"
+  ensure_taglib_patch(Build.source, taglib_patches, taglib_base_commit)
 end

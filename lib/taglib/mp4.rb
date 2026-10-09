@@ -693,23 +693,35 @@ module TagLib::MP4
 
     def metadata_snapshot
       {
-        items: tag.item_map.to_a.sort_by(&:first).map { |key, item| [key, item_snapshot(item)] },
-        mdta: tag.mdta_items.map { |item| [item.key, item.key_index, item.data_type, item.locale, item.data] }
+        items: tag.item_map.to_a.sort_by(&:first).map { |key, item| [key, item_snapshot(item, key)] },
+        mdta: tag.mdta_items.group_by(&:key_index).sort_by(&:first).flat_map do |_index, values|
+          values.map { |item| [item.key, item.key_index, item.data_type, item.locale, item.data] }
+        end,
+        mdta_keys: tag.respond_to?(:_metadata_keys) ? tag._metadata_keys : nil
       }
     end
 
-    def item_snapshot(item)
-      case item.type
-      when 1 then [:bool, item.to_bool]
-      when 2 then [:int, item.to_int]
-      when 3 then [:int_pair, item.to_int_pair]
-      when 4 then [:byte, item.to_byte]
-      when 5 then [:uint, item.to_uint]
-      when 6 then [:long_long, item.to_long_long]
-      when 7 then [:string_list, item.to_string_list]
-      when 8 then [:byte_vector_list, item.to_byte_vector_list]
-      when 9 then [:cover_art_list, item.to_cover_art_list.map { |art| [art.format, art.data] }]
-      else [:unknown, item.type]
+    # Shared typed value decoding keeps public snapshots and save verification aligned.
+    def item_snapshot(item, key)
+      if item.type.between?(1, 9) && item.respond_to?(:atom_data_type)
+        kind, type, payload = tag.send(:snapshot_item_value, item)
+        # Existing setters create undefined freeform encodings; the writer infers these.
+        if key.start_with?("----:") && type == 255 && kind == :string_list
+          type = 1
+        elsif key.start_with?("----:") && type == 255 && kind == :byte_vector_list
+          type = 0
+        end
+        [kind, type, payload]
+      else
+        kind = MetadataSnapshot::KINDS[item.type - 1] if item.type.between?(1, 9)
+        return [:unknown, item.type] unless kind
+
+        payload = if kind == :cover_art_list
+                    item.to_cover_art_list.map { |art| [art.format, art.data] }
+                  else
+                    item.public_send("to_#{kind}")
+                  end
+        [kind, payload]
       end
     end
 
@@ -1099,3 +1111,5 @@ module TagLib::MP4
     remove_method :_insert
   end
 end
+
+require_relative "mp4_metadata_snapshot"

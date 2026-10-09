@@ -36,6 +36,17 @@ begin
   grouped_api_available = try_link(mdta_api_probe(grouped: true))
   mdta_api_available = grouped_api_available || try_link(mdta_api_probe(grouped: false))
   $defs << '-DTAGLIB_RUBY_GROUPED_MDTA' if grouped_api_available
+  snapshot_probe = <<~CPP
+    #include <taglib/mp4tag.h>
+    int main() {
+      TagLib::MP4::Tag tag;
+      tag.metadataStatus(); tag.metadataKeys();
+      tag.metadataItemSupported(TagLib::String("desc"), TagLib::MP4::Item());
+      tag.restoreMetadata(TagLib::MP4::ItemMap(), TagLib::StringList(), TagLib::MP4::MdtaItemList());
+      return 0;
+    }
+  CPP
+  $defs << '-DTAGLIB_RUBY_METADATA_SNAPSHOT' if try_link(snapshot_probe)
 ensure
   $CFLAGS = original_cflags
 end

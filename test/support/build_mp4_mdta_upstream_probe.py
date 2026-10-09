@@ -21,6 +21,7 @@ def main():
     parser.add_argument('--workdir', required=True, type=Path)
     parser.add_argument('--prepare-only', action='store_true')
     parser.add_argument('--ruby-state-transfer', action='store_true')
+    parser.add_argument('--metadata-snapshot', action='store_true')
     args = parser.parse_args()
     work, base = args.workdir.resolve(), args.base_source.resolve()
     if work == REPO or REPO in work.parents or work == base or base in work.parents:
@@ -38,10 +39,12 @@ def main():
     patch = REPO / 'patches/taglib/proposals/0001-mp4-mdta-api.patch'
     run('git', '-C', str(source), 'apply', '--check', str(patch))
     run('git', '-C', str(source), 'apply', str(patch))
-    if args.ruby_state_transfer:
+    if args.ruby_state_transfer or args.metadata_snapshot:
         binding_patch = REPO / 'patches/taglib/proposals/0002-ruby-mdta-state-transfer.patch'
         run('git', '-C', str(source), 'apply', '--check', str(binding_patch))
         run('git', '-C', str(source), 'apply', str(binding_patch))
+    if args.metadata_snapshot:
+        run('git', '-C', str(source), 'apply', str(REPO / 'patches/taglib/proposals/0003-ruby-metadata-snapshot.patch'))
     if (source / 'taglib/mp4/mp4mdtalimits.h').read_bytes() != (REPO / 'test/support/mp4_mdta_upstream_limits.h').read_bytes():
         raise RuntimeError('native and test length validators must match exactly')
     if args.prepare_only:

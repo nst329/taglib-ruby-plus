@@ -84,8 +84,24 @@ jobs:
             "gem '${GEM_NAME}', '${GEM_VERSION}'" > "$bundle_gemfile"
           BUNDLE_GEMFILE="$bundle_gemfile" bundle lock --local
           BUNDLE_GEMFILE="$bundle_gemfile" bundle check
-          BUNDLE_GEMFILE="$bundle_gemfile" bundle exec ruby -e \
-            'require "taglib_plus"; abort "MP4 API unavailable" unless TagLib::MP4::File'
+          BUNDLE_GEMFILE="$bundle_gemfile" bundle exec ruby <<'RUBY'
+          require 'taglib_plus'
+          require 'fileutils'
+          require 'tmpdir'
+          snapshot = TagLib::MP4::File.open('test/data/mp4.m4a', false) do |file|
+            abort 'native snapshot API unavailable' unless file.tag.metadata_capabilities[:atomic_restore_v1]
+            file.tag.metadata_snapshot
+          end
+          Dir.mktmpdir('native-gem-snapshot-') do |dir|
+            path = File.join(dir, 'copy.m4a')
+            FileUtils.cp('test/data/mp4.m4a', path)
+            TagLib::MP4::File.open(path, false) do |file|
+              file.tag.restore_metadata_snapshot(snapshot)
+              abort 'snapshot save failed' unless file.save
+              abort 'snapshot mismatch' unless snapshot.logical_equal?(file.tag.metadata_snapshot)
+            end
+          end
+          RUBY
 
       - uses: actions/upload-artifact@v4
         with:

@@ -2751,6 +2751,65 @@ SWIGINTERN VALUE TagLib_MP4_Tag___setitem__(TagLib::MP4::Tag *self,TagLib::Strin
   self->setItem(string, item);
   return Qnil;
 }
+SWIGINTERN VALUE _wrap_Tag__metadata_status(int argc, VALUE *argv, VALUE self) {
+  if(argc) rb_raise(rb_eArgError, "wrong number of arguments");
+  void *tag = 0;
+  if(!SWIG_IsOK(SWIG_ConvertPtr(self, &tag, SWIGTYPE_p_TagLib__MP4__Tag, 0))) rb_raise(rb_eTypeError, "invalid Tag");
+  return taglib_mp4_metadata_status(static_cast<TagLib::MP4::Tag *>(tag));
+}
+SWIGINTERN VALUE _wrap_Tag__metadata_keys(int argc, VALUE *argv, VALUE self) {
+  if(argc) rb_raise(rb_eArgError, "wrong number of arguments");
+  void *tag = 0;
+  if(!SWIG_IsOK(SWIG_ConvertPtr(self, &tag, SWIGTYPE_p_TagLib__MP4__Tag, 0))) rb_raise(rb_eTypeError, "invalid Tag");
+  return taglib_mp4_metadata_keys(static_cast<TagLib::MP4::Tag *>(tag));
+}
+SWIGINTERN VALUE _wrap_Tag__metadata_item_supported(int argc, VALUE *argv, VALUE self) {
+  if(argc != 2) rb_raise(rb_eArgError, "expected key and Item");
+  void *tag = 0, *item = 0;
+  if(!SWIG_IsOK(SWIG_ConvertPtr(self, &tag, SWIGTYPE_p_TagLib__MP4__Tag, 0)) ||
+     !SWIG_IsOK(SWIG_ConvertPtr(argv[1], &item, SWIGTYPE_p_TagLib__MP4__Item, 0))) rb_raise(rb_eTypeError, "invalid Tag or Item");
+  Check_Type(argv[0], T_STRING);
+  return taglib_mp4_metadata_item_supported(static_cast<TagLib::MP4::Tag *>(tag), ruby_string_to_taglib_string(argv[0]), *static_cast<TagLib::MP4::Item *>(item)) ? Qtrue : Qfalse;
+}
+SWIGINTERN VALUE _wrap_Tag__restore_metadata(int argc, VALUE *argv, VALUE self) {
+  if(argc != 2) rb_raise(rb_eArgError, "expected ItemMap and mdta groups");
+  void *tag = 0, *items = 0;
+  if(!SWIG_IsOK(SWIG_ConvertPtr(self, &tag, SWIGTYPE_p_TagLib__MP4__Tag, 0)) ||
+     !SWIG_IsOK(SWIG_ConvertPtr(argv[0], &items, SWIGTYPE_p_TagLib__MapT_TagLib__String_TagLib__MP4__Item_t, 0))) rb_raise(rb_eTypeError, "invalid Tag or ItemMap");
+  try {
+    return taglib_mp4_restore_metadata(static_cast<TagLib::MP4::Tag *>(tag), *static_cast<TagLib::MP4::ItemMap *>(items), argv[1]) ? Qtrue : Qfalse;
+  } catch(const std::exception &error) {
+    rb_raise(rb_eRuntimeError, "native metadata candidate failed: %s", error.what());
+  }
+  return Qfalse;
+}
+SWIGINTERN VALUE _wrap_Item__snapshot_strings(int argc, VALUE *argv, VALUE self) {
+  if(argc) rb_raise(rb_eArgError, "wrong number of arguments");
+  void *item = 0;
+  if(!SWIG_IsOK(SWIG_ConvertPtr(self, &item, SWIGTYPE_p_TagLib__MP4__Item, 0))) rb_raise(rb_eTypeError, "invalid Item");
+  return taglib_mp4_snapshot_strings(*static_cast<TagLib::MP4::Item *>(item));
+}
+SWIGINTERN VALUE _wrap_Item__set_snapshot_strings(int argc, VALUE *argv, VALUE self) {
+  if(argc != 1) rb_raise(rb_eArgError, "expected StringList");
+  void *item = 0;
+  if(!SWIG_IsOK(SWIG_ConvertPtr(self, &item, SWIGTYPE_p_TagLib__MP4__Item, 0))) rb_raise(rb_eTypeError, "invalid Item");
+  taglib_mp4_set_snapshot_strings(static_cast<TagLib::MP4::Item *>(item), argv[0]);
+  return Qnil;
+}
+SWIGINTERN VALUE _wrap_Item_atom_data_type(int argc, VALUE *argv, VALUE self) {
+  if(argc) rb_raise(rb_eArgError, "wrong number of arguments");
+  void *item = 0;
+  if(!SWIG_IsOK(SWIG_ConvertPtr(self, &item, SWIGTYPE_p_TagLib__MP4__Item, 0))) rb_raise(rb_eTypeError, "invalid Item");
+  return UINT2NUM(static_cast<unsigned int>(static_cast<TagLib::MP4::Item *>(item)->atomDataType()));
+}
+SWIGINTERN VALUE _wrap_Item_set_atom_data_type(int argc, VALUE *argv, VALUE self) {
+  if(argc != 1) rb_raise(rb_eArgError, "expected data type");
+  void *item = 0;
+  if(!SWIG_IsOK(SWIG_ConvertPtr(self, &item, SWIGTYPE_p_TagLib__MP4__Item, 0))) rb_raise(rb_eTypeError, "invalid Item");
+  unsigned int type = NUM2UINT(argv[0]);
+  static_cast<TagLib::MP4::Item *>(item)->setAtomDataType(static_cast<TagLib::MP4::AtomDataType>(type));
+  return Qnil;
+}
 SWIGINTERN VALUE _wrap_Tag__mdta_status(int argc, VALUE *argv, VALUE self) {
   if(argc != 0) rb_raise(rb_eArgError, "wrong number of arguments");
   void *argp = 0;
@@ -6792,6 +6851,10 @@ SWIGEXPORT void Init_taglib_mp4(void) {
   rb_define_method(SwigClassItem.klass, "to_byte_vector_list", VALUEFUNC(_wrap_Item_to_byte_vector_list), -1);
   rb_define_method(SwigClassItem.klass, "to_cover_art_list", VALUEFUNC(_wrap_Item_to_cover_art_list), -1);
   rb_define_method(SwigClassItem.klass, "valid?", VALUEFUNC(_wrap_Item_validq___), -1);
+  rb_define_method(SwigClassItem.klass, "_snapshot_strings", VALUEFUNC(_wrap_Item__snapshot_strings), -1);
+  rb_define_method(SwigClassItem.klass, "_set_snapshot_strings", VALUEFUNC(_wrap_Item__set_snapshot_strings), -1);
+  rb_define_method(SwigClassItem.klass, "atom_data_type", VALUEFUNC(_wrap_Item_atom_data_type), -1);
+  rb_define_method(SwigClassItem.klass, "set_atom_data_type", VALUEFUNC(_wrap_Item_set_atom_data_type), -1);
   rb_define_method(SwigClassItem.klass, "type", VALUEFUNC(_wrap_Item_type), -1);
   rb_define_method(SwigClassItem.klass, "==", VALUEFUNC(_wrap_Item___eq__), -1);
   rb_define_singleton_method(SwigClassItem.klass, "from_bool", VALUEFUNC(_wrap_Item_from_bool), -1);
@@ -6856,6 +6919,10 @@ SWIGEXPORT void Init_taglib_mp4(void) {
   rb_define_method(SwigClassTag.klass, "remove_item", VALUEFUNC(_wrap_Tag_remove_item), -1);
   rb_define_method(SwigClassTag.klass, "_copy_state_to", VALUEFUNC(_wrap_Tag__copy_state_to), -1);
   rb_define_method(SwigClassTag.klass, "_apply_changes", VALUEFUNC(_wrap_Tag__apply_changes), -1);
+  rb_define_method(SwigClassTag.klass, "_metadata_status", VALUEFUNC(_wrap_Tag__metadata_status), -1);
+  rb_define_method(SwigClassTag.klass, "_metadata_keys", VALUEFUNC(_wrap_Tag__metadata_keys), -1);
+  rb_define_method(SwigClassTag.klass, "_metadata_item_supported", VALUEFUNC(_wrap_Tag__metadata_item_supported), -1);
+  rb_define_method(SwigClassTag.klass, "_restore_metadata", VALUEFUNC(_wrap_Tag__restore_metadata), -1);
   rb_define_method(SwigClassTag.klass, "_mdta_status", VALUEFUNC(_wrap_Tag__mdta_status), -1);
   rb_define_method(SwigClassTag.klass, "_mdta_items", VALUEFUNC(_wrap_Tag__mdta_items), -1);
   rb_define_method(SwigClassTag.klass, "_replace_mdta_items", VALUEFUNC(_wrap_Tag__replace_mdta_items), -1);

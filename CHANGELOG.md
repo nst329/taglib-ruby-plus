@@ -8,9 +8,12 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
-## Unreleased
+## 2.3.2.8
 
 ### Added
+- Add Ruby-owned MP4 metadata snapshots, atomic in-memory restoration, strict
+  logical/structure comparisons and read-only structural diagnostics (2.3.2.8).
+- Include binding snapshot native patches for legacy and grouped mdta backends.
 - Publish source and macOS platform gems to the GitHub Packages RubyGems registry.
 - Use distinct GitHub Packages gem names for source, arm64-darwin, and
   x86_64-darwin distributions.

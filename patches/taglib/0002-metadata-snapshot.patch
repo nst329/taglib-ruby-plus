@@ -1,0 +1,166 @@
+diff --git a/taglib/mp4/mp4tag.cpp b/taglib/mp4/mp4tag.cpp
+--- a/taglib/mp4/mp4tag.cpp
++++ b/taglib/mp4/mp4tag.cpp
+@@ -36,6 +36,7 @@
+ #include "mp4atom.h"
+ #include "mp4coverart.h"
+ #include "mp4stem.h"
++#include "mp4metadatahelpers.h"
+
+ using namespace TagLib;
+
+@@ -866,6 +867,79 @@
+ bool MP4::Tag::isEmpty() const
+ {
+   return d->items.isEmpty() && d->mdta.items.isEmpty();
++}
++
++
++int MP4::Tag::metadataStatus() const
++{
++  if(d->mdtaAmbiguous) return 2;
++  if(!d->mdta.mdtaDocument) return 0;
++  return d->mdta.present() && d->mdta.ilst ? 1 : 2;
++}
++
++StringList MP4::Tag::metadataKeys() const
++{
++  StringList result;
++  if(metadataStatus() == 1) for(const auto &key : d->mdta.keys) result.append(key);
++  return result;
++}
++
++bool MP4::Tag::metadataItemSupported(const String &key, const Item &item) const
++{
++  const auto atomName = key.data(String::Latin1).mid(0, 4);
++  if(metadataStatus() == 1 && !d->factory->nameHandlerMap().contains(atomName) &&
++     d->factory->propertyKeyForName(atomName).isEmpty()) return false;
++  return metadataItemRoundTrips(d->factory, key, item);
++}
++
++// Work only on owned candidate containers; no public Tag or live atom tree is edited before commit.
++bool MP4::Tag::restoreMetadata(const ItemMap &items, const StringList &keys,
++                               const MdtaItemList &values)
++{
++  const int status = metadataStatus();
++  if(status == 2 || (status == 0 && (!keys.isEmpty() || !values.isEmpty()))) return false;
++  auto candidateItems = items;
++  auto state = d->mdta;
++  uint64_t ordinaryLength = 8;
++  for(const auto &[key, item] : candidateItems) {
++    if(!metadataItemSupported(key, item) ||
++       !metadataLength(ordinaryLength, d->factory->renderItem(key, item).size())) return false;
++  }
++  std::set<String> sourceKeys;
++  for(const auto &key : keys) {
++    const ByteVector bytes = key.data(String::UTF8);
++    if(key.isEmpty() || std::find(bytes.begin(), bytes.end(), '\0') != bytes.end() ||
++       !sourceKeys.insert(key).second) return false;
++    if(!state.hasKey(key)) {
++      state.keys.push_back(key);
++      state.keysChanged = true;
++    }
++  }
++  MdtaItemList records;
++  for(const auto &value : values) {
++    if(!sourceKeys.count(value.key)) return false;
++    records.append(value);
++  }
++  uint64_t keysLength = 16;
++  for(const auto &key : state.keys)
++    if(!metadataLength(keysLength, 8ULL + key.data(String::UTF8).size())) return false;
++  uint64_t valuesLength = ordinaryLength;
++  std::set<String> emitted;
++  for(auto &record : records) {
++    record.keyIndex = state.keyIndex(record.key);
++    if(!record.keyIndex || !metadataLength(valuesLength, 16ULL + record.data.size())) return false;
++    if(emitted.insert(record.key).second && !metadataLength(valuesLength, 8)) return false;
++  }
++  for(const auto &key : state.keys) {
++    state.changedKeys.insert(key);
++    state.removedKeys.insert(key); // Clear values without deleting keys or reindexing.
++  }
++  for(const auto &record : records) state.removedKeys.erase(record.key);
++  state.items = std::move(records);
++  // All throwing allocations/copies completed before either live container changes.
++  d->items = std::move(candidateItems);
++  d->mdta = std::move(state);
++  return true;
+ }
+
+ const MP4::ItemMap &MP4::Tag::itemMap() const
+diff --git a/taglib/mp4/mp4tag.h b/taglib/mp4/mp4tag.h
+--- a/taglib/mp4/mp4tag.h
++++ b/taglib/mp4/mp4tag.h
+@@ -85,6 +85,18 @@
+          */
+         const ItemMap &itemMap() const;
+
++        /*! Binding snapshot support: 0 absent, 1 editable, 2 unsupported. */
++        int metadataStatus() const;
++        /*! Return the whole keys table, including entries without values. */
++        StringList metadataKeys() const;
++        /*! Reject item/key combinations which cannot survive the native writer/parser. */
++        bool metadataItemSupported(const String &key, const Item &item) const;
++        /*! Replace all managed values in one candidate commit, retaining existing keys indices.
++         * keys defines source key-only entries; values is a grouped or flat snapshot by backend.
++         */
++        bool restoreMetadata(const ItemMap &items, const StringList &keys,
++                             const MdtaItemList &values);
++
+         /*! Applies ilst replacements and mdta removals as one state change. */
+         bool applyChanges(const ItemMap &setItems,
+                           const StringList &removeItems,
+diff --git a/taglib/mp4/mp4metadatahelpers.h b/taglib/mp4/mp4metadatahelpers.h
+new file mode 100644
+--- /dev/null
++++ b/taglib/mp4/mp4metadatahelpers.h
+@@ -0,0 +1,37 @@
++// Binding-only helpers: validate the actual writer/parser contract before a candidate commit.
++#ifndef TAGLIB_MP4METADATAHELPERS_H
++#define TAGLIB_MP4METADATAHELPERS_H
++#include "tbytevectorstream.h"
++#include "mp4itemfactory.h"
++#include <limits>
++
++namespace {
++// A read-only in-memory File is enough for Atom and ItemFactory; no media file is created.
++class MetadataMemoryFile final : public TagLib::File {
++public:
++  explicit MetadataMemoryFile(TagLib::IOStream *stream) : TagLib::File(stream) {}
++  TagLib::Tag *tag() const override { return nullptr; }
++  TagLib::AudioProperties *audioProperties() const override { return nullptr; }
++  bool save() override { return false; }
++};
++
++bool metadataItemRoundTrips(const TagLib::MP4::ItemFactory *factory,
++                           const TagLib::String &key, const TagLib::MP4::Item &item)
++{
++  const auto bytes = factory->renderItem(key, item);
++  if(bytes.size() < 8 || !item.isValid()) return false;
++  TagLib::ByteVectorStream stream(bytes);
++  MetadataMemoryFile file(&stream);
++  TagLib::MP4::Atom atom(&file);
++  const auto parsed = factory->parseItem(&atom, bytes.mid(8));
++  return parsed.first == key && parsed.second == item;
++}
++
++bool metadataLength(uint64_t &total, uint64_t amount)
++{
++  if(amount > UINT32_MAX || total > UINT32_MAX - amount) return false;
++  total += amount;
++  return true;
++}
++}
++#endif
+diff --git a/taglib/mp4/mp4itemfactory.h b/taglib/mp4/mp4itemfactory.h
+--- a/taglib/mp4/mp4itemfactory.h
++++ b/taglib/mp4/mp4itemfactory.h
+@@ -125,6 +125,7 @@
+       virtual ByteVector nameForPropertyKey(const String &key) const;
+
+     protected:
++      friend class Tag;
+       /*!
+        * Type that determines the parsing and rendering between the data and
+        * the item representation of an atom.

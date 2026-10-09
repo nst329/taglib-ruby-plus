@@ -1,4 +1,43 @@
 module TagLib::MP4
+  # Rejected capture/restoration; disk-save failures use MdtaSaveError instead.
+  class MetadataSnapshotError < ArgumentError
+    # @return [Symbol] failure reason
+    attr_reader :code
+    # @return [Symbol] :validate, :capture or :restore
+    attr_reader :phase
+    # @return [Array<Hash>] immutable diagnostic issues
+    attr_reader :issues
+  end
+
+  # Deeply immutable Ruby values, independent of File/Tag native lifetimes.
+  # items: [key, kind, atom_data_type, payload]; mdta: [key, index, [[type, locale, binary], ...]].
+  class MetadataSnapshot
+    attr_reader :format_version, :items, :mdta, :source_structure
+
+    # Construct and validate a complete typed snapshot (format_version 1).
+    def initialize(items:, mdta:, source_structure: {}, format_version: 1)
+    end
+
+    # Compare per-key ordered values, ignoring destination keys-table index changes.
+    # @return [Boolean]
+    def logical_equal?(other)
+    end
+
+    # Compare logical values plus observed keys indices/order and metadata contexts.
+    # @return [Boolean]
+    def structure_equal?(other)
+    end
+  end
+
+  # Immutable read-only diagnostics; no repair is performed.
+  class MetadataDiagnostics
+    attr_reader :status, :issues, :structure, :capabilities
+
+    # @return [Boolean] whether capture/restoration can preserve all managed values
+    def restorable?
+    end
+  end
+
   # Raised when an MP4 artwork format is not supported by the safe Ruby API.
   class UnsupportedArtworkError < ArgumentError
   end
@@ -238,6 +277,30 @@ module TagLib::MP4
   end
 
   class Tag < TagLib::Tag
+    # Native support independently of per-file structural editability.
+    # @return [Hash] snapshot_v1, atomic_restore_v1, diagnostics and reason
+    def metadata_capabilities
+    end
+
+    # Inspect metadata without repairing or writing it.
+    # @return [MetadataDiagnostics] status, issues, structure and restorable?
+    def metadata_diagnostics
+    end
+
+    # Capture typed items, artwork and ordered mdta into immutable Ruby-owned values.
+    # @return [MetadataSnapshot] usable after File#close
+    # @raise [MetadataSnapshotError] if complete preservation is unavailable
+    def metadata_snapshot
+    end
+
+    # Replace managed metadata in memory after validating the entire snapshot.
+    # File#save remains the separate disk commit; existing mdta indices are retained.
+    # @param snapshot [MetadataSnapshot]
+    # @return [Tag] self
+    # @raise [MetadataSnapshotError] without partial updates
+    def restore_metadata_snapshot(snapshot)
+    end
+
     # Return a managed MP4/iTunes property.
     # @param name [String, Symbol] property name
     # @return [String, ContentRating, nil] first value, or nil if absent
@@ -365,6 +428,14 @@ module TagLib::MP4
   #   # => 1538916358
   #
   class Item
+    # @return [Integer] native data-atom type, distinct from Item kind
+    def atom_data_type
+    end
+
+    # @param type [Integer] native data-atom type
+    def set_atom_data_type(type)
+    end
+
     # @param [Boolean] value
     # @return [TagLib::MP4::Item]
     def self.from_bool(value)
