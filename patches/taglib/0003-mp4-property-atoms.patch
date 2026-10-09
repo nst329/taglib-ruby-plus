@@ -1,0 +1,13 @@
+--- a/taglib/mp4/mp4itemfactory.cpp
++++ b/taglib/mp4/mp4itemfactory.cpp
+@@ -321,6 +321,10 @@
+ {
+   return {
+     {"----", ItemHandlerType::FreeForm},
++    {"\251cpy", ItemHandlerType::Text},
++    {"ldes", ItemHandlerType::Text},
++    {"keyw", ItemHandlerType::Text},
++    {"purd", ItemHandlerType::Text},
+     {"trkn", ItemHandlerType::IntPair},
+     {"disk", ItemHandlerType::IntPairNoTrailing},
+     {"cpil", ItemHandlerType::Bool},

@@ -70,6 +70,20 @@ Gem::Specification.new do |s|
     'README.md'
   ]
   s.files = [
+    'docs/ADR/2026-10-09-snapshot追加APIの内部責務整理.md',
+    'docs/Memos/2026-10-09-snapshot追加APIのリファクタリング検証.md',
+    'docs/mp4-snapshot-extensions-design.md',
+    'docs/ADR/2026-10-09-snapshot追加APIの試作結果に基づく設計.md',
+    'docs/ADR/2026-10-09-snapshot追加APIの実装と検証後の見直し.md',
+    'docs/Memos/2026-10-09-snapshot追加APIの試作検証.md',
+    'docs/Memos/2026-10-09-snapshot追加APIの実装検証.md',
+    'patches/taglib/0003-mp4-property-atoms.patch',
+    'tasks/taglib_patches.rb',
+    'test/mp4_copyright_test.rb',
+    'test/mp4_snapshot_edit_diff_test.rb',
+    'test/mp4_snapshot_extensions_test.rb',
+    'test/support/mp4_snapshot_extensions_probe.rb',
+    'test/taglib_patch_setup_test.rb',
     'ext/taglib_mp4/mdta_adapter.h',
     'patches/taglib/proposals/0002-ruby-mdta-state-transfer.patch',
     'test/mp4_mdta_binding_adapter_test.rb',

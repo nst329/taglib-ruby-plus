@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'digest'
+
 module TagLib::MP4
   # Capture/restore failures describe a rejected operation; File#save keeps its existing error contract.
   class MetadataSnapshotError < ArgumentError
@@ -34,13 +36,42 @@ module TagLib::MP4
 
     # Compare ordered values within keys, allowing independent destination keys-table indices.
     def logical_equal?(other)
-      other.is_a?(self.class) && items == other.items && logical_mdta == other.send(:logical_mdta)
+      other.is_a?(self.class) && logical_values == other.send(:logical_values)
     end
 
     # Observed metadata structure only; this does not mean byte-identical MP4/unknown atoms.
     def structure_equal?(other)
       logical_equal?(other) && mdta.map { |k, i, _v| [k, i] } == other.mdta.map { |k, i, _v| [k, i] } &&
         source_structure == other.source_structure
+    end
+
+    # 指定キーを除いた期待snapshotを作る。復元時には除外した値も復元先から削除される。
+    def without(items: [], mdta: [])
+      validate_edit_keys!(items)
+      validate_edit_keys!(mdta)
+      edited_snapshot(items: @items.reject { |row| items.include?(row[0]) },
+                      mdta: @mdta.reject { |row| mdta.include?(row[0]) })
+    end
+
+    # キー単位で型付き値を置換・追加し、元snapshotと値順・重複を保持する。
+    # 例: snapshot.with(mdta: { 'gain' => [[1, 0, 'new'.b]] })。itemsは取得時と同じ4要素の行。
+    def with(items: [], mdta: {})
+      fail_input('items must be an Array and mdta must be a Hash') unless items.is_a?(Array) && mdta.is_a?(Hash)
+      validate_items!(items)
+      replacements = items.map(&:first)
+      ordinary = @items.reject { |row| replacements.include?(row[0]) } + items
+      edited_snapshot(items: ordinary, mdta: replace_mdta_values(mdta))
+    end
+
+    # logical_equal?と同じ生値を比較し、画像・binaryの診断表示だけをサイズとSHA-256に縮約する。
+    # 例: expected.diff(actual) => [{ area: :mdta, key: 'gain', change: :changed, changes: [:locale], ... }]
+    def diff(actual)
+      fail_input('expected MetadataSnapshot') unless actual.is_a?(self.class)
+      actual_values = actual.send(:logical_values)
+      differences = logical_values.flat_map do |area, values|
+        diff_area(area, values, actual_values.fetch(area))
+      end
+      self.class.copy(differences)
     end
 
     def self.copy(value)
@@ -55,6 +86,45 @@ module TagLib::MP4
     end
 
     private
+
+    # 部分編集の構築・再検証を一箇所に集め、取得元の観測情報とversionを保持する。
+    def edited_snapshot(items:, mdta:)
+      self.class.new(items: items, mdta: mdta, source_structure: source_structure, format_version: format_version)
+    end
+
+    # 既存キーの位置・indexを維持し、新キーだけを末尾へ追加する。値列は全置換する。
+    def replace_mdta_values(replacements)
+      groups = @mdta.to_h { |row| [row.first, row] }
+      next_index = @mdta.map { |row| row[1] }.max.to_i
+      replacements.each do |key, values|
+        index = if groups.key?(key)
+                  groups.fetch(key)[1]
+                else
+                  next_index += 1
+                end
+        groups[key] = [key, index, values]
+      end
+      groups.values
+    end
+
+    # 領域内のキーを比較し、論理変更と縮約した診断値を一緒に返す。
+    def diff_area(area, before_map, after_map)
+      (before_map.keys | after_map.keys).sort.filter_map do |key|
+        before, after = before_map[key], after_map[key]
+        next if before == after
+
+        change = if before.nil?
+                   :added
+                 elsif after.nil?
+                   :removed
+                 else
+                   :changed
+                 end
+        changes = change == :changed ? value_changes(area, before, after) : [:presence]
+        { area: area, key: key, change: change, changes: changes,
+          before: diagnostic_value(area, before), after: diagnostic_value(area, after) }
+      end
+    end
 
     # Validate the complete input before creating the immutable representation.
     def validate_items!(items)
@@ -101,6 +171,80 @@ module TagLib::MP4
 
     def logical_mdta
       mdta.reject { |_key, _index, values| values.empty? }.to_h { |key, _index, values| [key, values] }
+    end
+
+    # 一致判定と差分の両方で、物理index・キー順・値なしmdtaキーを除く。
+    def logical_values
+      { items: items.to_h { |key, *value| [key, value] }, mdta: logical_mdta }
+    end
+
+    def validate_edit_keys!(keys)
+      fail_input('excluded keys must be an Array') unless keys.is_a?(Array)
+      keys.each { |key| text!(key, 'excluded key', nul: false) }
+    end
+
+    # 順序だけの変更は重複数を含めて判定し、その他は対応する位置の各フィールドを説明する。
+    def sequence_changes(before, after, fields)
+      return [:order] if before != after && before.tally == after.tally
+
+      changes = before.length == after.length ? [] : [:value_count]
+      [before.length, after.length].min.times do |position|
+        fields.each_with_index { |field, i| changes << field unless before[position][i] == after[position][i] }
+      end
+      changes.uniq
+    end
+
+    # 通常itemの型とpayloadを分け、変更した意味上のフィールドを列挙する。
+    def value_changes(area, before, after)
+      return sequence_changes(before, after, %i[data_type locale value]) if area == :mdta
+
+      kind, type, payload = before
+      other_kind, other_type, other_payload = after
+      changes = []
+      changes << :kind unless kind == other_kind
+      changes << :atom_data_type unless type == other_type
+      if kind == other_kind
+        changes.concat(payload_changes(kind, payload, other_payload))
+      elsif payload != other_payload
+        changes << :value
+      end
+      changes
+    end
+
+    # payloadの値列とscalarを区別し、型自体の変更判定と切り離す。
+    def payload_changes(kind, before, after)
+      case kind
+      when :cover_art_list
+        sequence_changes(before, after, %i[image_format value])
+      when :string_list, :byte_vector_list
+        sequence_changes(before.map { |v| [v] }, after.map { |v| [v] }, [:value])
+      else
+        before == after ? [] : [:value]
+      end
+    end
+
+    def binary_summary(bytes)
+      { bytesize: bytes.bytesize, sha256: Digest::SHA256.hexdigest(bytes) }
+    end
+
+    # 通常の短い文字列は読める形で返し、長文と全binaryは生payloadを含めない。
+    def diagnostic_value(area, value)
+      return nil if value.nil?
+      if area == :mdta
+        return value.map { |type, locale, bytes| { data_type: type, locale: locale, data: binary_summary(bytes) } }
+      end
+      kind, type, payload = value
+      { kind: kind, atom_data_type: type, payload: diagnostic_payload(kind, payload) }
+    end
+
+    # 表示用の縮約だけを担当し、論理比較で使う値や型を変更しない。
+    def diagnostic_payload(kind, payload)
+      case kind
+      when :cover_art_list then payload.map { |format, bytes| { format: format, data: binary_summary(bytes) } }
+      when :byte_vector_list then payload.map { |bytes| binary_summary(bytes) }
+      when :string_list then payload.map { |text| text.bytesize <= 256 ? text : binary_summary(text) }
+      else payload
+      end
     end
 
     def fail_input(message)

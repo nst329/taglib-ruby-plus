@@ -45,6 +45,7 @@ def main():
         run('git', '-C', str(source), 'apply', str(binding_patch))
     if args.metadata_snapshot:
         run('git', '-C', str(source), 'apply', str(REPO / 'patches/taglib/proposals/0003-ruby-metadata-snapshot.patch'))
+        run('git', '-C', str(source), 'apply', str(REPO / 'patches/taglib/0003-mp4-property-atoms.patch'))
     if (source / 'taglib/mp4/mp4mdtalimits.h').read_bytes() != (REPO / 'test/support/mp4_mdta_upstream_limits.h').read_bytes():
         raise RuntimeError('native and test length validators must match exactly')
     if args.prepare_only:

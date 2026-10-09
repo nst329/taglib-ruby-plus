@@ -11,7 +11,7 @@ $cross_config_options = ["--with-opt-dir=#{Build.install_dir}"]
 
 taglib_url = "https://github.com/taglib/taglib/archive/v#{Build.version}.tar.gz"
 taglib_base_commit = 'deadc2990767dfbda0701e0ab35fdeea653db08f'
-taglib_patches = %w[0001-mp4-mdta-preservation.patch 0002-metadata-snapshot.patch].map do |name|
+taglib_patches = %w[0001-mp4-mdta-preservation.patch 0002-metadata-snapshot.patch 0003-mp4-property-atoms.patch].map do |name|
   File.expand_path("../patches/taglib/#{name}", __dir__)
 end
 taglib_options = ['-DCMAKE_BUILD_TYPE=Release',
@@ -39,19 +39,7 @@ def configure_cross_compile(ext)
   end
 end
 
-def ensure_taglib_patch(source, patches, expected_commit)
-  actual_commit = `git -C #{source} rev-parse HEAD`.strip
-  abort "Unexpected TagLib source commit: #{actual_commit}" unless actual_commit == expected_commit
-  # The final patch overlaps the first; a reverse check of the final layer identifies a complete build.
-  return if system("git -C #{source} apply --reverse --check #{patches.last}")
-
-  patches.each do |patch|
-    next if system("git -C #{source} apply --reverse --check #{patch}")
-
-    abort 'TagLib metadata patch cannot be applied' unless system("git -C #{source} apply --check #{patch}")
-    sh "git -C #{source} apply #{patch}"
-  end
-end
+require_relative 'taglib_patches'
 
 require 'rake/extensiontask'
 Rake::ExtensionTask.new('taglib_base', $gemspec) do |ext|

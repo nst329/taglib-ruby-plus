@@ -37,3 +37,11 @@ cmake --build /tmp/taglib-build --parallel
 
 パッチ適用済みTagLibを`TAGLIB_DIR`へインストールし、Ruby拡張をそのprefixへリンク
 してください。TagLibパッチなしのライブラリへ自動fallbackしてはいけません。
+
+## snapshot追加API用の既知property atom
+
+2.3.2.9ではlegacyの0001、0002に続けて`0003-mp4-property-atoms.patch`を適用してください。
+grouped試作はproposals/0001、0002、0003の後に同じpatchを適用します。snapshot用ビルドスクリプトと通常のnativeビルドタスクはこの順序を含みます。
+
+©cpy、ldes、keyw、purdを既知Text atomへ登録し、mdta構造でも通常itemとして完全に取得・保存・復元できるようにします。
+汎用native PropertyMapのCOPYRIGHT=cprtは変更しません。Rubyのcopyright propertyは©cpyだけを対象にします。

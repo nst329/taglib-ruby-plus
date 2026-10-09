@@ -18,6 +18,26 @@ module TagLib::MP4
     def initialize(items:, mdta:, source_structure: {}, format_version: 1)
     end
 
+    # Return a new snapshot excluding explicit ordinary/mdta keys; restoration deletes their values.
+    # @example
+    #   expected = snapshot.without(items: ['©cpy'], mdta: ['gain'])
+    def without(items: [], mdta: [])
+    end
+
+    # Replace/add complete typed key-local sequences without guessing types or appending values.
+    # @example
+    #   expected = snapshot.with(mdta: { 'gain' => [[1, 0, 'new'.b]] })
+    # @param items [Array] rows [key, kind, atom_data_type, payload]
+    # @param mdta [Hash] key => ordered [data_type, locale, binary] values
+    def with(items: [], mdta: {})
+    end
+
+    # Return immutable logical changes; an empty result means logical_equal? is true.
+    # Binary/artwork diagnostics contain size and SHA-256, never full payloads.
+    # @return [Array<Hash>] area/key/change/changes/before/after
+    def diff(actual)
+    end
+
     # Compare per-key ordered values, ignoring destination keys-table index changes.
     # @return [Boolean]
     def logical_equal?(other)
@@ -301,7 +321,15 @@ module TagLib::MP4
     def restore_metadata_snapshot(snapshot)
     end
 
-    # Return a managed MP4/iTunes property.
+    # Return possible setter effects, independent of current values.
+    # :native_setter supports title only; its empty value removes ©nam and keeps mdta title.
+    # @example
+    #   tag.property_update_effects(:title)[:mdta][:remove] # => ['title']
+    # @return [Hash] frozen { items: { set: [...], remove: [...] }, mdta: { remove: [...] } }
+    def property_update_effects(name, via: :set_property, operation: :set)
+    end
+
+    # Return a managed MP4/iTunes property; copyright reads ©cpy only.
     # @param name [String, Symbol] property name
     # @return [String, ContentRating, nil] first value, or nil if absent
     def property(name)

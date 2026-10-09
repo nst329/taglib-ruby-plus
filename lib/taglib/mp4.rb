@@ -849,6 +849,7 @@ module TagLib::MP4
       'album' => "©alb",
       'genre' => "©gen",
       'comment' => "©cmt",
+      'copyright' => "©cpy",
       'description' => 'desc',
       'longdesc' => 'ldes',
       'grouping' => "©grp",
@@ -869,6 +870,34 @@ module TagLib::MP4
       'TVShowName' => 'show'
     }.freeze
 
+    # nativeと同じ文字列変換・空文字削除を保ち、影響APIと同じatom定義を使う。
+    def title=(value)
+      atom = property_targets('title', via: :native_setter).fetch(:atom)
+      item = Item.from_string_list([value])
+      if item.to_string_list.first.empty?
+        remove_item(atom)
+      else
+        item_map.insert(atom, item)
+      end
+    end
+
+    # 現在値に依存しない変更可能範囲。native title=はmdtaを残し、空文字で通常itemを削除する。
+    # 例: property_update_effects(:title)[:mdta][:remove] => ['title']
+    def property_update_effects(name, via: :set_property, operation: :set)
+      unless %i[set remove].include?(operation)
+        raise ArgumentError, "unsupported property operation: #{operation.inspect}"
+      end
+      target = property_targets(name, via: via)
+      if via == :native_setter && operation != :set
+        raise ArgumentError, 'native setter supports only operation: :set'
+      end
+      native = via == :native_setter
+      MetadataSnapshot.copy(items: { set: operation == :set ? [target[:atom]] : [],
+                                     remove: operation == :remove || native ? [target[:atom]] : [] },
+                            mdta: { remove: target[:remove_mdta] })
+    end
+
+    # 高水準propertyの先頭値を返す。copyrightは©cpyだけを読み取る。
     def property(name)
       values = property_values(name)
       values.first
@@ -898,10 +927,12 @@ module TagLib::MP4
       end
     end
 
+    # 対象propertyを1値へ置換し、対応mdtaがあれば全値を削除する。保存はFile#saveで行う。
     def set_property(name, value)
       set_properties(name => value)
     end
 
+    # 全入力を検証してから、通常itemと対応mdtaの変更を一度に適用する。
     def set_properties(values)
       unless values.is_a?(Hash)
         raise ArgumentError, 'properties must be a Hash'
@@ -913,23 +944,29 @@ module TagLib::MP4
         if entries.key?(canonical_name)
           raise ArgumentError, "duplicate MP4 property: #{canonical_name.inspect}"
         end
-        entries[canonical_name] = [property_atom(canonical_name),
+        # name => [共通の更新対象, 検証済みの文字列] を保持し、候補構築時の再解決を避ける。
+        entries[canonical_name] = [property_targets(canonical_name),
                                    validate_property_value(canonical_name, value)]
       end
 
       return self if entries.empty?
 
       set_items = ItemMap.new
-      entries.each_value do |key, value|
-        set_items.insert(key, Item.from_string_list([value]))
+      entries.each_value do |target, value|
+        key = target.fetch(:atom)
+        item = Item.from_string_list([value])
+        # Freeform writerの推測に依存せず、保存前snapshotでも文字列型を確定する。
+        item.set_atom_data_type(1) if key.start_with?('----:')
+        set_items.insert(key, item)
       end
-      apply_property_changes(set_items, [], entries.keys)
+      remove_mdta_keys = entries.values.flat_map { |target, _value| target.fetch(:remove_mdta) }.uniq
+      apply_property_changes(set_items, [], remove_mdta_keys)
     end
 
+    # 通常itemと対応mdta値を削除する。copyrightでは©cpyのみが対象。
     def remove_property(name)
-      canonical_name = canonical_property_name(name)
-      atom = property_atom(canonical_name)
-      apply_property_changes(ItemMap.new, [atom], [canonical_name])
+      target = property_targets(name)
+      apply_property_changes(ItemMap.new, [target.fetch(:atom)], target.fetch(:remove_mdta))
     end
 
     def artwork
@@ -1037,13 +1074,22 @@ module TagLib::MP4
       name == 'show' ? 'TVShowName' : name
     end
 
-    def apply_property_changes(set_items, remove_items, names)
+    # 解決・検証済みの更新対象をnativeへ一括commitし、途中状態を公開しない。
+    def apply_property_changes(set_items, remove_items, remove_mdta_keys)
       ensure_mdta_support!
-      remove_mdta_keys = names.filter_map { |name| MDTA_PROPERTY_KEYS[name] }
       unless _apply_changes(set_items, remove_items, remove_mdta_keys)
         raise MdtaItemError, 'cannot normalize MP4 metadata safely'
       end
       self
+    end
+
+    # setterと影響APIの対象解決を共有し、説明用の別対応表を持たない。
+    def property_targets(name, via: :set_property)
+      name = canonical_property_name(name)
+      unless via == :set_property || (via == :native_setter && name == 'title')
+        raise ArgumentError, "unsupported MP4 setter: #{via.inspect} for #{name.inspect}"
+      end
+      { atom: property_atom(name), remove_mdta: via == :native_setter ? [] : [MDTA_PROPERTY_KEYS[name]].compact }
     end
 
     def property_atom(name)

@@ -278,3 +278,21 @@ end
 字幕mux／音声変換後の一時出力へ復元する例です。字幕の保持検証と原本置換はMListNew側で行います。
 対応構造・native要件・保存失敗時の契約は[設計書](docs/mp4-metadata-snapshot-design.md)、
 判断理由は[ADR](docs/ADR/2026-10-08-mp4公開snapshotの実装.md)を参照してください。
+
+### MP4 snapshotの部分編集・差分とcopyright
+
+`MetadataSnapshot#without`は指定キーを除いた新snapshot、`with`は指定キーの型付き値を置換・追加した新snapshotを返します。
+元snapshotは不変です。復元は全体置換なので、除外した値は復元先からも削除されます。mdtaのkeys表には値なしキーが残る場合があります。
+
+```ruby
+expected = original.without(items: ['©cpy'], mdta: ['gain'])
+expected = expected.with(mdta: { 'gain' => [[1, 0, 'new'.b]] })
+changes = expected.diff(actual) # 空ならlogical_equal?。binaryと画像はサイズ・SHA-256で表示。
+effects = tag.property_update_effects(:title) # ©nam設定、mdta title削除
+native_effects = tag.property_update_effects(:title, via: :native_setter) # mdtaを保持
+tag.set_property('copyright', '著作権表示') # ©cpyの単一値を設定
+```
+
+`copyright`の読み取りは先頭値、`property_values('copyright')`は全値です。更新・削除は©cpyだけを対象とし、cprtとmdta copyrightを保持します。
+2.3.2.9のnativeビルドには`0003-mp4-property-atoms.patch`も必要です。
+保存幅などnative writer固有の制約は復元時にcommit前検証します。変更許可範囲の保持確認と変換後の原本置換は[連携設計](Docs/mp4-snapshot-extensions-design.md)を参照してください。
