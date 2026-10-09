@@ -61,6 +61,8 @@ moov縮小分をfree atomで埋め、通常は後続の位置を維持する。�
 
 ## 対応範囲・失敗
 
+字幕title等で使われる`udta/name`はopaque leaf payloadとして許可し、編集せず保持する。字幕nameのbytesと配置も既存の保持signatureで比較する。`name`内部の文字コード解釈や正規化は行わない。
+
 非fragmented MP4の対応済みmoov／trak／mdia／minf／stbl構造に限定し、未知構造を拒否する。外部・複数data reference、fragmented、圧縮moov、暗号化offset、iloc等は非対応。metaは通常のhdlr／keys／ilst／freeを保持し、その内部値は編集しない。moovは64 MiB以下。atom parserの深さ16・全体件数50,000制限も適用する。
 
 不正境界、chap payloadの4-byte不整合、重複したtkhd／tref／chapや実トラックID、実トラックID 0、truncatedヘッダー、stco／co64件数不整合、mdat外offset、未知構造は`ChapterReferenceError`で明示的に失敗する。`code`は`malformed`・`unsupported`・`pending_changes`・`source_changed`。部分診断や部分変更計画は公開しない。

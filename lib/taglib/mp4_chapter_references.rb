@@ -23,7 +23,7 @@ module TagLib::MP4
       'mdia' => %w[mdhd hdlr minf free skip],
       'minf' => %w[vmhd smhd gmhd nmhd hdlr dinf stbl free skip],
       'stbl' => %w[stsd stts ctts cslg stsc stsz stz2 stco co64 stss stps sdtp sgpd sbgp padb stdp free skip],
-      'edts' => %w[elst], 'dinf' => %w[dref], 'udta' => %w[chpl meta free skip]
+      'edts' => %w[elst], 'dinf' => %w[dref], 'udta' => %w[chpl meta name free skip]
     }.freeze
     attr_reader :report, :removed, :source_digest, :preservation_signature
 

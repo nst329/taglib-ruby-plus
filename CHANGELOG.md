@@ -8,6 +8,11 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.11
+
+### Fixed
+- chapter参照修復で字幕のudta/nameを許可し、元のbytesと他の保持対象を維持する。
+
 ## 2.3.2.10
 
 ### Added

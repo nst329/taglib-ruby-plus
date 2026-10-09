@@ -173,6 +173,25 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
     end
   end
 
+  # FFmpegの字幕titleに付随するudta/nameをopaque payloadとして保持する。
+  def test_subtitle_udta_name_is_preserved_during_reference_repair
+    with_fixture do |path|
+      edit(path) do |_list, moov|
+        subtitle = moov[:children].select { |a| a[:type] == 'trak' }.find { |t| track_id(t) == 3 }
+        udta = child(subtitle, 'udta')
+        unless udta
+          udta = { type: 'udta', children: [] }
+          subtitle[:children] << udta
+        end
+        udta[:children] << { type: 'name', data: '日本語（SpeechAnalyzer）'.b }
+      end
+      inject(path, 1 => [0], 2 => [0], 3 => [0])
+      repair_and_check(path, [])
+      subtitle = tracks(path).find { |track| track_id(track) == 3 }
+      assert_equal '日本語（SpeechAnalyzer）'.b, child(child(subtitle, 'udta'), 'name')[:data]
+    end
+  end
+
   def test_nonzero_missing_references_and_duplicates
     with_fixture do |path|
       inject(path, 1 => [99, 99], 2 => [999])

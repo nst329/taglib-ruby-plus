@@ -59,7 +59,15 @@ source gem `/private/tmp/taglib-ruby-plus-2.3.2.10.gem`を生成し、別ディ�
 
 source gemを同じ2.3.2.10として更新し、展開したlibとtestから欠落参照除去・不変計画のclose後適用を検証した。2 tests / 26 assertions、失敗・エラーなし。公開やcommit/push、実ユーザーファイルへの書込みは行っていない。
 
-## 限界（整理後も同じ）
+## udta/name対応パッチの取込み
+
+`/private/tmp/mlist-taglib-23210/udta-name-support.patch`を確認して適用した。製品コードの変更はudtaの許可leafへnameを加える1行だけで、C++側の変更はない。
+
+追加された字幕name保持テストは、変更前の隔離libで`unsupported udta/name`として失敗することを再現した。変更後はlegacy／groupedの両方で17 tests / 198 assertionsが成功。保存後の独立atom解析で字幕トラックID 3のname bytesを直接比較するassertionも追加した。既存repair_and_checkにより、欠落参照0が除去され、全実トラック・media・Nero 16章・metadata・artworkの保持と別handle再読込も確認した。
+
+構文チェックとgit diff --checkは成功。変更範囲が許可leafとその回帰テストに限定されるため、全体テストは再実行していない。実ユーザーファイルには書き込んでいない。
+
+## 限界（name対応後も同じ）
 
 Linux・Intel・Ruby 3.2での実行は未実施。fragmented／暗号化／未知構造等は意図的に拒否する。既存の不適切な参照を残すため、すべての外部警告の解消を保証しない。タグ・chapterの同時編集は別保存とする。
 
