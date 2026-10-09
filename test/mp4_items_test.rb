@@ -161,6 +161,25 @@ class MP4ItemsTest < Test::Unit::TestCase
         assert_predicate status, :success?, "child process failed: #{stdout}\n#{stderr}"
       end
 
+      should 'unlink borrowed cover art when the file closes' do
+        file = TagLib::MP4::File.new('test/data/mp4.m4a')
+        art = file.tag.item_map['covr'].to_cover_art_list.first
+        assert_not_nil art.data
+
+        file.close
+        error = assert_raise_kind_of(StandardError) { art.data }
+        assert_equal 'ObjectPreviouslyDeleted', error.class.name
+      end
+
+      should 'unlink borrowed cover art when its item is removed' do
+        art = @tag.item_map['covr'].to_cover_art_list.first
+        assert_not_nil art.data
+
+        @tag.remove_item('covr')
+        error = assert_raise_kind_of(StandardError) { art.data }
+        assert_equal 'ObjectPreviouslyDeleted', error.class.name
+      end
+
       should 'release borrowed wrappers when the file closes' do
         baseline = eval('$SWIG_TRACKINGS_COUNT')
         file = TagLib::MP4::File.new('test/data/mp4.m4a')

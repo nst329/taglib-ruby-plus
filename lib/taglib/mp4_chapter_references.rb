@@ -25,9 +25,10 @@ module TagLib::MP4
       'stbl' => %w[stsd stts ctts cslg stsc stsz stz2 stco co64 stss stps sdtp sgpd sbgp padb stdp free skip],
       'edts' => %w[elst], 'dinf' => %w[dref], 'udta' => %w[chpl meta name free skip]
     }.freeze
-    attr_reader :report, :removed, :source_digest, :preservation_signature
+    attr_reader :report, :removed, :source_digest, :preservation_signature, :timing_report
 
-    def initialize(file)
+    def initialize(file, timing: false, ignore_metadata: false)
+      @ignore_metadata = ignore_metadata
       @file = file
       ::File.open(file.name, 'rb') do |io|
         initial_digest = Digest::SHA256.file(file.name).hexdigest
@@ -41,8 +42,12 @@ module TagLib::MP4
         @raw = bytes(@moov)
         @edits = {}
         @offset_tables = {}
+        # [source_track_id, 元tref_index] => 保存後tref_index。例: [2, 1] => 0。
+        @tref_positions = {}
         @report = collect_references
         collect_offsets
+        @timing_report = MetadataSnapshot.copy(collect_timing) if timing
+        prepare_atom_edits
         @preservation_signature = MetadataSnapshot.copy(preservation(@atoms))
         @removed = @report.select { |r| r[:status] == :missing }
         io.rewind
@@ -58,12 +63,14 @@ module TagLib::MP4
       @io = nil
     end
 
-    # 例: {source_track_id: 1, reference_index: 0, target_track_id: 0,
-    #       target_exists: false, target_handler: nil, status: :missing}
+    # 保存後の位置を順序付きで計算する。元位置は公開report/removedに保持する。
     def retained_report
+      positions = Hash.new(0)
       report.reject { |r| r[:status] == :missing }.map do |r|
-        # 除去後のindexはchap atom内で詰め直される。
-        r.reject { |key, _| key == :reference_index }
+        key = [r[:source_track_id], r[:tref_index]]
+        index = positions[key]
+        positions[key] += 1
+        r.merge(tref_index: @tref_positions.fetch(key), reference_index: index)
       end
     end
 
@@ -78,6 +85,9 @@ module TagLib::MP4
     end
 
     private
+
+    # 派生editorが検証済みatomだけを変更するための解析中hook。
+    def prepare_atom_edits; end
 
     def fail!(message, code = :malformed)
       raise ChapterReferenceError.new(message, code: code)
@@ -126,17 +136,18 @@ module TagLib::MP4
       end
     end
 
-    # chap・paddingを除く全構造とbytesを比較する。chunk位置はmdat内の相対位置で比較する。
+    # 欠落ID除去後のchapを含む構造とbytesを比較する。chunk位置はmdat内の相対位置で比較する。
     def preservation(atoms)
       atoms.filter_map do |atom|
-        next if %w[chap free skip].include?(atom[:type])
+        next if %w[free skip].include?(atom[:type]) || deleted_reference_atom?(atom) || (@ignore_metadata && atom[:type] == 'meta')
         value = preservation_value(atom)
-        next if atom[:type] == 'tref' && value.empty?
         [atom[:type], value]
       end
     end
 
     def preservation_value(atom)
+      return @edits.fetch(atom[:offset]) if @edits.key?(atom[:offset])
+      return payload(atom).unpack('N*') if atom[:type] == 'chap'
       return offset_signature(@offset_tables.fetch(atom[:offset])) if @offset_tables.key?(atom[:offset])
       return preservation(atom[:children]) if atom[:children].any?
 
@@ -187,25 +198,31 @@ module TagLib::MP4
       fail!('duplicate track IDs', :unsupported) unless tracks.map(&:first).uniq.size == tracks.size
       targets = tracks.to_h { |id, handler, track| [id, [handler, track]] }
       tracks.flat_map do |id, _handler, track|
-        tref = child(track, 'tref', required: false)
-        chap = tref && child(tref, 'chap', required: false)
-        next [] unless chap
-        data = payload(chap)
-        fail!('invalid chap reference payload') unless (data.bytesize % 4).zero?
-        ids = data.unpack('N*')
-        retained = ids.select { |target| targets.key?(target) }
-        @edits[chap[:offset]] = retained if retained != ids
-        ids.each_with_index.map do |target, index|
-          info = targets[target]
-          status = if info.nil?
-                     :missing
-                   elsif chapter_candidate?(*info)
-                     :chapter_candidate
-                   else
-                     :inappropriate
-                   end
-          { source_track_id: id, reference_index: index, target_track_id: target,
-            target_exists: !info.nil?, target_handler: info&.first, status: status }
+        saved_index = 0
+        track[:children].select { |a| a[:type] == 'tref' }.each_with_index.flat_map do |tref, tref_index|
+          chap = child(tref, 'chap', required: false)
+          ids = []
+          if chap
+            data = payload(chap)
+            fail!('invalid chap reference payload') unless (data.bytesize % 4).zero?
+            ids = data.unpack('N*')
+            retained = ids.select { |target| targets.key?(target) }
+            @edits[chap[:offset]] = retained if retained != ids
+          end
+          @tref_positions[[id, tref_index]] = saved_index
+          saved_index += 1 unless deleted_reference_atom?(tref)
+          ids.each_with_index.map do |target, index|
+            info = targets[target]
+            status = if info.nil?
+                       :missing
+                     elsif chapter_candidate?(*info)
+                       :chapter_candidate
+                     else
+                       :inappropriate
+                     end
+            { source_track_id: id, tref_index: tref_index, reference_index: index, target_track_id: target,
+              target_exists: !info.nil?, target_handler: info&.first, status: status }
+          end
         end
       end
     end
@@ -221,6 +238,77 @@ module TagLib::MP4
       fail!('stsd count mismatch') unless entries.size == description.byteslice(4, 4).unpack1('N')
       # text handlerだけで字幕をchapterと断定しない。候補判定は完全なchapter解析とは別。
       entries.size == 1 && entries.first[:type] == 'text'
+    end
+
+    # 補正値を推定せず、chapter候補の生値と確実に比較できる関係だけを診断する。
+    def collect_timing
+      movie = timing_header(child(@moov, 'mvhd'), 'mvhd')
+      @moov[:children].select { |a| a[:type] == 'trak' }.filter_map do |track|
+        id, handler, = track_info(track)
+        next unless chapter_candidate?(handler, track)
+        media = timing_header(child(child(track, 'mdia'), 'mdhd'), 'mdhd')
+        header = timing_header(child(track, 'tkhd'), 'tkhd')
+        stbl = child(child(child(track, 'mdia'), 'minf'), 'stbl')
+        data = payload(child(stbl, 'stts'))
+        fail!('invalid stts timing header') unless data.bytesize >= 8 && data.byteslice(0, 4) == "\0".b * 4
+        count = data.byteslice(4, 4).unpack1('N')
+        fail!('stts timing count mismatch') unless data.bytesize == 8 + count * 8
+        entries = data.byteslice(8..).unpack('N*').each_slice(2).to_a
+        sample_count = entries.sum(&:first)
+        sample_duration = entries.sum { |number, delta| number * delta }
+        edits = timing_edits(track)
+        issues = []
+        issues << :mdhd_stts_duration_mismatch unless media[:duration] == sample_duration
+        if edits
+          issues << :tkhd_elst_duration_mismatch unless header[:duration] == edits.sum { |e| e[:segment_duration] }
+          # 下位32bit一致は観測であり、overflowや生成原因の断定ではない。
+          if movie[:duration] > 0xffff_ffff && edits.any? { |e| e[:version].zero? && e[:segment_duration] == (movie[:duration] & 0xffff_ffff) }
+            issues << :elst_matches_movie_duration_low32
+          end
+        elsif (header[:duration] * media[:timescale] - sample_duration * movie[:timescale]).abs > media[:timescale]
+          # movie tick単位の丸めを許容する。edit listありのmedia/movie差は異常としない。
+          issues << :tkhd_media_duration_mismatch
+        end
+        { track_id: id, movie: movie, media: media, track_header: header,
+          stts: { sample_count: sample_count, duration: sample_duration }, edits: edits,
+          observations: issues, correction: :not_attempted }
+      end
+    end
+
+    # v0/v1の時間幅を保持し、浮動小数点への変換なしに比較できる生値を返す。
+    def timing_header(atom, type)
+      data = payload(atom)
+      version = data.getbyte(0)
+      fail!("unsupported #{type} timing version", :unsupported) unless [0, 1].include?(version)
+      scale_offset = version == 1 ? 20 : 12
+      duration_offset = type == 'tkhd' ? (version == 1 ? 28 : 20) : scale_offset + 4
+      width = version == 1 ? 8 : 4
+      minimum = { 'mvhd' => [100, 112], 'mdhd' => [24, 36], 'tkhd' => [84, 96] }.fetch(type)[version]
+      fail!("truncated #{type} timing") if data.bytesize < minimum
+      result = { version: version, duration: data.byteslice(duration_offset, width).unpack1(width == 8 ? 'Q>' : 'N') }
+      unless type == 'tkhd'
+        result[:timescale] = data.byteslice(scale_offset, 4).unpack1('N')
+        fail!("zero #{type} timescale") if result[:timescale].zero?
+      end
+      result
+    end
+
+    # empty edit・トリミング・複数edit・rateを生値のまま返し、正常な編集を補正しない。
+    def timing_edits(track)
+      edts = child(track, 'edts', required: false)
+      return nil unless edts
+      data = payload(child(edts, 'elst'))
+      version = data.getbyte(0)
+      fail!('unsupported elst timing version', :unsupported) unless [0, 1].include?(version)
+      fail!('invalid elst timing header') unless data.bytesize >= 8 && data.byteslice(1, 3) == "\0".b * 3
+      count = data.byteslice(4, 4).unpack1('N')
+      width = version == 1 ? 20 : 12
+      fail!('elst timing count mismatch') unless data.bytesize == 8 + count * width
+      Array.new(count) do |index|
+        entry = data.byteslice(8 + index * width, width)
+        duration, time, rate = entry.unpack(version == 1 ? 'Q>q>l>' : 'Nl>l>')
+        { version: version, segment_duration: duration, media_time: time, media_rate: rate }
+      end
     end
 
     def collect_offsets
@@ -246,7 +334,14 @@ module TagLib::MP4
       end
     end
 
+    # 今回の編集で空になった参照atomだけを削除し、元から空のatomは保持する。
+    def deleted_reference_atom?(atom)
+      return @edits.key?(atom[:offset]) && @edits.fetch(atom[:offset]).empty? if atom[:type] == 'chap'
+      atom[:type] == 'tref' && atom[:children].any? && atom[:children].all? { |a| deleted_reference_atom?(a) }
+    end
+
     def render(atom, delta)
+      return ''.b if deleted_reference_atom?(atom)
       data = if @edits.key?(atom[:offset])
                @edits.fetch(atom[:offset]).pack('N*')
              elsif @offset_tables.key?(atom[:offset])
@@ -256,7 +351,6 @@ module TagLib::MP4
              else
                return @raw.byteslice(atom[:offset] - @moov[:offset], length(atom))
              end
-      return ''.b if %w[chap tref].include?(atom[:type]) && data.empty?
       box(atom, data)
     end
 
@@ -323,6 +417,11 @@ module TagLib::MP4
       ChapterReferences.new(self).report
     end
 
+    # 参照修復とは独立にchapter候補の時間情報を観測する。時間atomは変更しない。
+    def chapter_timing_diagnostics
+      ChapterReferences.new(self, timing: true).timing_report
+    end
+
     # 欠落参照だけを保存待ちにする。存在する参照先の適否には関与しない。
     def remove_dangling_chapter_references
       ensure_reference_repair_isolated!
@@ -340,22 +439,21 @@ module TagLib::MP4
     private
 
     def ensure_reference_repair_isolated!
-      if metadata_dirty? || @chapter_changes.any?
+      if metadata_dirty? || @chapter_changes.any? || @chapter_timing_repair
         raise ChapterReferenceError.new('save tag and chapter edits separately from reference repair', code: :pending_changes)
       end
     end
 
     # 期待bytesと別handleの参照を確認し、原本の変更がない場合だけ既存の原子的置換へ進む。
-    def save_reference_repair
-      plan = @chapter_reference_repair
+    def save_reference_repair(plan = @chapter_reference_repair, timing: false)
       source_path = name
       temp_path = "#{source_path}.taglib-mdta-#{Process.pid}-#{object_id}"
       committed = false
       begin
-        prepare_reference_repair!(plan, source_path)
+        prepare_reference_repair!(plan, source_path, timing: timing)
         ::FileUtils.cp(source_path, temp_path)
         expected = write_reference_copy(plan, source_path, temp_path)
-        verify_reference_copy(temp_path, plan)
+        verify_reference_copy(temp_path, plan, timing: timing)
         unless Digest::SHA256.file(temp_path).hexdigest == expected && Digest::SHA256.file(source_path).hexdigest == plan.source_digest
           raise MdtaSaveError.new('reference repair bytes or source changed during verification', phase: :verify)
         end
@@ -373,13 +471,21 @@ module TagLib::MP4
       rescue StandardError => error
         raise MdtaSaveError.new(error.message, committed: committed, phase: committed ? :reopen : :replace)
       ensure
-        ::FileUtils.rm_f(temp_path) unless committed
+        unless committed
+          failure = $!
+          begin
+            ::FileUtils.rm_f(temp_path)
+          rescue StandardError => cleanup_error
+            raise MdtaSaveError.new("reference repair cleanup failed: #{cleanup_error.message}; temporary file: #{temp_path}",
+                                    committed: false, phase: :cleanup), cause: failure || cleanup_error
+          end
+        end
       end
     end
 
     # 未保存更新と原本変更を保存入口で拒否し、既存のprepare例外契約へ変換する。
-    def prepare_reference_repair!(plan, source_path)
-      ensure_reference_repair_isolated!
+    def prepare_reference_repair!(plan, source_path, timing: false)
+      timing ? ensure_timing_repair_isolated! : ensure_reference_repair_isolated!
       unless Digest::SHA256.file(source_path).hexdigest == plan.source_digest
         raise MdtaSaveError.new('source changed since reference repair was planned', phase: :prepare)
       end
@@ -393,13 +499,14 @@ module TagLib::MP4
     end
 
     # 別handleの解析失敗も検証エラーとして報告し、原本置換へ進めない。
-    def verify_reference_copy(path, plan)
+    def verify_reference_copy(path, plan, timing: false)
       self.class.open(path, false) do |verification|
         checked = ChapterReferences.new(verification)
-        unless checked.removed.empty? && checked.retained_report == plan.retained_report &&
+        unless checked.removed.empty? && (timing ? checked.report : checked.retained_report) == plan.retained_report &&
                checked.preservation_signature == plan.preservation_signature
-          raise MdtaSaveError.new('chapter reference repair verification failed', phase: :verify)
+          raise MdtaSaveError.new('chapter atom repair verification failed', phase: :verify)
         end
+        verification.chapter_snapshot if timing
       end
     rescue MdtaSaveError
       raise

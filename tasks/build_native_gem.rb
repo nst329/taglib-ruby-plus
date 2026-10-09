@@ -119,13 +119,16 @@ module NativeGem
     Dir[File.join(taglib_dir, 'lib', 'libtag.2*.dylib*')].each do |source|
       FileUtils.cp_r(source, File.join(destination, File.basename(source)), preserve: true)
     end
-    versioned_library = Dir[File.join(destination, 'libtag.2.*.dylib')]
-                       .reject { |path| File.symlink?(path) }
-                       .fetch(0)
-    system('install_name_tool', '-id', '@rpath/libtag.2.dylib', versioned_library) ||
-      abort('Could not make the bundled TagLib install name relocatable')
-    install_name = `otool -D #{Shellwords.escape(versioned_library)}`.lines.last.to_s.strip
-    abort('Bundled TagLib install name is not relocatable') unless install_name == '@rpath/libtag.2.dylib'
+    # gem化でsymlinkが実体化しても、aliasを含む全同梱libraryのIDを揃える。
+    libraries = Dir[File.join(destination, 'libtag.2*.dylib')]
+                .reject { |path| File.symlink?(path) }
+    abort 'Bundled TagLib library is missing' if libraries.empty?
+    libraries.each do |library|
+      system('install_name_tool', '-id', '@rpath/libtag.2.dylib', library) ||
+        abort('Could not make the bundled TagLib install name relocatable')
+      install_name = `otool -D #{Shellwords.escape(library)}`.lines.last.to_s.strip
+      abort('Bundled TagLib install name is not relocatable') unless install_name == '@rpath/libtag.2.dylib'
+    end
   end
 
   def rewrite_extension_dependencies(bundle, platform)
@@ -153,10 +156,24 @@ module NativeGem
       dependency if dependency&.match?(%r{^/.*libtag(?:\.\d+)?\.dylib})
     end
     abort("Absolute TagLib dependency remains in #{bundle}") unless remaining.empty?
-    return if `otool -l #{Shellwords.escape(bundle)}`.include?(rpath)
+    # 開発prefixのRPATHが先に解決されないよう、同梱libraryの探索へ限定する。
+    extension_rpaths(bundle).select { |path| path.start_with?('/') }.each do |path|
+      system('install_name_tool', '-delete_rpath', path, bundle) ||
+        abort("Could not remove build RPATH from #{bundle}")
+    end
+    return if extension_rpaths(bundle).include?(rpath)
 
     system('install_name_tool', '-add_rpath', rpath, bundle) ||
       abort("Could not add TagLib RPATH to #{bundle}")
+  end
+
+  def extension_rpaths(bundle)
+    lines = `otool -l #{Shellwords.escape(bundle)}`.lines
+    lines.each_with_index.filter_map do |line, index|
+      next unless line.strip == 'cmd LC_RPATH'
+
+      lines.fetch(index + 2).strip.match(/\Apath (.+) \(offset \d+\)\z/)&.captures&.first
+    end
   end
 
   def stage_taglib_license(stage, license_dir)

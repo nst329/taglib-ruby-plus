@@ -109,17 +109,18 @@ module TagLib::MP4
       reject!(error.message)
     end
 
-    # native writerが扱う単一音声参照・text/stco/stsz構造を厳密に読む。
+    # 複数trefを列挙し、読取対応範囲の単一音声chapter参照を厳密に読む。
     def quicktime
       tracks = @moov[:children].select { |a| a[:type] == 'trak' }
-      references = tracks.filter_map do |track|
-        tref = child(track, 'tref', required: false)
-        chap = tref && child(tref, 'chap', required: false)
-        next unless chap
-        reject!('chapter reference outside audio track', :unsupported) unless handler(track) == 'soun'
-        bytes = payload(chap)
-        reject!('multiple or empty chapter track references', :unsupported) unless bytes.size == 4
-        bytes.unpack1('N')
+      references = tracks.flat_map do |track|
+        track[:children].select { |a| a[:type] == 'tref' }.filter_map do |tref|
+          chap = child(tref, 'chap', required: false)
+          next unless chap
+          reject!('chapter reference outside audio track', :unsupported) unless handler(track) == 'soun'
+          bytes = payload(chap)
+          reject!('multiple or empty chapter track references', :unsupported) unless bytes.size == 4
+          bytes.unpack1('N')
+        end
       end
       return nil if references.empty?
       reject!('multiple chapter references', :unsupported) unless references.size == 1
@@ -257,8 +258,17 @@ module TagLib::MP4
       edts = child(track, 'edts', required: false)
       return unless edts
       bytes = payload(child(edts, 'elst'))
-      reject!('unsupported chapter edit list', :unsupported) unless bytes.size == 20 &&
-        bytes.byteslice(0, 8) == [0, 1].pack('N2') && bytes.byteslice(12, 8) == [0, 0x0001_0000].pack('N2')
+      # v0/v1とも単一identity editだけを読む。trim・empty editの時刻写像は扱わない。
+      version = bytes.getbyte(0)
+      identity = case version
+                 when 0
+                   bytes.size == 20 && bytes.byteslice(0, 8) == [0, 1].pack('N2') &&
+                     bytes.byteslice(12, 8) == [0, 0x0001_0000].pack('N2')
+                 when 1
+                   bytes.size == 28 && bytes.byteslice(0, 8) == [0x0100_0000, 1].pack('N2') &&
+                     bytes.byteslice(16, 12) == [0, 0x0001_0000].pack('q>l>')
+                 end
+      reject!('unsupported chapter edit list', :unsupported) unless identity
     end
   end
   private_constant :ChapterReader

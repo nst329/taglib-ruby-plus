@@ -243,6 +243,7 @@ module TagLib::MP4
       @mp4_metadata_snapshot = metadata_snapshot
       @chapter_changes = {}
       @chapter_reference_repair = nil
+      @chapter_timing_repair = nil
     end
 
     def chapters(style: nil)
@@ -327,6 +328,7 @@ module TagLib::MP4
 
     def atomic_save(write_metadata:)
       return save_reference_repair if @chapter_reference_repair
+      return save_timing_repair if @chapter_timing_repair
 
       source_path = name
       raise MdtaSaveError.new('MP4 file has no path', phase: :prepare) if source_path.nil? || source_path.empty?
@@ -1126,3 +1128,6 @@ require_relative "mp4_metadata_snapshot"
 require_relative "mp4_property_update_plan"
 require_relative "mp4_chapter_snapshot"
 require_relative "mp4_chapter_references"
+
+require_relative "mp4_atom_repair"
+require_relative "mp4_unindexed_mdta"

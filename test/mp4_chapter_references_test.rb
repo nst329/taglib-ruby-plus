@@ -78,9 +78,10 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
 
   def references(path)
     tracks(path).flat_map do |track|
-      tref = child(track, 'tref')
-      chap = tref && child(tref, 'chap')
-      chap ? chap[:data].unpack('N*').map { |id| [track_id(track), id] } : []
+      track[:children].select { |a| a[:type] == 'tref' }.flat_map do |tref|
+        chap = child(tref, 'chap')
+        chap ? chap[:data].unpack('N*').map { |id| [track_id(track), id] } : []
+      end
     end
   end
 
@@ -476,6 +477,261 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
       end
       assert_equal [[2, 0]], references(path)
       assert_equal digest, Digest::SHA256.file(path).hexdigest
+    end
+  end
+
+  # trefのまとまり・順序を独立parserで検証するためのfixture注入入口。
+  def inject_groups(path, mapping)
+    edit(path) do |_list, moov|
+      moov[:children].select { |a| a[:type] == 'trak' }.each do |track|
+        next unless mapping.key?(track_id(track))
+        track[:children].reject! { |a| a[:type] == 'tref' }
+        mapping.fetch(track_id(track)).each do |group|
+          track[:children] << { type: 'tref', children: group.map { |type, ids| { type: type, data: ids.pack('N*') } } }
+        end
+      end
+    end
+  end
+
+  def reference_groups(path)
+    tracks(path).map do |track|
+      [track_id(track), track[:children].select { |a| a[:type] == 'tref' }.map do |tref|
+        tref[:children].map { |a| [a[:type], a[:data].unpack('N*')] }
+      end]
+    end
+  end
+
+  def test_multiple_trefs_both_orders_keep_quicktime_after_tag_save
+    [false, true].each do |reverse|
+      with_fixture(quicktime: true) do |path|
+        source, target = references(path).first
+        groups = [{ 'chap' => [0] }, { 'chap' => [target] }]
+        groups.reverse! if reverse
+        inject_groups(path, source => groups, 1 => [{ 'chap' => [0] }], 3 => [{ 'chap' => [0] }])
+        TagLib::MP4::File.open(path, false) do |file|
+          rows = file.chapter_reference_diagnostics.select { |r| r[:source_track_id] == source }
+          assert_equal [0, 1], rows.map { |r| r[:tref_index] }
+          assert_equal [reverse ? target : 0, reverse ? 0 : target], rows.map { |r| r[:target_track_id] }
+        end
+        repair_and_check(path, [[source, target]])
+        TagLib::MP4::File.open(path, false) do |file|
+          assert_equal chapters.take(2), file.chapter_snapshot.quicktime
+          file.tag.title = '修復後のタグ保存'
+          assert file.save
+        end
+        TagLib::MP4::File.open(path, false) { |f| assert_equal chapters.take(2), f.chapter_snapshot.quicktime }
+      end
+    end
+  end
+
+  def test_groups_duplicates_order_other_references_and_original_empty_atoms
+    with_fixture(faststart: true) do |path|
+      mapping = {
+        1 => [{ 'chap' => [0] }, { 'chap' => [2, 0, 2, 3], 'hint' => [2, 2] }, { 'chap' => [3, 2] }],
+        2 => [{}, { 'chap' => [] }, { 'chap' => [999], 'hint' => [1] }, { 'chap' => [1, 0, 3, 1] }],
+        3 => [{ 'chap' => [0] }]
+      }
+      inject_groups(path, mapping)
+      repair_and_check(path, [[1, 2], [1, 2], [1, 3], [1, 3], [1, 2], [2, 1], [2, 3], [2, 1]])
+      assert_equal [[1, [[['chap', [2, 2, 3]], ['hint', [2, 2]]], [['chap', [3, 2]]]]],
+                    [2, [[], [['chap', []]], [['hint', [1]]], [['chap', [1, 3, 1]]]]], [3, []]], reference_groups(path)
+    end
+  end
+
+  def test_duplicate_track_id_is_rejected_without_modifying_original
+    with_fixture do |path|
+      inject(path, 2 => [0])
+      edit(path) do |_list, moov|
+        track = moov[:children].select { |a| a[:type] == 'trak' }[1]
+        child(track, 'tkhd')[:data][12, 4] = [1].pack('N')
+      end
+      digest = Digest::SHA256.file(path).hexdigest
+      TagLib::MP4::File.open(path, false) do |f|
+        assert_raise(TagLib::MP4::ChapterReferenceError) { f.remove_dangling_chapter_references }
+      end
+      assert_equal digest, Digest::SHA256.file(path).hexdigest
+    end
+  end
+
+  def test_cleanup_failure_preserves_cause_original_and_retry_plan
+    with_fixture do |path|
+      inject(path, 2 => [0])
+      digest = Digest::SHA256.file(path).hexdigest
+      TagLib::MP4::File.open(path, false) do |file|
+        file.remove_dangling_chapter_references
+        file.define_singleton_method(:write_reference_copy) { |*_args| raise IOError, 'write fault' }
+        original = FileUtils.method(:rm_f)
+        FileUtils.define_singleton_method(:rm_f) { |*_args| raise IOError, 'cleanup fault' }
+        begin
+          error = assert_raise(TagLib::MP4::MdtaSaveError) { file.save }
+          assert_equal :cleanup, error.phase
+          assert_equal :replace, error.cause.phase
+          assert_match(/write fault/, error.cause.message)
+          assert_equal false, error.committed
+          assert_equal digest, Digest::SHA256.file(path).hexdigest
+          assert_equal 1, Dir.glob("#{path}.taglib-mdta-*").size
+        ensure
+          FileUtils.define_singleton_method(:rm_f, original)
+          file.singleton_class.remove_method(:write_reference_copy)
+        end
+        assert file.save
+        assert_empty Dir.glob("#{path}.taglib-mdta-*")
+      end
+    end
+  end
+
+  # 時間のみを差し替え、サンプルとoffsetは保持する。異常例も補正期待値は作らない。
+  def inject_timing(path, track_id_value, movie_scale:, movie_duration:, media_duration:, track_duration:, edits:)
+    edit(path) do |_list, moov|
+      movie = child(moov, 'mvhd')[:data]
+      movie[0, 20] = [0x01000000].pack('N') + [0, 0].pack('Q>2') + [movie_scale].pack('N') + [movie_duration].pack('Q>')
+      track = moov[:children].find { |t| t[:type] == 'trak' && track_id(t) == track_id_value }
+      child(track, 'tkhd')[:data][20, 4] = [track_duration].pack('N')
+      child(child(track, 'mdia'), 'mdhd')[:data][16, 4] = [media_duration].pack('N')
+      stbl = child(child(child(track, 'mdia'), 'minf'), 'stbl')
+      if media_duration == 3_640_937
+        child(stbl, 'stts')[:data] = [0, 2, 15, 227_558, 1, 227_567].pack('N6')
+      else
+        child(stbl, 'stts')[:data] = [0, 2, 1, media_duration / 2, 1, media_duration - media_duration / 2].pack('N6')
+      end
+      track[:children].reject! { |a| a[:type] == 'edts' }
+      if edits
+        track[:children] << { type: 'edts', children: [{ type: 'elst', data: [0, edits.size].pack('N2') + edits.map { |d, t, r| [d, t, r].pack('Nl>l>') }.join.b }] }
+      end
+    end
+  end
+
+  def test_reported_timing_inconsistency_is_diagnosed_and_preserved
+    with_fixture(quicktime: true) do |path|
+      TagLib::MP4::File.open(path, false) do |file|
+        # native writerが時刻0の空タイトルpaddingを加え、実サンプルを16件にする。
+        file.set_chapters(Array.new(15) { |i| TagLib::MP4::Chapter.new((i + 1) * 50, "時間検証#{i}") }, style: :quicktime)
+        assert file.save_chapters
+      end
+      source, target = references(path).first
+      inject_timing(path, target, movie_scale: 441_000_000, movie_duration: 1_605_653_349_300,
+        media_duration: 3_640_937, track_duration: 3_640_937, edits: [[0xd865c3b4, 0, 65_536]])
+      inject_groups(path, source => [{ 'chap' => [0] }, { 'chap' => [target] }])
+      before = TagLib::MP4::File.open(path, false) { |f| f.chapter_timing_diagnostics }
+      assert_equal [:tkhd_elst_duration_mismatch, :elst_matches_movie_duration_low32], before.first[:observations]
+      assert_equal({ sample_count: 16, duration: 3_640_937 }, before.first[:stts])
+      assert_equal :not_attempted, before.first[:correction]
+      assert_raise(FrozenError) { before.first[:movie][:duration] = 0 }
+      repair_and_check(path, [[source, target]])
+      after = TagLib::MP4::File.open(path, false) { |f| f.chapter_timing_diagnostics }
+      assert_equal before, after
+      TagLib::MP4::File.open(path, false) do |file|
+        reader = TagLib::MP4.const_get(:ChapterReader).new(file)
+        assert_equal :complete, reader.report[:quicktime][:status]
+        assert_equal 15, reader.values[:quicktime].size
+        assert_equal '時間検証0', reader.values[:quicktime].first.title
+      end
+      track = tracks(path).find { |t| track_id(t) == target }
+      stsz = child(child(child(child(track, 'mdia'), 'minf'), 'stbl'), 'stsz')[:data]
+      assert_equal 16, stsz.byteslice(8, 4).unpack1('N')
+    end
+  end
+
+  def test_normal_edit_lists_are_observed_without_false_duration_mismatch
+    with_fixture(quicktime: true) do |path|
+      _, target = references(path).first
+      [nil, [[600, 100, 65_536]], [[200, -1, 65_536], [300, 0, 65_536]], [[400, 0, 131_072]], [[400, 0, 0]]].each do |edits|
+        duration = edits ? edits.sum(&:first) : 1000
+        inject_timing(path, target, movie_scale: 1000, movie_duration: 1000,
+          media_duration: 1000, track_duration: duration, edits: edits)
+        report = TagLib::MP4::File.open(path, false) { |f| f.chapter_timing_diagnostics.first }
+        assert_empty report[:observations]
+        assert_equal edits&.map { |d, t, r| { version: 0, segment_duration: d, media_time: t, media_rate: r } }, report[:edits]
+      end
+    end
+  end
+
+  def test_co64_multiple_trefs_four_byte_removal_moves_offsets
+    with_fixture(faststart: true) do |path|
+      inject_groups(path, 2 => [{ 'chap' => [1, 0] }, { 'hint' => [3] }])
+      edit(path) do |list, _moov|
+        walk(list) do |a|
+          next unless a[:type] == 'stco'
+          a[:type] = 'co64'
+          a[:data] = a[:data].byteslice(0, 8) + a[:data].byteslice(8..).unpack('N*').pack('Q>*')
+        end
+      end
+      size = File.size(path)
+      repair_and_check(path, [[2, 1]])
+      assert_equal size + 8, File.size(path)
+      assert_equal [[1, []], [2, [[['chap', [1]]], [['hint', [3]]]]], [3, []]], reference_groups(path)
+    end
+  end
+
+  def test_verification_rejects_regrouping_even_with_identical_flat_references
+    with_fixture do |path|
+      inject_groups(path, 2 => [{ 'chap' => [1, 0] }, { 'chap' => [3] }])
+      digest = Digest::SHA256.file(path).hexdigest
+      TagLib::MP4::File.open(path, false) do |file|
+        file.remove_dangling_chapter_references
+        original = file.method(:write_reference_copy)
+        fixture = self
+        file.define_singleton_method(:write_reference_copy) do |plan, source, destination|
+          original.call(plan, source, destination)
+          fixture.inject_groups(destination, 2 => [{ 'chap' => [1, 3] }])
+          Digest::SHA256.file(destination).hexdigest
+        end
+        error = assert_raise(TagLib::MP4::MdtaSaveError) { file.save }
+        assert_equal :verify, error.phase
+      end
+      assert_equal digest, Digest::SHA256.file(path).hexdigest
+    end
+  end
+
+  def test_timing_version_one_and_truncated_edit_list
+    with_fixture(quicktime: true) do |path|
+      _, target = references(path).first
+      inject_timing(path, target, movie_scale: 1000, movie_duration: 1000,
+        media_duration: 1000, track_duration: 1000, edits: [[1000, 0, 65_536]])
+      edit(path) do |_list, moov|
+        track = moov[:children].find { |a| a[:type] == 'trak' && track_id(a) == target }
+        %w[tkhd mdhd].each do |type|
+          atom = type == 'tkhd' ? child(track, type) : child(child(track, 'mdia'), type)
+          data = atom[:data]
+          suffix = type == 'tkhd' ? 24 : 20
+          fields = type == 'tkhd' ? data.byteslice(12, 8) : data.byteslice(12, 4)
+          atom[:data] = [0x01000000 | (data.unpack1('N') & 0xffffff)].pack('N') + [0, 0].pack('Q>2') + fields + [1000].pack('Q>') + data.byteslice(suffix..)
+        end
+        child(child(track, 'edts'), 'elst')[:data] = [0x01000000, 2].pack('N2') + [200, -1, 65_536, 800, 100, 65_536].pack('Q>q>l>Q>q>l>')
+      end
+      report = TagLib::MP4::File.open(path, false) { |f| f.chapter_timing_diagnostics.first }
+      assert_empty report[:observations]
+      assert_equal 1, report[:media][:version]
+      assert_equal 1, report[:track_header][:version]
+      assert_equal [-1, 100], report[:edits].map { |e| e[:media_time] }
+      edit(path) do |_list, moov|
+        track = moov[:children].find { |a| a[:type] == 'trak' && track_id(a) == target }
+        child(child(track, 'edts'), 'elst')[:data] = [0x01000000, 2].pack('N2')
+      end
+      digest = Digest::SHA256.file(path).hexdigest
+      TagLib::MP4::File.open(path, false) do |file|
+        assert_raise(TagLib::MP4::ChapterReferenceError) { file.chapter_timing_diagnostics }
+      end
+      assert_equal digest, Digest::SHA256.file(path).hexdigest
+    end
+  end
+
+  def test_reopen_failure_reports_committed_copy_and_can_be_opened_again
+    with_fixture(quicktime: true) do |path|
+      source, target = references(path).first
+      inject_groups(path, source => [{ 'chap' => [0] }, { 'chap' => [target] }])
+      # 保存フローが旧native handleをcloseするため、失敗後に二重closeしない。
+      file = TagLib::MP4::File.new(path, false)
+      file.remove_dangling_chapter_references
+      file.define_singleton_method(:initialize) { |*_args| raise IOError, 'reopen fault' }
+      error = assert_raise(TagLib::MP4::MdtaSaveError) { file.save }
+      assert_equal :reopen, error.phase
+      assert_equal true, error.committed
+      assert_empty Dir.glob("#{path}.taglib-mdta-*")
+      TagLib::MP4::File.open(path, false) do |read|
+        assert_empty read.remove_dangling_chapter_references
+        assert_equal chapters.take(2), read.chapter_snapshot.quicktime
+      end
     end
   end
 

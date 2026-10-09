@@ -335,3 +335,17 @@ end
 ```
 
 実在する参照先は適否にかかわらず保持します。タグ・chapterの更新とは別々に保存してください。未対応・不正構造は例外で拒否します。返り値と対応範囲は[設計書](docs/mp4-chapter-reference-repair-design.md)を参照してください。
+
+
+### MP4の時間診断と未対応metadataの保持保存
+
+`chapter_timing_diagnostics`はchapter候補のmvhd/mdhd/tkhd/stts/elstの生値と不整合の観測を返します。補正は自動で行いません。再現済みnative writer profileに一致し、呼出側がmovie全域の章と判断した場合だけ、別保存で修復できます。
+
+```ruby
+result = file.repair_native_chapter_timing(track_id: 4, profile: :taglib_full_movie)
+file.save_chapters if result[:status] == :planned
+```
+
+先頭に連続したmdta index 0がある限定構造では、`file.save_preserving_unindexed_mdta`でraw群を保持しながら通常タグを保存できます。indexの意味は復元せず、診断と完全snapshotの拒否は残ります。章・参照・時間修復とは別に保存してください。[条件・結果例・制約](docs/mp4-unindexed-metadata-and-chapter-timing-repair-design.md)を参照してください。
+
+nativeの新規章生成の単位・64bit幅修正には`0004-mp4-chapter-movie-duration.patch`も必要です。

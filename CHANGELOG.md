@@ -8,6 +8,19 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.12
+
+### Added
+- chapter参照診断・修復記録に元のtref_indexを追加し、章の時間不整合を独立して診断。
+- 再現済みfull-movie profileに限定した明示的時間修復とv1 identity edit読取を追加。
+- 先頭mdta index 0のraw群を保持しながら通常タグを更新する明示保存APIを追加。
+
+### Fixed
+- close時のCoverArt走査で共有listをdetachさせず、borrowed wrapperを確実に解除。
+- 複数trefを独立して解析し、欠落IDだけを除去。有効参照の順序・重複・group・他参照を保持。
+- native chapter writerがtkhd/elstへmovie単位の64bit durationを書き、必要な場合だけv1を生成。
+- 保存後の添字変化を考慮した構造検証、対象外payload保持、故障時の例外伝播と原本維持を検証。
+
 ## 2.3.2.11
 
 ### Fixed

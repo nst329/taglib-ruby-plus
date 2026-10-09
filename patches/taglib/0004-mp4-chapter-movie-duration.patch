@@ -1,0 +1,129 @@
+--- a/taglib/mp4/mp4qtchapterlist.cpp
++++ b/taglib/mp4/mp4qtchapterlist.cpp
+@@ -153,7 +153,7 @@
+   //! Movie-level header info from mvhd.
+   struct MovieInfo {
+     unsigned int timescale = 0;
+-    unsigned int duration = 0;   // in mvhd timescale units
++    unsigned long long duration = 0; // in mvhd timescale units; never narrow v1
+     long long durationMs = 0;    // converted to milliseconds
+   };
+
+@@ -175,12 +175,13 @@
+       return info;
+
+     const auto version = static_cast<unsigned char>(data[8]);
+-    long long timescale, duration;
+-    if(version == 1 && data.size() >= 8 + 28) {
++    unsigned int timescale = 0;
++    unsigned long long duration = 0;
++    if(version == 1 && data.size() >= 8 + 32) {
+       timescale = data.toUInt(28U);
+-      duration  = data.toLongLong(32U);
+-    }
+-    else if(data.size() >= 8 + 16 + 4) {
++      duration  = data.toULongLong(32U);
++    }
++    else if(version == 0 && data.size() >= 8 + 16 + 4) {
+       timescale = data.toUInt(20U);
+       duration  = data.toUInt(24U);
+     }
+@@ -188,11 +189,16 @@
+       return info;
+     }
+
+-    if(timescale > 0 && duration > 0) {
+-      info.timescale = static_cast<unsigned int>(timescale);
+-      info.duration = static_cast<unsigned int>(duration);
+-      info.durationMs = static_cast<long long>(
+-        static_cast<double>(duration) * 1000.0 / static_cast<double>(timescale) + 0.5);
++    // Integer quotient/remainder preserves nearest-ms rounding without overflow.
++    if(timescale > 0 && duration > 0 && duration != 0xffffffffffffffffULL &&
++       !(version == 0 && duration == 0xffffffffULL)) {
++      const auto seconds = duration / timescale;
++      const auto milliseconds = (duration % timescale * 1000ULL + timescale / 2) / timescale;
++      if(seconds > 0xffffffffULL / 1000 || seconds * 1000 + milliseconds > 0xffffffffULL)
++        return info; // mdhd/stts use 32-bit media time in this writer.
++      info.timescale = timescale;
++      info.duration = duration;
++      info.durationMs = static_cast<long long>(seconds * 1000 + milliseconds);
+     }
+     return info;
+   }
+@@ -552,7 +558,7 @@
+                               const MP4::ChapterList &chapters,
+                               const std::vector<unsigned int> &sampleSizes,
+                               offset_t textDataOffset,
+-                              unsigned int movieDuration)
++                              unsigned long long movieDuration)
+   {
+     unsigned int count = chapters.size();
+     auto totalDuration = static_cast<unsigned int>(
+@@ -566,13 +572,15 @@
+     //          + 4 track_id + 4 reserved + 4 duration + 8 reserved
+     //          + 2 layer + 2 alternate_group + 2 volume + 2 reserved
+     //          + 36 matrix + 4 width + 4 height = 92 bytes total
++    const bool wideDuration = movieDuration > 0xffffffffULL;
+     ByteVector tkhdData;
+-    tkhdData.append(ByteVector(4, '\0'));     // creation time
+-    tkhdData.append(ByteVector(4, '\0'));     // modification time
++    tkhdData.append(ByteVector(wideDuration ? 8 : 4, '\0')); // creation time
++    tkhdData.append(ByteVector(wideDuration ? 8 : 4, '\0')); // modification time
+     tkhdData.append(ByteVector::fromUInt(trackId));
+-    tkhdData.append(ByteVector(4, '\0'));     // reserved
+-    // Duration in mvhd timescale.
+-    tkhdData.append(ByteVector::fromUInt(totalDuration));
++    tkhdData.append(ByteVector(4, '\0')); // reserved
++    // Track and edit durations are movie units; mdhd/stts remain media units.
++    tkhdData.append(wideDuration ? ByteVector::fromULongLong(movieDuration)
++                                : ByteVector::fromUInt(static_cast<unsigned int>(movieDuration)));
+     tkhdData.append(ByteVector(8, '\0'));     // reserved
+     tkhdData.append(ByteVector::fromShort(0)); // layer
+     tkhdData.append(ByteVector::fromShort(0)); // alternate_group
+@@ -593,7 +601,7 @@
+
+     // flags = 0x02: track_in_movie only (matches ffmpeg's chapter track output).
+     // Chapter tracks are NOT track_enabled(1) -- they are disabled but present in movie.
+-    ByteVector tkhd = renderFullBox("tkhd", 0, 0x02, tkhdData);
++    ByteVector tkhd = renderFullBox("tkhd", wideDuration ? 1 : 0, 0x02, tkhdData);
+
+     // -- mdhd (media header) --
+     ByteVector mdhdData;
+@@ -688,10 +696,11 @@
+     // Single entry: play the whole media from time 0, at normal rate.
+     ByteVector elstData;
+     elstData.append(ByteVector::fromUInt(1));            // entry count
+-    elstData.append(ByteVector::fromUInt(movieDuration)); // segment duration (mvhd timescale)
+-    elstData.append(ByteVector::fromUInt(0));             // media time = 0
++    elstData.append(wideDuration ? ByteVector::fromULongLong(movieDuration)
++                                : ByteVector::fromUInt(static_cast<unsigned int>(movieDuration)));
++    elstData.append(ByteVector(wideDuration ? 8 : 4, '\0')); // media time = 0
+     elstData.append(ByteVector::fromUInt(0x00010000));    // media rate = 1.0 (fixed point)
+-    ByteVector elst = renderFullBox("elst", 0, 0, elstData);
++    ByteVector elst = renderFullBox("elst", wideDuration ? 1 : 0, 0, elstData);
+     ByteVector edts = renderAtom("edts", elst);
+
+     // -- trak --
+@@ -1314,6 +1323,10 @@
+     return false;
+   }
+   const long long durationMs = movieInfo.durationMs;
++  if(durationMs > 0xffffffffLL || chapterList.back().startTime() >= durationMs) {
++    debug("MP4QTChapterList::write() -- Chapter media time exceeds supported range");
++    return false;
++  }
+
+   TrackInfo audio = findAudioTrack(file, &atoms);
+   if(!audio.trak) {
+@@ -1381,6 +1394,11 @@
+   // Text samples go inside an mdat atom at EOF.  stco offsets point past the 8-byte mdat header.
+   const offset_t textDataOffset = file->length() + totalInsert + 8;
+
++  if(textDataOffset < 0 || textDataOffset > 0xffffffffLL) {
++    debug("MP4QTChapterList::write() -- Chapter chunk offset exceeds stco range");
++    return false;
++  }
++
+   // Build final trak with correct stco offsets pointing to where text data will land.
+   const ByteVector trakAtom = buildChapterTrak(
+     chapterTrackId, timescale, durationMs, workingChapters, sampleSizes, textDataOffset,

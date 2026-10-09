@@ -2118,7 +2118,8 @@ VALUE taglib_offset_t_to_ruby_int(TagLib::offset_t off) {
 
 static void unlink_taglib_mp4_item_map_iterator(const TagLib::MP4::ItemMap::ConstIterator &it) {
   const TagLib::MP4::Item *item = &(it->second);
-  TagLib::MP4::CoverArtList list = item->toCoverArtList();
+  // Const iteration preserves the shared addresses registered by the read path.
+  const TagLib::MP4::CoverArtList list = item->toCoverArtList();
   for (TagLib::MP4::CoverArtList::ConstIterator it = list.begin(); it != list.end(); it++) {
     void *cover_art = (void *) &(*it);
     SWIG_RubyUnlinkObjects(cover_art);

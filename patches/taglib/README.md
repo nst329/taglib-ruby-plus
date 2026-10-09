@@ -45,3 +45,10 @@ grouped試作はproposals/0001、0002、0003の後に同じpatchを適用しま�
 
 ©cpy、ldes、keyw、purdを既知Text atomへ登録し、mdta構造でも通常itemとして完全に取得・保存・復元できるようにします。
 汎用native PropertyMapのCOPYRIGHT=cprtは変更しません。Rubyのcopyright propertyは©cpyだけを対象にします。
+
+
+## chapterのmovie単位と64bit duration
+
+`0004-mp4-chapter-movie-duration.patch`を既存metadata patch列の後に適用します。legacy/groupedの共通private chapter builderが対象です。MovieInfoのdurationを64bitで保持し、tkhd/elstへmovie単位のdurationを生成します。32bitに収まる場合はv0、超える場合はv1です。mvhd/timescaleとmediaのms丸め・paddingは変更しません。ゼロtimescale、未知duration、media/table/offsetの対応幅超過は拒否します。
+
+通常nativeビルドとgrouped検証ビルドはこのpatchを適用します。macOS arm64の両backendで再ビルドし、高timescale・32bit境界・正常異timescale・保存後reader/ffprobeを検証しました。インストール済みbundleやHomebrew TagLibは変更していません。

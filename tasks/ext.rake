@@ -11,7 +11,7 @@ $cross_config_options = ["--with-opt-dir=#{Build.install_dir}"]
 
 taglib_url = "https://github.com/taglib/taglib/archive/v#{Build.version}.tar.gz"
 taglib_base_commit = 'deadc2990767dfbda0701e0ab35fdeea653db08f'
-taglib_patches = %w[0001-mp4-mdta-preservation.patch 0002-metadata-snapshot.patch 0003-mp4-property-atoms.patch].map do |name|
+taglib_patches = %w[0001-mp4-mdta-preservation.patch 0002-metadata-snapshot.patch 0003-mp4-property-atoms.patch 0004-mp4-chapter-movie-duration.patch].map do |name|
   File.expand_path("../patches/taglib/#{name}", __dir__)
 end
 taglib_options = ['-DCMAKE_BUILD_TYPE=Release',

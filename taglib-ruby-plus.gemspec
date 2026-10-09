@@ -70,6 +70,22 @@ Gem::Specification.new do |s|
     'README.md'
   ]
   s.files = [
+    'docs/Memos/2026-10-09-2.3.2.12のバイナリgem検証.md',
+    'docs/ADR/2026-10-09-2.3.2.12のリファクタリングとバイナリgem.md',
+    'docs/Memos/2026-10-09-限定MP4修復の実装検証.md',
+    'docs/ADR/2026-10-09-限定atom編集と原子的保存の共用.md',
+    'lib/taglib/mp4_atom_repair.rb',
+    'lib/taglib/mp4_unindexed_mdta.rb',
+    'patches/taglib/0004-mp4-chapter-movie-duration.patch',
+    'test/mp4_atom_repair_test.rb',
+    'test/mp4_repair_investigation_test.rb',
+    'test/support/mp4_investigation_fixture.rb',
+    'docs/mp4-unindexed-metadata-and-chapter-timing-repair-design.md',
+    'docs/ADR/2026-10-09-未対応mdtaのraw保持とchapter時間修復の分離.md',
+    'docs/ADR/2026-10-09-複数trefの独立修復と時間情報の観測.md',
+    'docs/Memos/2026-10-09-複数tref修復と時間診断の検証.md',
+    'docs/Memos/2026-10-09-実MP4複数tref修復検証-010226_001.md',
+    'docs/Memos/2026-10-09-metadataとchapter時間の設計前テスト.md',
     'lib/taglib/mp4_chapter_references.rb',
     'test/mp4_chapter_references_test.rb',
     'docs/mp4-chapter-reference-repair-design.md',
