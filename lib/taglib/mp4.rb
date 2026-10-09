@@ -1127,6 +1127,7 @@ end
 require_relative "mp4_metadata_snapshot"
 require_relative "mp4_property_update_plan"
 require_relative "mp4_chapter_snapshot"
+require_relative "mp4_chapter_sample_snapshot"
 require_relative "mp4_chapter_references"
 
 require_relative "mp4_atom_repair"

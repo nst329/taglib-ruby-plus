@@ -99,6 +99,13 @@ jobs:
               file.tag.restore_metadata_snapshot(snapshot)
               abort 'snapshot save failed' unless file.save
               abort 'snapshot mismatch' unless snapshot.logical_equal?(file.tag.metadata_snapshot)
+              file.set_chapters([TagLib::MP4::Chapter.new(0, 'first'), TagLib::MP4::Chapter.new(100, 'second')], style: :quicktime)
+              abort 'chapter save failed' unless file.save_chapters
+              samples = file.chapter_sample_snapshot
+              abort 'all-sample snapshot mismatch' unless samples.samples.map { |row| row[:title] } == %w[first second]
+              file.tag.title = 'native sample preservation smoke'
+              abort 'tag save failed' unless file.save
+              abort 'chapter sample preservation mismatch' unless samples.preserved_equal?(file.chapter_sample_snapshot)
             end
           end
           RUBY

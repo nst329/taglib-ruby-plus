@@ -8,6 +8,14 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.13
+
+### Added
+- paddingを含むQuickTime text chapterの全sampleを取得する読取専用chapter_sample_snapshotを追加。
+- 整数media ticks、各sampleのduration・title・payload署名と、offset非依存の保持比較を公開。
+- 単一identity editの全期間照合可否を明示し、不正表・曖昧な参照・非対応editを拒否。
+- 両backend、通常タグ保存・offset移動、実ファイル一時コピーでffprobe全chapterとの照合を検証。
+
 ## 2.3.2.12
 
 ### Added

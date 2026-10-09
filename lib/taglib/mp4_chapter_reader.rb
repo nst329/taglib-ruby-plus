@@ -1,23 +1,30 @@
 # frozen_string_literal: true
 
+require 'digest'
+
 module TagLib::MP4
   # nativeの部分読取を成功扱いしないため、chapterの宣言数・参照・bytesを全件検証する。
   class ChapterReader
     MAX_BYTES = 32 * 1024 * 1024
     MAX_VALUES = 100_000
-    attr_reader :report, :values
+    attr_reader :report, :values, :sample_data
 
-    def initialize(file)
-      @file, @report, @values = file, {}, {}
+    def initialize(file, samples: false)
+      @file, @report, @values, @samples = file, {}, {}, samples
       ::File.open(file.name, 'rb') do |io|
         @io = io
         @atoms = file.send(:parse_mp4_atoms, io, 0, io.stat.size)
         reject!('fragmented MP4 chapters are unsupported', :unsupported) if @atoms.any? { |a| a[:type] == 'moof' }
         @moov = one(@atoms, 'moov')
-        ChapterSnapshot::STYLES.each { |style| capture(style) }
+        if @samples
+          capture(:quicktime)
+          reject!('Nero and QuickTime selection is ambiguous', :unsupported) if @sample_data && nero
+        else
+          ChapterSnapshot::STYLES.each { |style| capture(style) }
+        end
       end
     rescue ChapterSnapshotError, MdtaSaveError, SystemCallError, IOError => error
-      ChapterSnapshot::STYLES.each { |style| failed(style, error) }
+      (@samples ? [:quicktime] : ChapterSnapshot::STYLES).each { |style| failed(style, error) }
     ensure
       @report = MetadataSnapshot.copy(@report)
       @values.freeze
@@ -119,14 +126,14 @@ module TagLib::MP4
           reject!('chapter reference outside audio track', :unsupported) unless handler(track) == 'soun'
           bytes = payload(chap)
           reject!('multiple or empty chapter track references', :unsupported) unless bytes.size == 4
-          bytes.unpack1('N')
+          [identifier(track), bytes.unpack1('N')]
         end
       end
       return nil if references.empty?
       reject!('multiple chapter references', :unsupported) unless references.size == 1
       ids = tracks.map { |t| identifier(t) }
       reject!('duplicate track identifiers', :unsupported) unless ids.uniq == ids
-      matches = tracks.select { |t| identifier(t) == references.first }
+      matches = tracks.select { |t| identifier(t) == references.first.last }
       reject!('missing or duplicate chapter track') unless matches.size == 1
       track = matches.first
       reject!('unsupported chapter track handler', :unsupported) unless handler(track) == 'text'
@@ -135,15 +142,20 @@ module TagLib::MP4
       reject!('unsupported chapter mdhd', :unsupported) unless mdhd.size == 24 && mdhd.byteslice(0, 4) == "\0".b * 4
       scale = mdhd.byteslice(12, 4).unpack1('N')
       reject!('zero chapter timescale') if scale.zero?
-      validate_edit_list(track)
+      edit = validate_edit_list(track)
       minf = child(mdia, 'minf')
       validate_data_reference(minf)
       stbl = child(minf, 'stbl')
-      reject!('unsupported chapter timing or size table', :unsupported) if stbl[:children].any? { |a| %w[ctts stz2 co64].include?(a[:type]) }
+      unsupported = @samples ? %w[ctts stz2] : %w[ctts stz2 co64]
+      reject!('unsupported chapter timing or size table', :unsupported) if stbl[:children].any? { |a| unsupported.include?(a[:type]) }
       validate_description(stbl)
       sizes = sample_sizes(stbl)
       reject!('chapter sample bytes exceed limit', :unsupported) if sizes.sum > MAX_BYTES
       times = sample_times(stbl, scale, sizes.size)
+      if @samples
+        reject!('empty chapter sample table') if sizes.empty?
+        reject!('mdhd and stts duration mismatch') unless times.sum { |row| row[1] } == mdhd.byteslice(16, 4).unpack1('N')
+      end
       offsets = sample_offsets(stbl, sizes)
       ranges = @atoms.select { |a| a[:type] == 'mdat' }.map { |a| [a[:payload_offset], a[:end_offset]] }
       chapters = sizes.each_with_index.map do |size, i|
@@ -158,7 +170,21 @@ module TagLib::MP4
         unless suffix.empty? || suffix == [12].pack('N') + 'encd' + [0, 0x0100].pack('n2')
           reject!('unsupported chapter text modifiers', :unsupported)
         end
-        Chapter.new(times.fetch(i), utf8(bytes.byteslice(2, length)))
+        title = utf8(bytes.byteslice(2, length))
+        if @samples
+          start, duration = times.fetch(i)
+          { sample_index: i, start_ticks: start, duration_ticks: duration, title: title,
+            padding: i.zero? && sizes.size > 1 && start.zero? && title.empty?,
+            payload_size: size, payload_sha256: Digest::SHA256.hexdigest(bytes) }
+        else
+          Chapter.new(times.fetch(i), title)
+        end
+      end
+      if @samples
+        @sample_data = { track_id: identifier(track), source_track_id: references.first.first,
+                         media_timescale: scale, media_duration: mdhd.byteslice(16, 4).unpack1('N'),
+                         samples: chapters, movie: movie_timing, edit: edit }
+        return chapters
       end
       # nativeの非ゼロ開始時刻を表すpadding規約と同じ扱いにする。
       chapters.shift if chapters.size > 1 && chapters.first.start_time.zero? && chapters.first.title.empty?
@@ -210,12 +236,17 @@ module TagLib::MP4
     def sample_times(stbl, scale, count)
       entries = table(stbl, 'stts', 8)
       reject!('stts sample count mismatch') unless entries.sum(&:first) == count
+      reject!('invalid stts entry') if @samples && entries.any? { |number, delta| number.zero? || delta.zero? }
       time = 0
       entries.flat_map do |number, delta|
         Array.new(number) do
-          reject!('submillisecond QuickTime chapter time', :unsupported) unless (time * 1000 % scale).zero?
-          result = time * 1000 / scale
-          reject!('chapter time exceeds writer width', :unsupported) if result > 0xffff_ffff
+          if @samples
+            result = [time, delta]
+          else
+            reject!('submillisecond QuickTime chapter time', :unsupported) unless (time * 1000 % scale).zero?
+            result = time * 1000 / scale
+            reject!('chapter time exceeds writer width', :unsupported) if result > 0xffff_ffff
+          end
           time += delta
           result
         end
@@ -223,7 +254,18 @@ module TagLib::MP4
     end
 
     def sample_offsets(stbl, sizes)
-      chunks = table(stbl, 'stco', 4).flatten
+      offset_atoms = stbl[:children].select { |a| %w[stco co64].include?(a[:type]) }
+      reject!('missing or ambiguous chunk offset table') unless offset_atoms.size == 1
+      if offset_atoms.first[:type] == 'co64'
+        bytes = payload(offset_atoms.first)
+        reject!('invalid co64 header') unless bytes.size >= 8 && bytes.byteslice(0, 4) == "\0".b * 4
+        count = bytes.byteslice(4, 4).unpack1('N')
+        reject!('co64 exceeds entry limit', :unsupported) if count > MAX_VALUES
+        reject!('co64 count mismatch') unless bytes.size == 8 + count * 8
+        chunks = bytes.byteslice(8..).unpack('Q>*')
+      else
+        chunks = table(stbl, 'stco', 4).flatten
+      end
       mapping = table(stbl, 'stsc', 12)
       if sizes.empty? && chunks.empty? && mapping.empty?
         return []
@@ -236,7 +278,7 @@ module TagLib::MP4
         entry += 1 while entry + 1 < mapping.size && mapping[entry + 1][0] <= chunk + 1
         mapping[entry][1].times do
           reject!('stsc sample count mismatch') unless index < sizes.size
-          reject!('chapter offset exceeds native width', :unsupported) if offset > 0xffff_ffff
+          reject!('chapter offset exceeds native width', :unsupported) if !@samples && offset > 0xffff_ffff
           reject!('overlapping or unordered chapter samples', :unsupported) if offsets.any? && offset < offsets.last + sizes[index - 1]
           offsets << offset
           offset += sizes[index]
@@ -269,6 +311,20 @@ module TagLib::MP4
                      bytes.byteslice(16, 12) == [0, 0x0001_0000].pack('q>l>')
                  end
       reject!('unsupported chapter edit list', :unsupported) unless identity
+      { version: version, segment_duration: bytes.byteslice(8, version == 1 ? 8 : 4).unpack1(version == 1 ? 'Q>' : 'N'),
+        media_time: 0, media_rate: 65_536 }
+    end
+
+    # movie時間はmedia ticksとは別の尺度として保持する。
+    def movie_timing
+      bytes = payload(child(@moov, 'mvhd'))
+      version = bytes.getbyte(0)
+      width = version == 1 ? 32 : 20
+      reject!('unsupported movie header', :unsupported) unless [0, 1].include?(version)
+      reject!('truncated movie header') if bytes.size < (version == 1 ? 112 : 100)
+      scale = bytes.byteslice(version == 1 ? 20 : 12, 4).unpack1('N')
+      reject!('zero movie timescale') if scale.zero?
+      { timescale: scale, duration: bytes.byteslice(width - (version == 1 ? 8 : 4), version == 1 ? 8 : 4).unpack1(version == 1 ? 'Q>' : 'N') }
     end
   end
   private_constant :ChapterReader
