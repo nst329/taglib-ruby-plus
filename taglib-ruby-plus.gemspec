@@ -70,6 +70,19 @@ Gem::Specification.new do |s|
     'README.md'
   ]
   s.files = [
+    'lib/taglib/mp4_chapter_references.rb',
+    'test/mp4_chapter_references_test.rb',
+    'docs/mp4-chapter-reference-repair-design.md',
+    'docs/ADR/2026-10-09-QuickTime欠落chapter参照の明示的除去.md',
+    'docs/Memos/2026-10-09-QuickTime欠落chapter参照の検証.md',
+    'lib/taglib/mp4_property_update_plan.rb',
+    'lib/taglib/mp4_chapter_snapshot.rb',
+    'lib/taglib/mp4_chapter_reader.rb',
+    'test/mp4_snapshot_access_chapter_test.rb',
+    'docs/mp4-snapshot-access-chapter-design.md',
+    'docs/ADR/2026-10-09-snapshot値取得とchapter公開APIの設計.md',
+    'docs/Memos/2026-10-09-snapshot値取得とchapter公開APIの試作検証.md',
+    'docs/Memos/2026-10-09-snapshot値取得とchapter公開APIの実装検証.md',
     'docs/ADR/2026-10-09-snapshot追加APIの内部責務整理.md',
     'docs/Memos/2026-10-09-snapshot追加APIのリファクタリング検証.md',
     'docs/mp4-snapshot-extensions-design.md',

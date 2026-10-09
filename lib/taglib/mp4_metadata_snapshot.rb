@@ -45,6 +45,40 @@ module TagLib::MP4
         source_structure == other.source_structure
     end
 
+    # キーなしはnil、値なしキーは[]。型・locale・bytes・値順を持つ不変のRuby値を返す。
+    # 例: snapshot.mdta_values('gain') => [{ data_type: 33, locale: 1041, data: ''.b }]
+    def mdta_values(key)
+      validate_edit_keys!([key])
+      row = mdta.find { |entry| entry[0] == key }
+      return nil unless row
+
+      self.class.copy(row[2].map { |type, locale, bytes| { data_type: type, locale: locale, data: bytes } })
+    end
+
+    # 通常itemをatom型付きで取得する。例: { kind: :string_list, atom_data_type: 255, value: ['著作権'] }
+    def item(key)
+      validate_edit_keys!([key])
+      row = items.find { |entry| entry[0] == key }
+      return nil unless row
+
+      self.class.copy(kind: row[1], atom_data_type: row[2], value: row[3])
+    end
+
+    # 署名や未知形式を変換せず、画像形式整数とbytesを順序・重複付きで取得する。
+    def artworks
+      cover = item('covr')
+      return [].freeze unless cover
+      fail_input('covr is not cover_art_list') unless cover[:kind] == :cover_art_list
+
+      self.class.copy(cover[:value].map { |format, bytes| { format: format, data: bytes } })
+    end
+
+    # set_propertiesと同じ更新計画で期待snapshotを生成する。setter実行・保存は行わない。
+    def with_properties(properties)
+      plan = PropertyUpdatePlan.new(properties)
+      without(mdta: plan.remove_mdta).with(items: plan.items)
+    end
+
     # 指定キーを除いた期待snapshotを作る。復元時には除外した値も復元先から削除される。
     def without(items: [], mdta: [])
       validate_edit_keys!(items)

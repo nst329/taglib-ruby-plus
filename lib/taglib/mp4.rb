@@ -156,7 +156,7 @@ module TagLib::MP4
       raise ArgumentError, 'title must not contain NUL bytes' if title.include?("\0")
 
       @start_time = start_time
-      @title = title
+      @title = title.dup.freeze
       freeze
     end
 
@@ -226,7 +226,7 @@ module TagLib::MP4
     extend ::TagLib::FileOpenable
 
     MP4_TRACK_MEDIA_HANDLERS = %w[vide soun text].freeze
-    MP4_ATOM_CONTAINERS = %w[moov trak mdia minf stbl tref].freeze
+    MP4_ATOM_CONTAINERS = %w[moov trak mdia minf stbl tref udta edts dinf].freeze
 
     CHAPTER_STYLE_CODES = {
       nero: 1,
@@ -242,6 +242,7 @@ module TagLib::MP4
       initialize_without_snapshot(*args)
       @mp4_metadata_snapshot = metadata_snapshot
       @chapter_changes = {}
+      @chapter_reference_repair = nil
     end
 
     def chapters(style: nil)
@@ -307,6 +308,8 @@ module TagLib::MP4
       end
 
       atomic_save(write_metadata: false)
+    rescue ChapterSnapshotError => error
+      raise MdtaSaveError.new(error.message, phase: :prepare)
     end
 
     alias save_without_chapter_state save
@@ -316,11 +319,15 @@ module TagLib::MP4
       raise ArgumentError, 'save does not accept arguments' unless args.empty?
 
       atomic_save(write_metadata: true)
+    rescue ChapterSnapshotError => error
+      raise MdtaSaveError.new(error.message, phase: :prepare)
     end
 
     private
 
     def atomic_save(write_metadata:)
+      return save_reference_repair if @chapter_reference_repair
+
       source_path = name
       raise MdtaSaveError.new('MP4 file has no path', phase: :prepare) if source_path.nil? || source_path.empty?
 
@@ -411,6 +418,8 @@ module TagLib::MP4
           raise MdtaSaveError.new('temporary MP4 media payload changed', phase: :verify)
         end
       end
+    rescue ChapterSnapshotError => error
+      raise MdtaSaveError.new(error.message, phase: :verify)
     end
 
     def metadata_dirty?
@@ -467,16 +476,21 @@ module TagLib::MP4
       end
     end
 
-    def parse_mp4_atoms(io, start_offset, end_offset)
+    def parse_mp4_atoms(io, start_offset, end_offset, depth = 0, budget = [50_000])
+      raise MdtaSaveError.new('MP4 atom depth exceeds limit', phase: :verify) if depth > 16
       atoms = []
       offset = start_offset
       while offset < end_offset
+        budget[0] -= 1
+        raise MdtaSaveError.new('MP4 atom count exceeds limit', phase: :verify) if budget[0].negative?
+        raise MdtaSaveError.new('truncated MP4 atom header', phase: :verify) if end_offset - offset < 8
         header = read_mp4_bytes(io, offset, 8)
         size32 = header.unpack1('N')
         type = header.byteslice(4, 4)
         header_size = 8
         size = size32
         if size32 == 1
+          raise MdtaSaveError.new('truncated extended MP4 atom header', phase: :verify) if end_offset - offset < 16
           size = read_mp4_uint64(io, offset + 8)
           header_size = 16
         elsif size32.zero?
@@ -494,7 +508,7 @@ module TagLib::MP4
           children: []
         }
         if MP4_ATOM_CONTAINERS.include?(type)
-          atom[:children] = parse_mp4_atoms(io, atom[:payload_offset], atom[:end_offset])
+          atom[:children] = parse_mp4_atoms(io, atom[:payload_offset], atom[:end_offset], depth + 1, budget)
         end
         atoms << atom
         offset += size
@@ -674,13 +688,6 @@ module TagLib::MP4
         digest.update(chunk)
         remaining -= chunk.bytesize
       end
-    end
-
-    def chapter_snapshot
-      {
-        nero: chapter_values_for(:nero),
-        quicktime: chapter_values_for(:quicktime)
-      }
     end
 
     def apply_chapter_change_to_native(chapters, style)
@@ -934,33 +941,13 @@ module TagLib::MP4
 
     # 全入力を検証してから、通常itemと対応mdtaの変更を一度に適用する。
     def set_properties(values)
-      unless values.is_a?(Hash)
-        raise ArgumentError, 'properties must be a Hash'
-      end
-
-      entries = {}
-      values.each do |name, value|
-        canonical_name = canonical_property_name(name)
-        if entries.key?(canonical_name)
-          raise ArgumentError, "duplicate MP4 property: #{canonical_name.inspect}"
-        end
-        # name => [共通の更新対象, 検証済みの文字列] を保持し、候補構築時の再解決を避ける。
-        entries[canonical_name] = [property_targets(canonical_name),
-                                   validate_property_value(canonical_name, value)]
-      end
-
-      return self if entries.empty?
-
+      plan = PropertyUpdatePlan.new(values)
+      return self if plan.items.empty?
       set_items = ItemMap.new
-      entries.each_value do |target, value|
-        key = target.fetch(:atom)
-        item = Item.from_string_list([value])
-        # Freeform writerの推測に依存せず、保存前snapshotでも文字列型を確定する。
-        item.set_atom_data_type(1) if key.start_with?('----:')
-        set_items.insert(key, item)
+      plan.items.each do |key, kind, type, payload|
+        set_items.insert(key, snapshot_native_item(kind, type, payload))
       end
-      remove_mdta_keys = entries.values.flat_map { |target, _value| target.fetch(:remove_mdta) }.uniq
-      apply_property_changes(set_items, [], remove_mdta_keys)
+      apply_property_changes(set_items, [], plan.remove_mdta)
     end
 
     # 通常itemと対応mdta値を削除する。copyrightでは©cpyのみが対象。
@@ -1070,8 +1057,7 @@ module TagLib::MP4
     end
 
     def canonical_property_name(name)
-      name = name.to_s
-      name == 'show' ? 'TVShowName' : name
+      PropertyUpdatePlan.canonical_name(name)
     end
 
     # 解決・検証済みの更新対象をnativeへ一括commitし、途中状態を公開しない。
@@ -1085,11 +1071,7 @@ module TagLib::MP4
 
     # setterと影響APIの対象解決を共有し、説明用の別対応表を持たない。
     def property_targets(name, via: :set_property)
-      name = canonical_property_name(name)
-      unless via == :set_property || (via == :native_setter && name == 'title')
-        raise ArgumentError, "unsupported MP4 setter: #{via.inspect} for #{name.inspect}"
-      end
-      { atom: property_atom(name), remove_mdta: via == :native_setter ? [] : [MDTA_PROPERTY_KEYS[name]].compact }
+      PropertyUpdatePlan.targets(name, via: via)
     end
 
     def property_atom(name)
@@ -1119,24 +1101,6 @@ module TagLib::MP4
       value
     end
 
-    def validate_property_value(name, value)
-      if canonical_property_name(name) == CONTENT_RATING_PROPERTY
-        unless value.is_a?(ContentRating)
-          raise ArgumentError, 'contentRating must be a TagLib::MP4::ContentRating'
-        end
-        return value.to_s
-      end
-
-      raise ArgumentError, "#{name} must be a String" unless value.is_a?(String)
-
-      value = value.encode(Encoding::UTF_8)
-      unless value.valid_encoding?
-        raise ArgumentError, "#{name} must be a UTF-8 String"
-      end
-      raise ArgumentError, "#{name} must not contain NUL bytes" if value.include?("\0")
-
-      value
-    end
   end
 
   class Item
@@ -1159,3 +1123,6 @@ module TagLib::MP4
 end
 
 require_relative "mp4_metadata_snapshot"
+require_relative "mp4_property_update_plan"
+require_relative "mp4_chapter_snapshot"
+require_relative "mp4_chapter_references"

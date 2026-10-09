@@ -8,6 +8,17 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.10
+
+### Added
+- snapshotの型付き値取得、set_propertiesと変換を共有する期待snapshot生成を追加。
+- Nero／QuickTimeを独立保持するChapterSnapshotの取得・復元・論理差分・読取診断を追加。
+- QuickTime chapter参照の診断と欠落参照だけの明示的除去・原子的保存を追加。通常保存では自動修復しない。
+
+### Fixed
+- 不完全chapter構造を保存前に拒否し、原本と未保存状態を保持する。
+- Chapterのタイトル文字列をコピー・freezeして呼出側の変更から独立させる。
+
 ## 2.3.2.8
 
 ### Added

@@ -296,3 +296,42 @@ tag.set_property('copyright', '著作権表示') # ©cpyの単一値を設定
 `copyright`の読み取りは先頭値、`property_values('copyright')`は全値です。更新・削除は©cpyだけを対象とし、cprtとmdta copyrightを保持します。
 2.3.2.9のnativeビルドには`0003-mp4-property-atoms.patch`も必要です。
 保存幅などnative writer固有の制約は復元時にcommit前検証します。変更許可範囲の保持確認と変換後の原本置換は[連携設計](Docs/mp4-snapshot-extensions-design.md)を参照してください。
+
+### snapshot値取得・property期待値・chapter退避
+
+2.3.2.10では配列配置を知らずにsnapshotの値を取得できます。返却値は文字列を含め不変で、Fileを閉じても利用できます。
+
+```ruby
+snapshot.mdta_values('gain') # 型・locale・dataを持つHashの配列。キーなしはnil、値なしキーは[]。
+snapshot.item('©cpy')        # kind・atom_data_type・value。キーなしはnil。
+snapshot.artworks           # format整数・dataの配列。画像の順序と重複を保持。
+expected = snapshot.with_properties(title: '作品名', copyright: '著作権')
+```
+
+`with_properties`は`set_properties`と同じ変換規則で期待値を生成します。空文字は値として保持し、nilを削除の略記にはしません。既存の論理比較は値なしmdtaキーとキーなしを同一扱いにします。
+
+```ruby
+chapters = TagLib::MP4::File.open(source, false, &:chapter_snapshot)
+TagLib::MP4::File.open(destination, false) do |file|
+  file.tag.restore_metadata_snapshot(expected)
+  file.restore_chapter_snapshot(chapters) # 両形式を独立に全置換。選択形式が空なら削除。
+  file.save
+  raise 'chapter mismatch' unless chapters.diff(file.chapter_snapshot).empty?
+end
+```
+
+`styles: [:nero]`ならQuickTimeを維持します。`chapter_diagnostics`は形式別の`status`と`reason`を返し、未対応・不完全構造はsnapshot取得・復元・保存で拒否します。chapterはミリ秒時刻とタイトルの論理値が対象です。トラック構造やミリ秒未満の精度の復元は保証しません。対応範囲と上限は[設計書](docs/mp4-snapshot-access-chapter-design.md)を参照してください。
+
+### QuickTime chapterの欠落参照修復
+
+明示的な呼出しで、存在しないトラックへのchapter参照だけを除去できます。通常の読込・保存では自動修復しません。
+
+```ruby
+TagLib::MP4::File.open(path, false) do |file|
+  report = file.chapter_reference_diagnostics
+  removed = file.remove_dangling_chapter_references # 不変の修復記録。まだ原本は変更しない。
+  file.save_chapters unless removed.empty?        # 保存後の参照と保持対象を検証して原子的置換。
+end
+```
+
+実在する参照先は適否にかかわらず保持します。タグ・chapterの更新とは別々に保存してください。未対応・不正構造は例外で拒否します。返り値と対応範囲は[設計書](docs/mp4-chapter-reference-repair-design.md)を参照してください。
