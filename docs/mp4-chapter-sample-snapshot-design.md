@@ -1,5 +1,7 @@
 # 全chapter sampleの公開snapshot
 
+次期Ruby APIの整理は[再設計案](mp4-snapshot-redesign.md)を参照。本書は現行実装の契約を記録し、再設計案は未実装です。
+
 ## APIと取得契約
 
 ```ruby

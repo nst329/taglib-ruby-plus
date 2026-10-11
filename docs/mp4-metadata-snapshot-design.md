@@ -1,5 +1,7 @@
 # MP4公開metadata snapshot設計
 
+次期Ruby APIの整理は[再設計案](mp4-snapshot-redesign.md)を参照。本書は現行実装の契約を記録し、再設計案は未実装です。
+
 状態: 2.3.2.8向け実装済み・未配布。隔離したlegacy/grouped nativeとRuby bindingで検証。
 
 ## 前提と対象

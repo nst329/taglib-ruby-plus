@@ -74,6 +74,25 @@ class MP4SnapshotAccessChapterTest < Test::Unit::TestCase
     end
   end
 
+  def test_file_owns_fork_snapshot_entry_points
+    with_copy do |path|
+      TagLib::MP4::File.open(path, false) do |file|
+        from_file = file.metadata_snapshot
+        assert from_file.same_values?(file.tag.metadata_snapshot)
+        assert_equal file.tag.metadata_capabilities, file.metadata_capabilities
+        assert_equal file.tag.metadata_diagnostics.status, file.metadata_diagnostics.status
+
+        update = TagLib::MP4::MetadataUpdate.properties(title: 'through file')
+        file.apply_metadata_update(update)
+        assert_equal ['through file'], file.metadata_snapshot.item('©nam')[:value]
+
+        restored = from_file.with_properties(title: 'restored through file')
+        assert_same file, file.restore_metadata_snapshot(restored)
+        assert_equal ['restored through file'], file.metadata_snapshot.item('©nam')[:value]
+      end
+    end
+  end
+
   def test_property_expectation_matches_all_setters_and_reloaded_values
     with_mdta do |path|
       TagLib::MP4::File.open(path, false) do |file|

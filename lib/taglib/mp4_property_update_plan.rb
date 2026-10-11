@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
 module TagLib::MP4
-  # setter・影響説明・期待snapshotで更新対象と文字列変換を共有する内部計画。
-  class PropertyUpdatePlan
+  # setter・影響説明・期待snapshotで更新対象と文字列変換を共有する更新値。
+  # nativeへ適用する処理は持たず、入力全体を検証した結果だけを所有する。
+  class MetadataUpdate
     attr_reader :items, :remove_mdta
 
     def initialize(properties)
@@ -14,13 +15,28 @@ module TagLib::MP4
         raise ArgumentError, "duplicate MP4 property: #{canonical.inspect}" if entries.key?(canonical)
 
         target = self.class.targets(canonical)
-        native = Item.from_string_list([self.class.text(canonical, value)])
-        native.set_atom_data_type(1) if target[:atom].start_with?('----:')
-        entries[canonical] = [target, [target[:atom], :string_list, native.atom_data_type, native._snapshot_strings]]
+        text = self.class.text(canonical, value)
+        # The update plan is native-independent. iTunes atoms use the native
+        # text item type (255); reverse-DNS/freeform atoms use UTF-8 (1).
+        atom_type = target[:atom].start_with?('----:') ? 1 : 255
+        entries[canonical] = [target, [target[:atom], :string_list, atom_type, [text]]]
       end
       @items = MetadataSnapshot.copy(entries.values.map(&:last))
       @remove_mdta = MetadataSnapshot.copy(entries.values.flat_map { |target, _row| target[:remove_mdta] }.uniq)
       freeze
+    end
+
+    def self.properties(values)
+      new(values)
+    end
+
+    # MetadataSnapshotへ同じ更新を適用する。Tagのnative編集とは分離する。
+    def apply(snapshot)
+      unless snapshot.is_a?(MetadataSnapshot)
+        raise ArgumentError, 'expected MetadataSnapshot'
+      end
+
+      snapshot.without(mdta: remove_mdta).with(items: items)
     end
 
     def self.canonical_name(name)
@@ -54,5 +70,8 @@ module TagLib::MP4
       text
     end
   end
+
+  # Internal callers are migrated incrementally; the public name is MetadataUpdate.
+  PropertyUpdatePlan = MetadataUpdate
   private_constant :PropertyUpdatePlan
 end

@@ -130,4 +130,27 @@ class MP4SnapshotEditDiffTest < Test::Unit::TestCase
       end
     end
   end
+
+  def test_explicit_value_and_exact_comparison_modes
+    original = snapshot
+    empty_removed = original.without(mdta: ['key-only'])
+
+    assert original.same_values?(empty_removed)
+    assert original.values_equal?(empty_removed)
+    assert_equal false, original.exact_equal?(empty_removed)
+    assert_empty original.diff(empty_removed)
+    refute_empty original.diff(empty_removed, mode: :exact)
+    assert_equal original.exact_equal?(empty_removed), original.diff(empty_removed, mode: :exact).empty?
+    assert_raise(TagLib::MP4::MetadataSnapshotError) { original.diff(empty_removed, mode: :unknown) }
+  end
+
+  def test_metadata_update_is_reusable_for_snapshot_expectation
+    update = TagLib::MP4::MetadataUpdate.properties(title: 'new')
+    expected = update.apply(snapshot)
+
+    assert_equal ['new'], expected.item('©nam')[:value]
+    assert_equal ['title'], update.remove_mdta
+    assert_equal update.items, TagLib::MP4::MetadataUpdate.properties(title: 'new').items
+    assert_raise(ArgumentError) { update.apply({}) }
+  end
 end

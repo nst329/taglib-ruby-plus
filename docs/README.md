@@ -2,6 +2,10 @@
 
 インストール・利用例・開発手順は[README](../README.md)、リリースごとの変更は[CHANGELOG](../CHANGELOG.md)を参照してください。Ruby APIの詳細は`docs/taglib/`のYARDコメントにあります。
 
+## 次期設計案
+
+[MP4 snapshotのRuby API再設計](mp4-snapshot-redesign.md): 原版APIを維持し、fork追加APIを整理する案。未実装であり、以下の現行API契約とは区別してください。
+
 ## 機能別の設計・契約
 
 | 目的 | 文書 |

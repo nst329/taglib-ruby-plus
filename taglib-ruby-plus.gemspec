@@ -71,6 +71,7 @@ Gem::Specification.new do |s|
   ]
   s.files = [
     'docs/README.md',
+    'docs/mp4-snapshot-redesign.md',
     'docs/Memos/2026-10-09-2.3.2.12のバイナリgem検証.md',
     'docs/ADR/2026-10-09-2.3.2.12のリファクタリングとバイナリgem.md',
     'docs/Memos/2026-10-09-限定MP4修復の実装検証.md',

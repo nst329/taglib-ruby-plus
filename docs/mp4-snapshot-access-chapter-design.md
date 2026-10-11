@@ -1,5 +1,7 @@
 # MP4 snapshot値取得・property期待値・chapter公開APIの設計
 
+次期Ruby APIの整理は[再設計案](mp4-snapshot-redesign.md)を参照。本書は現行実装の契約を記録し、再設計案は未実装です。
+
 ## 位置付け
 
 2026-10-09。2.3.2.9への試作検証から決め、追加のQuickTime異常構造検証を経て2.3.2.10のRuby層に実装した設計。native ABI・patchは変更しない。

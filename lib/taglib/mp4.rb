@@ -240,7 +240,7 @@ module TagLib::MP4
 
     def initialize(*args)
       initialize_without_snapshot(*args)
-      @mp4_metadata_snapshot = metadata_snapshot
+      @mp4_metadata_snapshot = metadata_save_signature
       @chapter_changes = {}
       @chapter_reference_repair = nil
       @chapter_timing_repair = nil
@@ -333,7 +333,7 @@ module TagLib::MP4
       source_path = name
       raise MdtaSaveError.new('MP4 file has no path', phase: :prepare) if source_path.nil? || source_path.empty?
 
-      expected_metadata = metadata_snapshot
+      expected_metadata = metadata_save_signature
       expected_chapters = chapter_snapshot
       # Chapter edits can append media regardless of which public save API is used.
       chapter_edits = @chapter_changes.any?
@@ -398,7 +398,7 @@ module TagLib::MP4
 
     def verify_saved_copy(path, expected_metadata, expected_chapters, source_media, chapter_edits:)
       self.class.open(path, false) do |verification|
-        actual_metadata = verification.send(:metadata_snapshot)
+        actual_metadata = verification.send(:metadata_save_signature)
         unless actual_metadata == expected_metadata
           raise MdtaSaveError.new('temporary MP4 metadata verification failed', phase: :verify)
         end
@@ -425,7 +425,7 @@ module TagLib::MP4
     end
 
     def metadata_dirty?
-      metadata_snapshot != @mp4_metadata_snapshot
+      metadata_save_signature != @mp4_metadata_snapshot
     end
 
     def chapter_media_signature(path)
@@ -700,7 +700,9 @@ module TagLib::MP4
       end
     end
 
-    def metadata_snapshot
+    # Internal save verification signature. This deliberately stays separate
+    # from the public typed MetadataSnapshot returned by Tag.
+    def metadata_save_signature
       {
         items: tag.item_map.to_a.sort_by(&:first).map { |key, item| [key, item_snapshot(item, key)] },
         mdta: tag.mdta_items.group_by(&:key_index).sort_by(&:first).flat_map do |_index, values|
@@ -943,7 +945,15 @@ module TagLib::MP4
 
     # 全入力を検証してから、通常itemと対応mdtaの変更を一度に適用する。
     def set_properties(values)
-      plan = PropertyUpdatePlan.new(values)
+      apply_metadata_update(MetadataUpdate.properties(values))
+    end
+
+    # Apply a previously validated MetadataUpdate as one native edit.
+    def apply_metadata_update(plan)
+      unless plan.is_a?(MetadataUpdate)
+        raise ArgumentError, 'expected TagLib::MP4::MetadataUpdate'
+      end
+
       return self if plan.items.empty?
       set_items = ItemMap.new
       plan.items.each do |key, kind, type, payload|

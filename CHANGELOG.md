@@ -8,6 +8,15 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.14
+
+### Added
+- MP4 metadata snapshotの比較契約をvalues/exactへ分離し、Fileからのsnapshot取得・復元・更新を公開。
+- MetadataUpdateを導入し、snapshot期待値とnative適用の更新計画を共有。
+
+### Fixed
+- 保存検証用metadata署名を公開snapshotから分離し、既存の保存トランザクションを維持。
+
 ## 2.3.2.13
 
 ### Added

@@ -61,7 +61,7 @@ class MP4RepairInvestigationTest < Test::Unit::TestCase
     file.define_singleton_method(:verify_saved_copy) do |path, expected, *args, **keywords|
       TagLib::MP4::File.open(path, false) do |read|
         observed[:expected] = expected
-        observed[:actual] = read.send(:metadata_snapshot)
+        observed[:actual] = read.send(:metadata_save_signature)
       end
       verifier.call(path, expected, *args, **keywords)
     end

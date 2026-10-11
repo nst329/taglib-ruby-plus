@@ -39,6 +39,27 @@ module TagLib::MP4
       other.is_a?(self.class) && logical_values == other.send(:logical_values)
     end
 
+    # Compare values while allowing an empty mdta key to be absent in the
+    # destination. This is the comparison used for cross-file restoration.
+    alias same_values? logical_equal?
+
+    # Exact value comparison includes the presence of empty mdta keys but not
+    # source-specific atom indexes or layout observations.
+    def exact_equal?(other)
+      other.is_a?(self.class) && exact_values == other.send(:exact_values)
+    end
+
+    def ==(other)
+      exact_equal?(other)
+    end
+    alias eql? ==
+
+    def hash
+      exact_values.hash
+    end
+
+    alias values_equal? same_values?
+
     # Observed metadata structure only; this does not mean byte-identical MP4/unknown atoms.
     def structure_equal?(other)
       logical_equal?(other) && mdta.map { |k, i, _v| [k, i] } == other.mdta.map { |k, i, _v| [k, i] } &&
@@ -75,8 +96,7 @@ module TagLib::MP4
 
     # set_propertiesと同じ更新計画で期待snapshotを生成する。setter実行・保存は行わない。
     def with_properties(properties)
-      plan = PropertyUpdatePlan.new(properties)
-      without(mdta: plan.remove_mdta).with(items: plan.items)
+      MetadataUpdate.properties(properties).apply(self)
     end
 
     # 指定キーを除いた期待snapshotを作る。復元時には除外した値も復元先から削除される。
@@ -99,10 +119,18 @@ module TagLib::MP4
 
     # logical_equal?と同じ生値を比較し、画像・binaryの診断表示だけをサイズとSHA-256に縮約する。
     # 例: expected.diff(actual) => [{ area: :mdta, key: 'gain', change: :changed, changes: [:locale], ... }]
-    def diff(actual)
+    def diff(actual, mode: :values)
+      diff_with_mode(actual, mode: mode)
+    end
+
+    # Return value differences using the explicit comparison contract. The
+    # existing diff method remains the cross-file (:values) form.
+    def diff_with_mode(actual, mode: :values)
       fail_input('expected MetadataSnapshot') unless actual.is_a?(self.class)
-      actual_values = actual.send(:logical_values)
-      differences = logical_values.flat_map do |area, values|
+      fail_input('unknown snapshot diff mode') unless %i[values exact].include?(mode)
+      before_values = mode == :exact ? exact_values : logical_values
+      actual_values = mode == :exact ? actual.send(:exact_values) : actual.send(:logical_values)
+      differences = before_values.flat_map do |area, values|
         diff_area(area, values, actual_values.fetch(area))
       end
       self.class.copy(differences)
@@ -207,9 +235,17 @@ module TagLib::MP4
       mdta.reject { |_key, _index, values| values.empty? }.to_h { |key, _index, values| [key, values] }
     end
 
+    def exact_mdta
+      mdta.to_h { |key, _index, values| [key, values] }
+    end
+
     # 一致判定と差分の両方で、物理index・キー順・値なしmdtaキーを除く。
     def logical_values
       { items: items.to_h { |key, *value| [key, value] }, mdta: logical_mdta }
+    end
+
+    def exact_values
+      { items: items.to_h { |key, *value| [key, value] }, mdta: exact_mdta }
     end
 
     def validate_edit_keys!(keys)
@@ -631,18 +667,47 @@ module TagLib::MP4
 
     def snapshot_native_item(kind, type, payload)
       item = if kind == :string_list
-               Item.from_string_list([]).tap { |v| v._set_snapshot_strings(payload) }
+               if Item.from_string_list([]).respond_to?(:_set_snapshot_strings)
+                 Item.from_string_list([]).tap { |v| v._set_snapshot_strings(payload) }
+               else
+                 Item.from_string_list(payload)
+               end
              elsif kind == :cover_art_list
                Item.from_cover_art_list(payload.map { |format, bytes| CoverArt.new(format, bytes) })
              else
                Item.public_send("from_#{kind}", payload)
              end
-      item.set_atom_data_type(type)
+      item.set_atom_data_type(type) if item.respond_to?(:set_atom_data_type)
       item
     end
   end
 
   class File
+    # File is the public owner of fork-specific snapshot operations. The Tag
+    # methods remain available internally while callers no longer need to
+    # reach through File#tag.
+    def metadata_snapshot
+      tag.metadata_snapshot
+    end
+
+    def restore_metadata_snapshot(snapshot)
+      tag.restore_metadata_snapshot(snapshot)
+      self
+    end
+
+    def metadata_diagnostics
+      tag.metadata_diagnostics
+    end
+
+    def metadata_capabilities
+      tag.metadata_capabilities
+    end
+
+    def apply_metadata_update(update)
+      tag.apply_metadata_update(update)
+      self
+    end
+
     alias tag_without_metadata_context tag
     private :tag_without_metadata_context
 

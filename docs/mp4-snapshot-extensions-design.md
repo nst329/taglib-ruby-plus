@@ -1,5 +1,7 @@
 # MP4 snapshot追加API
 
+次期Ruby APIの整理は[再設計案](mp4-snapshot-redesign.md)を参照。本書は現行実装の契約を記録し、再設計案は未実装です。
+
 2026-10-09。状態: 2.3.2.9に実装、legacy/grouped両backendで検証済み。
 
 ## 前提と保持範囲
