@@ -23,4 +23,4 @@
 型・順序・重複・空値・index、不正入力、差分の分類・縮約、全propertyの更新影響、title=互換性、copyrightと保存時の原本保護を確認。
 前回成功した全体範囲の再実行は、内部責務の整理だけを理由に繰り返さない。全体の既知wrapper数failureは前回記録のまま。
 
-[設計](../mp4-snapshot-extensions-design.md) / [検証メモ](../../docs/Memos/2026-10-09-snapshot追加APIのリファクタリング検証.md)
+[設計](../mp4-snapshot-extensions-design.md) / [検証メモ](../../docs/Memos/2026-10-09-snapshot追加APIの実装検証.md)

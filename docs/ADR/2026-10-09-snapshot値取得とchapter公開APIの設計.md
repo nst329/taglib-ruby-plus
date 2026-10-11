@@ -26,7 +26,7 @@ MListNewの配列検索・型付き値の分解・Nero/QuickTime退避を減ら�
 
 2.3.2.9の挙動は変えない。値取得を先に実装できる。chapterはnative診断が必要で、QuickTime異常構造・上限・精度の検証を追加してから公開する。今回の試作は不完全readerの現状を成功テストで記録しているため、製品修正時には期待値を「明示拒否」へ変更する。
 
-[詳細設計](../mp4-snapshot-access-chapter-design.md) / [試作検証](../Memos/2026-10-09-snapshot値取得とchapter公開APIの試作検証.md)
+[詳細設計](../mp4-snapshot-access-chapter-design.md) / [試作検証](../Memos/2026-10-09-snapshot値取得とchapter公開APIの実装検証.md)
 
 ## 追加検証後の実装判断
 

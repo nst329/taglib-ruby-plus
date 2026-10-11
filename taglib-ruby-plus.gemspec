@@ -70,6 +70,7 @@ Gem::Specification.new do |s|
     'README.md'
   ]
   s.files = [
+    'docs/README.md',
     'docs/Memos/2026-10-09-2.3.2.12のバイナリgem検証.md',
     'docs/ADR/2026-10-09-2.3.2.12のリファクタリングとバイナリgem.md',
     'docs/Memos/2026-10-09-限定MP4修復の実装検証.md',
@@ -101,14 +102,11 @@ Gem::Specification.new do |s|
     'test/mp4_snapshot_access_chapter_test.rb',
     'docs/mp4-snapshot-access-chapter-design.md',
     'docs/ADR/2026-10-09-snapshot値取得とchapter公開APIの設計.md',
-    'docs/Memos/2026-10-09-snapshot値取得とchapter公開APIの試作検証.md',
     'docs/Memos/2026-10-09-snapshot値取得とchapter公開APIの実装検証.md',
     'docs/ADR/2026-10-09-snapshot追加APIの内部責務整理.md',
-    'docs/Memos/2026-10-09-snapshot追加APIのリファクタリング検証.md',
     'docs/mp4-snapshot-extensions-design.md',
     'docs/ADR/2026-10-09-snapshot追加APIの試作結果に基づく設計.md',
     'docs/ADR/2026-10-09-snapshot追加APIの実装と検証後の見直し.md',
-    'docs/Memos/2026-10-09-snapshot追加APIの試作検証.md',
     'docs/Memos/2026-10-09-snapshot追加APIの実装検証.md',
     'patches/taglib/0003-mp4-property-atoms.patch',
     'tasks/taglib_patches.rb',
@@ -159,7 +157,6 @@ Gem::Specification.new do |s|
     'patches/taglib/proposals/0003-ruby-metadata-snapshot.patch',
     'docs/ADR/2026-10-08-mp4公開snapshotの実装.md',
     'docs/Memos/2026-10-08-mp4公開snapshotの実装検証.md',
-    'docs/Memos/2026-10-08-mp4公開snapshotの設計試作検証.md',
     'docs/ADR/2026-10-08-mp4公開snapshotと字幕保持の責務.md',
     'docs/Memos/2026-10-08-mdta上流設計のnative試作検証.md',
     'docs/ADR/2026-10-08-mdta上流向け公開API設計.md',

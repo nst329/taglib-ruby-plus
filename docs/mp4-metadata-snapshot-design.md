@@ -138,7 +138,7 @@ MListNewのtests/mp4_zero_index_repairer_test.rb内のtest_multiple_values_after
 
 ## 設計試作の結果
 
-[試作検証記録](Memos/2026-10-08-mp4公開snapshotの設計試作検証.md)に実行手順と成功/反例の区別を記録した。Ruby試作は本番公開APIではない。単純なcapture/restoreが実MP4で論理往復する一方、atomDataType欠落・keys削除のindex変化・flat一覧のキー欠落を再現した。これらを許容する実装にはしない。
+[試作検証記録](Memos/2026-10-08-mp4公開snapshotの実装検証.md)に実行手順と成功/反例の区別を記録した。Ruby試作は本番公開APIではない。単純なcapture/restoreが実MP4で論理往復する一方、atomDataType欠落・keys削除のindex変化・flat一覧のキー欠落を再現した。これらを許容する実装にはしない。
 
 MListNewの現行preserved_by?は重複数を比較するが同一キー内の順序を比較しない。gemのlogical_equal?は順序を比較する。MListNew移行時にはpreserved_by?のsubset契約とgemの完全一致を混同せず、期待する追加タグを明示する。
 

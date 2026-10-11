@@ -93,4 +93,4 @@ Nero writerはchapter数255件・タイトル255bytesを上限として切り詰
 
 タグ・chapter同時保存は既存File#saveを使う。新しい保存APIは追加しない。既存の保存準備と一時出力の再読込検証で公開ChapterSnapshotを使い、完全読取できない原本または出力を原本置換前に拒否する。save/save_chaptersの拒否はMdtaSaveError(committed: false)で伝える。呼出側独自の期待タグsnapshotの保存前照合を自動追加するものではなく、外部保存後だけの比較を原本保護とみなさない。
 
-試作で検証済みの範囲と再現手順は[Memos](Memos/2026-10-09-snapshot値取得とchapter公開APIの試作検証.md)、決定理由は[ADR](ADR/2026-10-09-snapshot値取得とchapter公開APIの設計.md)を参照。
+試作で検証済みの範囲と再現手順は[Memos](Memos/2026-10-09-snapshot値取得とchapter公開APIの実装検証.md)、決定理由は[ADR](ADR/2026-10-09-snapshot値取得とchapter公開APIの設計.md)を参照。

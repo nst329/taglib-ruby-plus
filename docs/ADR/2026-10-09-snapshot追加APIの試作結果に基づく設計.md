@@ -32,4 +32,4 @@ MListNew移行では、型情報を保持した期待snapshotの生成、保存�
 追加native試作とcopyrightテスト、既存関連テストは両backendで各37 tests / 424 assertions成功。製品nativeパッチにはまだ取り込んでいない。
 
 最終実装の詳細: [設計](../mp4-snapshot-extensions-design.md)
-試験記録: [検証メモ](../../docs/Memos/2026-10-09-snapshot追加APIの試作検証.md)
+試験記録: [検証メモ](../../docs/Memos/2026-10-09-snapshot追加APIの実装検証.md)
