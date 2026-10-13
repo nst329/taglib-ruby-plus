@@ -71,3 +71,7 @@ Apple Siliconなら`taglib-ruby-plus-arm64-darwin`、Intelなら
 - Ruby 3.2向けplatform gemは、RubyGemsのplatform選択だけではABIを分けられないため別途設計する。
 - GitHub Actions内の公開にはリポジトリに関連付いた`GITHUB_TOKEN`を使用する。利用者の
   Bundlerは`https://rubygems.pkg.github.com/nst329`を明示し、PAT classicで認証する。
+
+## 2.3.2.15の公開
+
+chapter参照の診断・明示的解除と全sample読取をRuby層で拡張する。native ABI、Ruby 4.0、配布名、deployment targetは維持する。新規v2.3.2.15タグでarm64・Intel・source gemをビルドし、既存artifactを上書きしない。各native gemのsmoke testで参照診断、署名v1、指定参照解除と再読込を確認する。

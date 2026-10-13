@@ -116,24 +116,16 @@ module TagLib::MP4
       reject!(error.message)
     end
 
-    # 複数trefを列挙し、読取対応範囲の単一音声chapter参照を厳密に読む。
+    # 論理readerは単一音声参照、sample captureは一対象へ収束する全参照を読む。
     def quicktime
       tracks = @moov[:children].select { |a| a[:type] == 'trak' }
-      references = tracks.flat_map do |track|
-        track[:children].select { |a| a[:type] == 'tref' }.filter_map do |tref|
-          chap = child(tref, 'chap', required: false)
-          next unless chap
-          reject!('chapter reference outside audio track', :unsupported) unless handler(track) == 'soun'
-          bytes = payload(chap)
-          reject!('multiple or empty chapter track references', :unsupported) unless bytes.size == 4
-          [identifier(track), bytes.unpack1('N')]
-        end
-      end
+      references = chapter_references(tracks)
       return nil if references.empty?
-      reject!('multiple chapter references', :unsupported) unless references.size == 1
+      targets = references.map { |row| row[:target_track_id] }.uniq
+      reject!('multiple chapter candidates', :unsupported) unless targets.size == 1
       ids = tracks.map { |t| identifier(t) }
       reject!('duplicate track identifiers', :unsupported) unless ids.uniq == ids
-      matches = tracks.select { |t| identifier(t) == references.first.last }
+      matches = tracks.select { |t| identifier(t) == targets.first }
       reject!('missing or duplicate chapter track') unless matches.size == 1
       track = matches.first
       reject!('unsupported chapter track handler', :unsupported) unless handler(track) == 'text'
@@ -181,7 +173,8 @@ module TagLib::MP4
         end
       end
       if @samples
-        @sample_data = { track_id: identifier(track), source_track_id: references.first.first,
+        @sample_data = { track_id: identifier(track), source_track_id: references.size == 1 ? references.first[:source_track_id] : nil,
+                         source_references: references,
                          media_timescale: scale, media_duration: mdhd.byteslice(16, 4).unpack1('N'),
                          samples: chapters, movie: movie_timing, edit: edit }
         return chapters
@@ -189,6 +182,29 @@ module TagLib::MP4
       # nativeの非ゼロ開始時刻を表すpadding規約と同じ扱いにする。
       chapters.shift if chapters.size > 1 && chapters.first.start_time.zero? && chapters.first.title.empty?
       ChapterSnapshot.new(quicktime: chapters).quicktime
+    end
+
+    # sample captureのみ対応範囲を拡張する。論理snapshot/native保存の制限は維持する。
+    def chapter_references(tracks)
+      tracks.flat_map do |track|
+        track[:children].select { |atom| atom[:type] == 'tref' }.each_with_index.flat_map do |tref, tref_index|
+          chap = child(tref, 'chap', required: false)
+          next [] unless chap
+          source_handler = handler(track)
+          reject!('chapter reference outside audio track', :unsupported) unless @samples || source_handler == 'soun'
+          bytes = payload(chap)
+          valid_size = !bytes.empty? && (bytes.size % 4).zero? && (@samples || bytes.size == 4)
+          reject!('multiple or empty chapter track references', :unsupported) unless valid_size
+          header = payload(child(track, 'tkhd'))
+          source_id = identifier(track)
+          bytes.unpack('N*').each_with_index.map do |target, index|
+            { source_track_id: source_id, target_track_id: target, tref_index: tref_index,
+              reference_index: index, source_handler: source_handler, source_enabled: (header.unpack1('N') & 1) != 0 }
+          end
+        end
+      end.tap do |references|
+        reject!('multiple chapter references', :unsupported) if !@samples && references.size > 1
+      end
     end
 
     def handler(track)

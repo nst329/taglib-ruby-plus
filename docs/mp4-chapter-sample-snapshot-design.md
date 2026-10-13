@@ -21,7 +21,9 @@ end
 | 属性／sampleキー | 型・単位・意味 |
 | --- | --- |
 | track_id | Integer、参照先chapter Track ID |
-| source_track_id | Integer、唯一の参照元音声Track ID |
+| source_track_id | 単一参照ではInteger、複数参照ではnil |
+| source_references | 順序・重複・元位置・handler・enabledを持つ不変参照配列 |
+| signature_version | 単一参照は1、複数参照は2 |
 | media_timescale | Integer、1秒あたりmedia ticks |
 | media_duration | Integer、mdhdのmedia ticks。stts合計との一致を要求 |
 | samples | Array<Hash>、paddingを含む全sample、原表の順序 |
@@ -45,9 +47,11 @@ end
 
 短いidentity editを持つ修復前ファイルも全media sampleを取得できる。editのsegment_duration（editなしならmvhd duration）およびmovie durationがmediaの全期間を覆うかを整数の交差積で判定し、不足ならclippedを返す。これは不完全なsample読取ではなく、表示範囲の不足である。`require_ffprobe_comparable!`はclippedの場合にChapterSnapshotErrorを投げる。completeは対応するidentity写像の全期間を意味し、任意のffprobeバージョンの出力やcodec警告を保証しない。FFprobeが時刻を別のtime_baseに丸める場合は完全一致しないことを明示して扱う。
 
-対応: 単一音声chap参照→text chapter、mdhd v0、mvhd v0/v1、elst v0/v1の単一identityまたはelstなし、stts/stsz/stsc/stcoまたはco64、自己完結dref、UTF-8 title、modifierなしまたは既存encd modifier。
+対応: 非音声を含む単一／複数chap参照→一つのtext chapter、mdhd v0、mvhd v0/v1、elst v0/v1の単一identityまたはelstなし、stts/stsz/stsc/stcoまたはco64、自己完結dref、UTF-8 title、modifierなしまたは既存encd modifier。
 
-拒否: 非音声参照、複数ID／複数参照（同じIDの重複も含む）、重複Track ID／chap／atom、NeroとQuickTime併存、非text、mdhd v1、ctts/stz2、外部data reference、trim・empty edit・rate変更・複数edit、fragmented moof、不正境界・表の件数不一致・mdat外／truncated payload・無効UTF-8/NUL・非対応modifier。順序が逆転する物理sample配置にも対応しない。最大10万sample、sample payload合計32MiBという既存readerの上限を維持する。
+拒否: 異なる複数対象、空chap、重複Track ID／chap／atom、NeroとQuickTime併存、非text、mdhd v1、ctts/stz2、外部data reference、trim・empty edit・rate変更・複数edit、fragmented moof、不正境界・表の件数不一致・mdat外／truncated payload・無効UTF-8/NUL・非対応modifier。順序が逆転する物理sample配置にも対応しない。最大10万sample、sample payload合計32MiBという既存readerの上限を維持する。
+
+拡張した参照選択・署名v2・通常保存との境界は[参照読取と明示的解除](mp4-chapter-reference-read-design.md)を参照。以下の過去の検証結果は当時の対応範囲を記録する。
 
 ## 署名と保持比較
 
@@ -62,7 +66,7 @@ after.require_ffprobe_comparable!
 
 v1署名は、version=1・chapter/source ID・media timescale/duration・sample数をunsigned 64bit big endianで連結し、各sampleのindex/start/duration/payload_sizeと32bytesのpayload SHA256を同じ順序で追加し、全体をSHA256にする。payloadは長さprefix、title、encdを含む。titleとpaddingはこれらから一意に導出される。physical offset、moov位置、tref_index、tkhd、mvhd、elstは含めない。このため時間修復、offset移動、通常タグ保存で一致し、sample欠落・順序・時刻・payload変更では不一致となる。
 
-`preserved_equal?(other)`はこの契約だけを比較し、snapshot全体の時間context一致を意味しない。signatureを永続化する場合はアプリ側でもschema version=1を記録する。参照元を意図的に変更した場合も不一致となる。全mdat・他track・タグの保持はこの署名の範囲外。
+`preserved_equal?(other)`はこの契約だけを比較し、snapshot全体の時間context一致を意味しない。signatureを永続化する場合はsnapshot.signature_versionを記録する（単一参照1、複数参照2）。参照元を意図的に変更した場合も不一致となる。全mdat・他track・タグの保持はこの署名の範囲外。
 
 ## 例外契約
 

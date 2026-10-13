@@ -27,7 +27,9 @@ module TagLib::MP4
     }.freeze
     attr_reader :report, :removed, :source_digest, :preservation_signature, :timing_report
 
-    def initialize(file, timing: false, ignore_metadata: false)
+    def initialize(file, timing: false, ignore_metadata: false, removal: nil)
+      @removal = removal
+      @selected_keys = normalize_selection(removal) unless removal.nil? || removal == :missing
       @ignore_metadata = ignore_metadata
       @file = file
       ::File.open(file.name, 'rb') do |io|
@@ -45,11 +47,12 @@ module TagLib::MP4
         # [source_track_id, 元tref_index] => 保存後tref_index。例: [2, 1] => 0。
         @tref_positions = {}
         @report = collect_references
+        validate_selection!
         collect_offsets
         @timing_report = MetadataSnapshot.copy(collect_timing) if timing
         prepare_atom_edits
         @preservation_signature = MetadataSnapshot.copy(preservation(@atoms))
-        @removed = @report.select { |r| r[:status] == :missing }
+        @removed = @report.select { |r| selected_reference?(r) }
         io.rewind
         @source_digest = Digest::SHA256.file(io).hexdigest
         fail!('source changed during reference analysis', :source_changed) unless @source_digest == initial_digest
@@ -66,7 +69,7 @@ module TagLib::MP4
     # 保存後の位置を順序付きで計算する。元位置は公開report/removedに保持する。
     def retained_report
       positions = Hash.new(0)
-      report.reject { |r| r[:status] == :missing }.map do |r|
+      report.reject { |r| selected_reference?(r) }.map do |r|
         key = [r[:source_track_id], r[:tref_index]]
         index = positions[key]
         positions[key] += 1
@@ -74,7 +77,7 @@ module TagLib::MP4
       end
     end
 
-    # 欠落がある場合だけ、handleから独立した不変の保存計画を生成する。
+    # 明示した除去対象がある場合だけ、handleから独立した保存計画を生成する。
     def repair_plan
       return nil if removed.empty?
 
@@ -85,6 +88,41 @@ module TagLib::MP4
     end
 
     private
+
+    REFERENCE_KEYS = %i[source_track_id tref_index reference_index target_track_id].freeze
+    private_constant :REFERENCE_KEYS
+
+    def reference_key(row)
+      REFERENCE_KEYS.map { |key| row.fetch(key) }
+    end
+
+    def normalize_selection(rows)
+      valid = rows.is_a?(Array) && rows.all? do |row|
+        row.is_a?(Hash) && REFERENCE_KEYS.all? { |key| row[key].is_a?(Integer) && row[key] >= 0 }
+      end
+      unless valid
+        fail!('references must contain diagnostic positions', :invalid_selection)
+      end
+      keys = rows.map { |row| reference_key(row) }
+      fail!('duplicate reference selection', :invalid_selection) unless keys.uniq.size == keys.size
+      keys.to_h { |key| [key, true] }
+    end
+
+    def selected_reference?(row)
+      return row[:status] == :missing if @removal == :missing
+      @selected_keys && @selected_keys.key?(reference_key(row))
+    end
+
+    def validate_selection!
+      return unless @selected_keys
+      actual = @report.to_h { |row| [reference_key(row), row] }
+      fail!('selected reference no longer exists', :invalid_selection) unless @selected_keys.keys.all? { |key| actual.key?(key) }
+      # 診断行全体を渡した場合、参照位置以外の観測値の変化も拒否する。
+      @removal.each do |row|
+        current = actual.fetch(reference_key(row))
+        fail!('reference diagnostics changed', :invalid_selection) unless row.all? { |key, value| current.key?(key) && current[key] == value }
+      end
+    end
 
     # 派生editorが検証済みatomだけを変更するための解析中hook。
     def prepare_atom_edits; end
@@ -197,7 +235,8 @@ module TagLib::MP4
       tracks = @moov[:children].select { |a| a[:type] == 'trak' }.map { |t| track_info(t) }
       fail!('duplicate track IDs', :unsupported) unless tracks.map(&:first).uniq.size == tracks.size
       targets = tracks.to_h { |id, handler, track| [id, [handler, track]] }
-      tracks.flat_map do |id, _handler, track|
+      tracks.flat_map do |id, source_handler, track|
+        source_enabled = (payload(child(track, 'tkhd')).unpack1('N') & 1) != 0
         saved_index = 0
         track[:children].select { |a| a[:type] == 'tref' }.each_with_index.flat_map do |tref, tref_index|
           chap = child(tref, 'chap', required: false)
@@ -206,7 +245,10 @@ module TagLib::MP4
             data = payload(chap)
             fail!('invalid chap reference payload') unless (data.bytesize % 4).zero?
             ids = data.unpack('N*')
-            retained = ids.select { |target| targets.key?(target) }
+            retained = ids.each_with_index.reject do |target, index|
+              selected_reference?(source_track_id: id, tref_index: tref_index, reference_index: index,
+                                  target_track_id: target, status: targets.key?(target) ? :existing : :missing)
+            end.map(&:first)
             @edits[chap[:offset]] = retained if retained != ids
           end
           @tref_positions[[id, tref_index]] = saved_index
@@ -221,6 +263,7 @@ module TagLib::MP4
                        :inappropriate
                      end
             { source_track_id: id, tref_index: tref_index, reference_index: index, target_track_id: target,
+              source_handler: source_handler, source_enabled: source_enabled,
               target_exists: !info.nil?, target_handler: info&.first, status: status }
           end
         end
@@ -425,13 +468,27 @@ module TagLib::MP4
     # 欠落参照だけを保存待ちにする。存在する参照先の適否には関与しない。
     def remove_dangling_chapter_references
       ensure_reference_repair_isolated!
-      analysis = ChapterReferences.new(self)
+      analysis = ChapterReferences.new(self, removal: :missing)
       if @chapter_reference_repair
         unless @chapter_reference_repair.source_digest == analysis.source_digest
           raise ChapterReferenceError.new('source changed since repair was planned', code: :source_changed)
         end
         return [].freeze
       end
+      @chapter_reference_repair = analysis.repair_plan
+      analysis.removed
+    end
+
+    # 診断で指定したchap関係だけを解除する。トラックやmediaは削除しない。
+    def remove_chapter_references(references:)
+      ensure_reference_repair_isolated!
+      unless references.is_a?(Array)
+        raise ChapterReferenceError.new('references must be an array', code: :invalid_selection)
+      end
+      if @chapter_reference_repair
+        raise ChapterReferenceError.new('reference repair already planned', code: :pending_changes)
+      end
+      analysis = ChapterReferences.new(self, removal: references)
       @chapter_reference_repair = analysis.repair_plan
       analysis.removed
     end
@@ -502,7 +559,7 @@ module TagLib::MP4
     def verify_reference_copy(path, plan, timing: false)
       self.class.open(path, false) do |verification|
         checked = ChapterReferences.new(verification)
-        unless checked.removed.empty? && (timing ? checked.report : checked.retained_report) == plan.retained_report &&
+        unless checked.report == plan.retained_report &&
                checked.preservation_signature == plan.preservation_signature
           raise MdtaSaveError.new('chapter atom repair verification failed', phase: :verify)
         end

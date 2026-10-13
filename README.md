@@ -41,9 +41,9 @@ The TagLib shared library is also required at runtime.
 パッケージマネージャー版のTagLibを使う場合も、MP4のmdta機能には上記パッチを
 適用したTagLibを別prefixへ構築して指定してください。
 
-Then install taglib-ruby-plus 2.3.2.14:
+Then install taglib-ruby-plus 2.3.2.15:
 
-    gem install taglib-ruby-plus --version 2.3.2.14
+    gem install taglib-ruby-plus --version 2.3.2.15
 
 ### macOS platform gem
 
@@ -68,9 +68,9 @@ Gemfile:
     source 'https://rubygems.org'
     source 'https://rubygems.pkg.github.com/nst329' do
       # Apple Siliconの場合
-      gem 'taglib-ruby-plus-arm64-darwin', '2.3.2.14'
+      gem 'taglib-ruby-plus-arm64-darwin', '2.3.2.15'
       # Intelの場合は上記の代わりに次を指定
-      # gem 'taglib-ruby-plus-x86_64-darwin', '2.3.2.14'
+      # gem 'taglib-ruby-plus-x86_64-darwin', '2.3.2.15'
     end
 
 platform gemがまだ公開されていない環境、または対応外platformでは、同じregistryの
@@ -91,7 +91,7 @@ which makes it hard for taglib-ruby-plus to find it. To get the library location
 Note the line with the path at the end. Provide that using the `TAGLIB_DIR`
 environment variable when installing, like this:
 
-    TAGLIB_DIR=/opt/homebrew/opt/taglib gem install taglib-ruby-plus --version 2.3.2.14
+    TAGLIB_DIR=/opt/homebrew/opt/taglib gem install taglib-ruby-plus --version 2.3.2.15
 
 If you're using bundler, like this:
 

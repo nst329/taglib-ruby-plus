@@ -18,6 +18,7 @@
 | snapshotの部分編集・差分・copyright | [snapshot追加API](mp4-snapshot-extensions-design.md) |
 | snapshot値の取得・property期待値・chapter退避 | [値取得とChapterSnapshot](mp4-snapshot-access-chapter-design.md) |
 | paddingを含む全chapter sampleの退避 | [chapter sample snapshot](mp4-chapter-sample-snapshot-design.md) |
+| chapter参照の読取・指定関係の解除 | [参照読取と明示的解除](mp4-chapter-reference-read-design.md) |
 | QuickTime chapterの欠落参照の除去 | [chapter参照修復](mp4-chapter-reference-repair-design.md) |
 | 未対応metadataの限定保持保存・chapter時間診断と修復 | [限定MP4修復](mp4-unindexed-metadata-and-chapter-timing-repair-design.md) |
 | macOS向けバイナリgemの配布 | [native gem](native-gem-design.md) |

@@ -106,6 +106,14 @@ jobs:
               file.tag.title = 'native sample preservation smoke'
               abort 'tag save failed' unless file.save
               abort 'chapter sample preservation mismatch' unless samples.preserved_equal?(file.chapter_sample_snapshot)
+              abort 'single-source signature changed' unless samples.signature_version == 1 && samples.source_references.size == 1
+              references = file.chapter_reference_diagnostics
+              abort 'source diagnostics unavailable' unless references.all? { |row| row[:source_handler] == 'soun' && [true, false].include?(row[:source_enabled]) }
+              removed = file.remove_chapter_references(references: references)
+              abort 'explicit reference removal mismatch' unless removed == references && removed.size == 1
+              abort 'explicit reference save failed' unless file.save_chapters
+              abort 'chapter references remain' unless file.chapter_reference_diagnostics.empty?
+              abort 'unreferenced track was read as chapters' unless file.chapter_sample_snapshot.nil?
             end
           end
           RUBY

@@ -1,5 +1,8 @@
 # QuickTime chapter参照の診断・明示的除去
 
+指定参照だけの解除とsample読取の対応拡張は[参照読取と明示的解除](mp4-chapter-reference-read-design.md)を参照。既存一括欠落除去・native chapter書込の範囲は維持する。
+
+
 ## 前提・責務
 
 通常の読込・保存へ自動修復を追加しない。2.3.2.9の合成MP4で、`remove_chapters(style: :quicktime)`と`save_chapters`がtrueを返しても`chap → 0`と全ファイルbytesが変わらない現象を再現した。nativeのQtChapterList::removeは参照先chapterトラックが見つからないと何もせずtrueを返す。

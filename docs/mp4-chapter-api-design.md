@@ -1,5 +1,8 @@
 # MP4チャプターAPI設計
 
+指定参照だけの解除とsample読取の対応拡張は[参照読取と明示的解除](mp4-chapter-reference-read-design.md)を参照。既存一括欠落除去・native chapter書込の範囲は維持する。
+
+
 ## 1. 適用範囲
 
 | 項目 | 内容 |

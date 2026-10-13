@@ -257,14 +257,14 @@ class MP4ChapterSampleSnapshotTest < Test::Unit::TestCase
     assert_raise(TagLib::MP4::ChapterSnapshotError) { snapshot }
   end
 
-  def test_multiple_references_and_dual_formats_are_ambiguous
+  def test_same_target_references_are_readable_but_dual_formats_are_ambiguous
     seed
     edit_fixture(@path) do |moov|
       source = fixture_tracks(moov).find { |track| fixture_child(track, 'tref') }
       source[:children] << fixture_child(source, 'tref').dup
     end
-    error = assert_raise(TagLib::MP4::ChapterSnapshotError) { snapshot }
-    assert_equal :unsupported, error.code
+    assert_equal 2, snapshot.source_references.size
+    assert_nil snapshot.source_track_id
     # 参照を戻してからNeroを併存させる。
     edit_fixture(@path) do |moov|
       source = fixture_tracks(moov).find { |track| fixture_child(track, 'tref') }
