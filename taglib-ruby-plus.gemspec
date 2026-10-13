@@ -70,6 +70,12 @@ Gem::Specification.new do |s|
     'README.md'
   ]
   s.files = [
+    'lib/taglib/mp4_color_metadata.rb',
+    'test/mp4_color_metadata_test.rb',
+    'test/mp4_purl_context_test.rb',
+    'docs/mp4-color-and-context-diagnostics.md',
+    'docs/ADR/2026-10-13-colr診断とpurlのcontext生成拒否.md',
+    'docs/Memos/2026-10-13-MP4診断保存の合成検証.md',
     'docs/README.md',
     'docs/mp4-snapshot-redesign.md',
     'docs/Memos/2026-10-09-2.3.2.12のバイナリgem検証.md',

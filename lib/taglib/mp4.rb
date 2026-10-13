@@ -326,12 +326,52 @@ module TagLib::MP4
 
     private
 
+    # mdta内への新規purlはFFmpegが数値indexとして誤解釈するため、原本置換前に拒否する。
+    # 既存purlの警告許容判断やcontext再構成は行わず、元のcontextを保持する。
+    def ensure_purl_context_preserved!
+      return unless tag.item_map['purl']
+
+      report = MetadataStructureReader.read(name, detailed: true)
+      contexts = report[:structure][:contexts]
+      unless contexts
+        raise MdtaSaveError.new('cannot inspect purl metadata context', phase: :prepare)
+      end
+      contexts.each do |context|
+        next unless context[:handler] == 'mdta'
+        next if context[:items].any? { |item| item[:raw_type] == 'purl' }
+
+        raise MdtaSaveError.new('cannot introduce fourcc purl into mdta ilst; separate mdir context writing is unsupported', phase: :prepare)
+      end
+    end
+
+    # nativeの論理値比較で見えない、未編集purlのdata type等の書換えを拒否する。
+    def verify_unchanged_purl_bytes!(path)
+      original = @mp4_metadata_snapshot[:items].assoc('purl')
+      return unless original && original == metadata_save_signature[:items].assoc('purl')
+
+      unless purl_raw_signature(name) == purl_raw_signature(path)
+        raise MdtaSaveError.new('native writer changed unedited purl bytes', phase: :verify)
+      end
+    end
+
+    def purl_raw_signature(path)
+      contexts = MetadataStructureReader.read(path, detailed: true)[:structure][:contexts]
+      raise MdtaSaveError.new('cannot verify purl metadata context', phase: :verify) unless contexts
+
+      contexts.flat_map do |context|
+        context[:items].select { |item| item[:raw_type] == 'purl' }.map do |item|
+          [context[:path], context[:handler], item[:raw_digest]]
+        end
+      end
+    end
+
     def atomic_save(write_metadata:)
       return save_reference_repair if @chapter_reference_repair
       return save_timing_repair if @chapter_timing_repair
 
       source_path = name
       raise MdtaSaveError.new('MP4 file has no path', phase: :prepare) if source_path.nil? || source_path.empty?
+      ensure_purl_context_preserved! if write_metadata
 
       expected_metadata = metadata_save_signature
       expected_chapters = chapter_snapshot
@@ -397,6 +437,7 @@ module TagLib::MP4
     end
 
     def verify_saved_copy(path, expected_metadata, expected_chapters, source_media, chapter_edits:)
+      verify_unchanged_purl_bytes!(path)
       self.class.open(path, false) do |verification|
         actual_metadata = verification.send(:metadata_save_signature)
         unless actual_metadata == expected_metadata
@@ -478,7 +519,8 @@ module TagLib::MP4
       end
     end
 
-    def parse_mp4_atoms(io, start_offset, end_offset, depth = 0, budget = [50_000])
+    # atom境界と再帰・件数を検証する共通parser。診断用の任意読込予算も共有する。
+    def parse_mp4_atoms(io, start_offset, end_offset, depth = 0, budget = [50_000], read_budget = nil)
       raise MdtaSaveError.new('MP4 atom depth exceeds limit', phase: :verify) if depth > 16
       atoms = []
       offset = start_offset
@@ -486,6 +528,7 @@ module TagLib::MP4
         budget[0] -= 1
         raise MdtaSaveError.new('MP4 atom count exceeds limit', phase: :verify) if budget[0].negative?
         raise MdtaSaveError.new('truncated MP4 atom header', phase: :verify) if end_offset - offset < 8
+        consume_mp4_read_budget!(read_budget, 8)
         header = read_mp4_bytes(io, offset, 8)
         size32 = header.unpack1('N')
         type = header.byteslice(4, 4)
@@ -493,6 +536,7 @@ module TagLib::MP4
         size = size32
         if size32 == 1
           raise MdtaSaveError.new('truncated extended MP4 atom header', phase: :verify) if end_offset - offset < 16
+          consume_mp4_read_budget!(read_budget, 8)
           size = read_mp4_uint64(io, offset + 8)
           header_size = 16
         elsif size32.zero?
@@ -510,7 +554,7 @@ module TagLib::MP4
           children: []
         }
         if MP4_ATOM_CONTAINERS.include?(type)
-          atom[:children] = parse_mp4_atoms(io, atom[:payload_offset], atom[:end_offset], depth + 1, budget)
+          atom[:children] = parse_mp4_atoms(io, atom[:payload_offset], atom[:end_offset], depth + 1, budget, read_budget)
         end
         atoms << atom
         offset += size
@@ -520,6 +564,13 @@ module TagLib::MP4
       end
 
       atoms
+    end
+
+    def consume_mp4_read_budget!(budget, length)
+      return unless budget
+
+      budget[0] -= length
+      raise MdtaSaveError.new('MP4 atom read exceeds limit', phase: :verify) if budget[0].negative?
     end
 
     def read_mp4_bytes(io, offset, length)
@@ -1142,3 +1193,4 @@ require_relative "mp4_chapter_references"
 
 require_relative "mp4_atom_repair"
 require_relative "mp4_unindexed_mdta"
+require_relative "mp4_color_metadata"

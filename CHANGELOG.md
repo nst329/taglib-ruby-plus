@@ -8,6 +8,17 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.16
+
+### Added
+- 読み取り専用color_metadata_diagnosticsでtrack・sample entry・colrの構造と欠落値を診断。
+- metadata_context_diagnosticsでmeta/ilstの位置、handler、keys、item解釈とraw digestを公開。
+
+### Fixed
+- mdta contextへの新規purl生成をprepareで拒否し、未編集purlのraw変更を保存検証で拒否。
+- SWIG定義のAtomDataTypeを完全修飾し、wrapper再生成時の名前空間エラーを解消。
+- colrの推測修復や安全判定緩和を加えず、非ゼロ欠落chapter参照の選択解除と対象外保持を合成MP4で検証。
+
 ## 2.3.2.14
 
 ### Added

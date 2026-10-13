@@ -657,5 +657,5 @@ namespace TagLib {
   VALUE _snapshot_strings() { return taglib_mp4_snapshot_strings(*$self); }
   void _set_snapshot_strings(VALUE rows) { taglib_mp4_set_snapshot_strings($self, rows); }
   unsigned int atom_data_type() { return static_cast<unsigned int>($self->atomDataType()); }
-  void set_atom_data_type(unsigned int type) { $self->setAtomDataType(static_cast<MP4::AtomDataType>(type)); }
+  void set_atom_data_type(unsigned int type) { $self->setAtomDataType(static_cast<TagLib::MP4::AtomDataType>(type)); }
 }

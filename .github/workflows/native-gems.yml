@@ -90,6 +90,10 @@ jobs:
           require 'tmpdir'
           snapshot = TagLib::MP4::File.open('test/data/mp4.m4a', false) do |file|
             abort 'native snapshot API unavailable' unless file.tag.metadata_capabilities[:atomic_restore_v1]
+            colors = file.color_metadata_diagnostics
+            abort 'color diagnostics unavailable' unless colors[:status] == :complete && colors.frozen? && !colors[:entries].empty?
+            contexts = file.metadata_context_diagnostics
+            abort 'metadata context diagnostics unavailable' unless contexts[:status] == :complete && contexts.frozen?
             file.tag.metadata_snapshot
           end
           Dir.mktmpdir('native-gem-snapshot-') do |dir|

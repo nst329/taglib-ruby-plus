@@ -21,6 +21,7 @@
 | chapter参照の読取・指定関係の解除 | [参照読取と明示的解除](mp4-chapter-reference-read-design.md) |
 | QuickTime chapterの欠落参照の除去 | [chapter参照修復](mp4-chapter-reference-repair-design.md) |
 | 未対応metadataの限定保持保存・chapter時間診断と修復 | [限定MP4修復](mp4-unindexed-metadata-and-chapter-timing-repair-design.md) |
+| colrとmetadata contextの構造診断・purl保存拒否 | [色構造とcontext診断](mp4-color-and-context-diagnostics.md) |
 | macOS向けバイナリgemの配布 | [native gem](native-gem-design.md) |
 | TagLib 2.3.2への最低要件変更 | [2.3.2移行](taglib-2.3.2-upgrade-design.md) |
 
@@ -53,6 +54,7 @@ nativeパッチの適用方法と構成は[patches/taglib](../patches/taglib/REA
 
 ### 修復・配布・障害調査
 
+- [MP4色構造・purl・非ゼロ欠落参照の合成検証](Memos/2026-10-13-MP4診断保存の合成検証.md)
 - [QuickTime欠落chapter参照](Memos/2026-10-09-QuickTime欠落chapter参照の検証.md)
 - [複数tref修復と時間診断](Memos/2026-10-09-複数tref修復と時間診断の検証.md)
 - [実MP4の複数tref修復](Memos/2026-10-09-実MP4複数tref修復検証-010226_001.md)

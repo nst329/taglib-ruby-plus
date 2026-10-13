@@ -109,6 +109,7 @@ module TagLib::MP4
         if @chapter_changes.any? || @chapter_reference_repair || @chapter_timing_repair
           raise MdtaSaveError.new('save chapter and repair plans separately from unindexed metadata', phase: :prepare)
         end
+        ensure_purl_context_preserved!
         expected = unindexed_regular_snapshot
         raw_plan, sanitize_plan, preserved, chapters = prepare_unindexed_context(source_path)
         ::FileUtils.cp(source_path, temp_path)
@@ -199,6 +200,7 @@ module TagLib::MP4
 
     # native viewで見えないraw群も独立に比較し、順序・重複・payload喪失を拒否する。
     def verify_unindexed_copy(path, raw_plan, expected, preserved, chapters)
+      verify_unchanged_purl_bytes!(path)
       self.class.open(path, false) do |verification|
         seen = nil
         editor = MP4AtomEditor.new(verification, metadata_transform: ->(raw) { seen = UnindexedMdtaPlan.new(raw); raw })

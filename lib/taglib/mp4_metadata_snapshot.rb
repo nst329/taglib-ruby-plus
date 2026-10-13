@@ -377,11 +377,12 @@ module TagLib::MP4
     LIMIT = 64 * 1024 * 1024
     CONTAINERS = %w[moov udta trak mdia].freeze
 
-    def self.read(path, item_types: {})
-      new.read(path, item_types: item_types)
+    def self.read(path, item_types: {}, detailed: false)
+      new.read(path, item_types: item_types, detailed: detailed)
     end
 
-    def read(path, item_types: {})
+    def read(path, item_types: {}, detailed: false)
+      @detailed = detailed
       @item_types = item_types
       @issues, @metas, @count = [], [], 0
       @ordinary_keys = {}
@@ -460,10 +461,34 @@ module TagLib::MP4
         issue(:handler_keys_mismatch, name, 'handler/keys/ilst do not match a supported layout')
       end
       keys = key_row ? read_keys(io, key_row, name) : []
-      @metas << { path: name, handler: handler, keys: keys }
+      context = { path: name, offset: start - header, end_offset: finish, handler: handler, keys: keys,
+                  handler_offset: handler_row && handler_row[1] - handler_row[3],
+                  keys_offset: key_row && key_row[1] - key_row[3],
+                  ilst_offset: ilst && ilst[1] - ilst[3], items: [] }
+      @metas << (@detailed ? context : { path: name, handler: handler, keys: keys })
       return unless ilst
 
-      boxes(io, ilst[1], ilst[2]).each do |type, payload, ending, _h|
+      boxes(io, ilst[1], ilst[2]).each_with_index do |(type, payload, ending, item_header), item_index|
+        numeric = type.getbyte(0) == 0
+        index = type.unpack1('N')
+        if @detailed
+          digest = Digest::SHA256.new
+          io.seek(payload - item_header)
+          remaining = ending - payload + item_header
+          while remaining.positive?
+            chunk = io.read([remaining, 64 * 1024].min)
+            raise 'truncated metadata item digest' unless chunk && !chunk.empty?
+            digest.update(chunk)
+            remaining -= chunk.bytesize
+          end
+          context[:items] << { item_index: item_index, offset: payload - item_header, end_offset: ending,
+                              raw_type: type, raw_type_hex: type.unpack1('H*'), numeric_value: index,
+                              interpretation: handler == 'mdta' && numeric ? :key_index : :fourcc,
+                              key_index: handler == 'mdta' && numeric ? index : nil,
+                              key: handler == 'mdta' && numeric && index.between?(1, keys.size) ? keys[index - 1] : nil,
+                              index_in_keys: handler == 'mdta' ? index.between?(1, keys.size) : nil,
+                              raw_digest: digest.hexdigest }
+        end
         unless handler == 'mdta' && type.getbyte(0) == 0
           inspect_ordinary(io, type, payload, ending, name)
           next
@@ -557,6 +582,15 @@ module TagLib::MP4
       raise 'trailing keys bytes' unless offset == data.bytesize
       issue(:duplicate_key, path + '/keys', 'duplicate mdta key') unless keys.uniq == keys
       keys
+    end
+  end
+
+  class File
+    # 保存済みmeta/ilstの位置とitem識別子を返す。snapshotの構造比較契約とは分離する。
+    def metadata_context_diagnostics
+      info = MetadataStructureReader.read(name, detailed: true,
+        item_types: tag.item_map.to_a.to_h { |key, item| [key, item.type] })
+      MetadataSnapshot.copy(info.merge(status: info[:structure].key?(:contexts) ? :complete : :failed))
     end
   end
 

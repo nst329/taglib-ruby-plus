@@ -735,6 +735,48 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
     end
   end
 
+  # 実ログの0/4/0を再現し、選択解除と別handleの全packet読取を確認する。
+  def test_exact_zero_nonzero_zero_selection_preserves_all_payloads
+    with_fixture do |path|
+      inject(path, 1 => [0], 2 => [4], 3 => [0])
+      before = retained(path)
+      packet_args = [ENV.fetch('FFPROBE', 'ffprobe'), '-v', 'error', '-show_packets',
+                     '-show_data_hash', 'sha256', '-show_entries', 'packet=stream_index,size,data_hash', '-of', 'json', path]
+      packets, _error, status = Open3.capture3(*packet_args)
+      assert status.success?
+      TagLib::MP4::File.open(path, false) do |file|
+        rows = file.chapter_reference_diagnostics
+        assert_equal %w[vide soun sbtl], rows.map { |row| row[:source_handler] }
+        assert_equal [0, 4, 0], rows.map { |row| row[:target_track_id] }
+        assert rows.all? { |row| row[:status] == :missing && !row[:target_exists] }
+        selected = rows.select { |row| row[:target_track_id] == 0 }
+        assert_equal selected, file.remove_chapter_references(references: selected)
+        assert file.save_chapters
+      end
+      assert_equal [[2, 4]], references(path), '未選択の非ゼロ欠落参照を保持'
+      TagLib::MP4::File.open(path, false) do |file|
+        assert_raise(TagLib::MP4::MdtaSaveError) { file.save }
+        selected = file.chapter_reference_diagnostics
+        assert_equal selected, file.remove_chapter_references(references: selected)
+        assert file.save_chapters
+      end
+      assert_equal before, retained(path)
+      TagLib::MP4::File.open(path, false) do |file|
+        assert_empty file.chapter_reference_diagnostics
+        assert_equal chapters, file.nero_chapters
+        assert_equal 1, file.tag.artwork.size
+        assert_not_empty file.tag.mdta_items
+      end
+      after_packets, error, status = Open3.capture3(*packet_args)
+      assert status.success?, error
+      assert_equal JSON.parse(packets), JSON.parse(after_packets), '画像を含む全streamの全packet payload'
+      _, error, status = Open3.capture3(ENV.fetch('FFMPEG', 'ffmpeg'), '-v', 'error', '-i', path,
+        '-map', '0:v:0', '-map', '0:a', '-f', 'null', '-')
+      assert status.success?, error
+      assert_empty error
+    end
+  end
+
   if ENV['LEGACY_CHAPTER_REPRO']
     # 2.3.2.9の公開APIで「trueなのに欠落参照が残る」現象を再現する専用実行。
     def test_legacy_remove_success_leaves_dangling_reference

@@ -75,3 +75,10 @@ Apple Siliconなら`taglib-ruby-plus-arm64-darwin`、Intelなら
 ## 2.3.2.15の公開
 
 chapter参照の診断・明示的解除と全sample読取をRuby層で拡張する。native ABI、Ruby 4.0、配布名、deployment targetは維持する。新規v2.3.2.15タグでarm64・Intel・source gemをビルドし、既存artifactを上書きしない。各native gemのsmoke testで参照診断、署名v1、指定参照解除と再読込を確認する。
+
+## 2.3.2.16の公開
+
+colrとmetadata contextの読み取り専用診断、purlの新規mdta生成拒否と未編集raw保持検証を収録する。
+新規v2.3.2.16タグのpushで既存workflowのarm64・Intel・source buildとGitHub Packages公開を実行する。
+native ABIと既存配布名は維持し、各native gemのsmoke testへ新しい診断APIの読取・凍結確認を追加する。
+既存2.3.2.15のtag/packageは変更しない。採用理由は[colr/purl ADR](ADR/2026-10-13-colr診断とpurlのcontext生成拒否.md)を参照。
