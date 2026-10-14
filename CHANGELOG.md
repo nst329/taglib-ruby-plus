@@ -8,6 +8,18 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.18
+
+### Added
+- 単一mdta contextの`keys`末尾へpurlを追加し、数値key indexのilst itemとして安全に復元可能にした。
+- purl以外のmacOS系UTF-8 mdta keyをsnapshot復元で追加できるようにした。
+- purlの複数値・locale・data type・raw digestを保持する診断と回帰テストを追加。
+
+### Fixed
+- mdtaへ文字列fourcc `purl`を追加することで発生していた`1886745196`等の不正indexを防止。
+- atom境界、親サイズ、chunk offset、mdat範囲を検証し、安全に拡張できない場合は原本を変更せず拒否。
+- 既存fourcc `purl`、複数context、keys/ilst不整合を専用codeで明示的に拒否。
+
 ## 2.3.2.17
 
 ### Added

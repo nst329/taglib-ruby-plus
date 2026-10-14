@@ -477,7 +477,7 @@ module TagLib::MP4
     end
 
     def metadata_dirty?
-      !@purl_pair_snapshot.nil? || metadata_save_signature != @mp4_metadata_snapshot
+      !@purl_pair_snapshot.nil? || !@purl_mdta_plan.nil? || metadata_save_signature != @mp4_metadata_snapshot
     end
 
     def chapter_media_signature(path)

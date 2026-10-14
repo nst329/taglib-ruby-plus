@@ -1,4 +1,4 @@
-# MP4 purl snapshot復元（2.3.2.17）
+# MP4 purl snapshot復元（2.3.2.18）
 
 ## 対応範囲
 
@@ -7,7 +7,7 @@
 | 単一mdir | purlをそのmdirへ保存。snapshotにrawがあれば完全保持 |
 | 単一mdta、既存purlあり | 同じcontextでraw bytes・data type・payload・data順・既存item位置を保持 |
 | mdtaとmdirが各1個、mdta側は数値itemのみ | File APIで通常itemを既存mdirへ、mdta値をmdtaへ復元 |
-| 単一mdta、purlなし | 復元前にpurl_context_creation_unsupportedで拒否 |
+| 単一mdta、purlなし | `keys`末尾へpurlを追加し、数値key indexのitemとして保存 |
 | 複数mdta/mdir、mdta側にも通常itemがある複合構造、handler不一致、不正keys | 推測せず拒否 |
 
 複合保存は既存mdirをmdtaより前へ移動する。context内部のpurl raw順は保持する。
@@ -31,17 +31,18 @@ raise 'metadata values changed' unless snapshot.same_values?(restored)
 raise 'purl raw bytes changed' unless snapshot.purl_raw_digests == restored.purl_raw_digests
 ```
 
-`purl_raw_digests`はraw purl atom全体のSHA-256を順序付きで返す。
+`purl_raw_digests`はcontext固有の外側item typeを`purl`へ正規化したraw purl atomのSHA-256を順序付きで返す。
+mdtaへ移した場合も、data子atomのtype・locale・payload・順序を比較できる。
 raw bytesはFileを閉じた後もsnapshotが所有する。purl削除候補では空配列を返す。
 rawを伴うsnapshotのpurl型やpayloadを変更するとpurl_raw_mismatchで拒否する。
 通常のpurl値変更にはproperty APIを利用し、完全保持のsnapshot復元とは分ける。
 
-mdtaのみ・purlなしの場合は次の例外を捕捉し、字幕mux成果物を確定せず失敗として扱う。
-このケースの成功保証はないため、暫定省略を削除しても全ファイルを成功させられるわけではない。
+mdtaのみ・purlなしの場合も、単一contextかつatom構造とchunk offsetが検証できれば自動追加する。
+複数context、既存keys/ilst不整合、mdat外offsetなどは次の専用エラーで成果物を確定せず失敗として扱う。
 
 ```ruby
 rescue TagLib::MP4::MetadataSnapshotError => error
-  if error.code == :purl_context_creation_unsupported
+  if error.code == :purl_atom_extension_unsupported
     # phase == :restore。native状態・原本を変更する前の拒否。
     raise
   end
@@ -49,7 +50,8 @@ rescue TagLib::MP4::MetadataSnapshotError => error
 ```
 
 `metadata_capabilities`は`purl_raw_snapshot_v1`、`purl_existing_mdir_restore_v1`をtrue、
-`purl_context_creation`をfalseとして返す。構造ごとの保存可否はdiagnosticsで確認する。
+`purl_context_creation`をfalseとして返す。mdtaの既存context拡張可否はdiagnosticsで確認する。
+診断の`purl`は`writable`、`existing`、`key_index`、`context_handler`、`code`、`reason`を返す。
 
 ## 原子性とエラー
 
@@ -64,9 +66,13 @@ rename前の失敗では原本SHAを維持し、MdtaSaveErrorのcommittedはfals
 rename後の再open失敗はphase=:reopen、committed=true。codeは省略可能な追加属性。
 元の通常保存やchapter保存のphase/committed契約は変えない。
 
-復元時の主なcodeはpurl_context_creation_unsupported、ambiguous_purl_context、purl_raw_mismatch。
+復元時の主なcodeはpurl_atom_extension_unsupported、purl_fourcc_context、ambiguous_purl_context、
+purl_raw_mismatch、purl_data_type_change。
 直接保存時のpurl型変更はMdtaSaveError(code: :purl_data_type_change, phase: :prepare)。
 複合候補と他編集の混在はpending_changes、解析後の原本変更はsource_changedで拒否する。
 
 moov/udta/meta以外、断片化MP4、既存atom editorが保証できないmedia構造は対象外。
 FFprobeはgemの実行時依存にはせず、回帰テストで警告の新規発生を検証する。
+
+`purl`以外のmacOS系UTF-8 mdta keyは、snapshotの`mdta`に存在すれば既存のsnapshot復元経路で同じく末尾追加できる。
+通常itemからmdtaへ意味を移す互換変換は、4文字コードとの衝突を避けるためpurlに限定する。

@@ -1,8 +1,8 @@
-# purlのraw復元と既存mdirへの保存
+# purlのraw復元と既存contextへの保存
 
 ## 状態
 
-採用。2.3.2.17向け。未公開。
+採用。2.3.2.18向け。未公開。
 
 ## 背景
 
@@ -18,8 +18,12 @@ mdtaのilstへ新規fourcc purlを追加するとFFmpegがkeysの数値indexと�
   型変更や古いrawを伴う候補を黙って保存しないため。
 - 単一contextの既存purlはnative保存後、一時コピー内だけで元rawへ戻す。
   通常のproperty保存でも未編集purlの型と位置を維持するため。
-- 単一mdtaにpurlが存在しない場合はcontextを生成せず、復元前に専用codeで拒否する。
-  context生成、native複数context対応、他readerとの互換性を同時に拡張するよりも境界が明確なため。
+- 単一mdtaにpurlが存在しない場合は、既存contextの`keys`末尾へ追加し、同じindexの数値itemを
+  `ilst`へ追加する。mdtaとmdirの新設は行わず、通常itemの4文字コード解釈を避けるため。
+- purl-onlyの復元はnative writerを通さず、検証済み`MP4AtomEditor`でmetadata全体を一度に拡張する。
+  既存keys、ilst item順、対象外atom、media payloadをそのまま保持するため。
+- 複合snapshotでは既存native復元を利用した後、作業コピー上のpurl itemだけをraw data子atomへ置換する。
+  他のmdta keyへの一般的なUTF-8 key追加は、既存snapshot復元のkeys末尾追加契約を利用するため。
 - mdtaとmdir各1個、mdta側に通常itemがなく、構造検証を通る場合のみ複合復元を認める。
   通常itemの保存先が既存mdirに一意に決まり、mdta値を混同しないため。
 - 複合contextは一時コピーで他方のmetaを同長freeへ隠し、既存native APIで個別検証・保存する。
@@ -41,8 +45,10 @@ mdtaのilstへ新規fourcc purlを追加するとFFmpegがkeysの数値indexと�
 
 ## 影響と制限
 
-単一mdtaへの新規purl復元は引き続き未対応だが、保存前ではなく復元前に識別できる。
-MListNewはpurl省略を削除して完全復元を要求できるが、この構造では処理を失敗として扱う必要がある。
+単一mdtaへの新規purl復元を対応した。保存後はpurlが`keys`の数値indexで解決される。
+`stco/co64`がmdat外を指す、atom境界が不正、再配置計画が作れない場合は
+`purl_atom_extension_unsupported`で復元前に拒否する。
+既存mdta内に誤ったfourcc `purl`がある場合は、二重化を避けるため`purl_fourcc_context`で拒否する。
 字幕mux後のこの構造を必ず成功させるには、別途context生成の設計が必要。
 複合復元はFile#metadata_snapshot、File#restore_metadata_snapshot、File#saveを使用する。
 Tag API、通常のproperty setter、chapter保存の複数context対応は拡張しない。

@@ -522,7 +522,7 @@ module TagLib::MP4
         raise 'truncated ordinary data' if row[2] - row[1] < 8
         io.seek(row[1])
         data_type, locale = io.read(8).unpack('N2')
-        issue(:unsupported_item_locale, path + '/ilst', 'native ordinary items cannot preserve locale', key: key) unless locale.zero?
+        issue(:unsupported_item_locale, path + '/ilst', 'native ordinary items cannot preserve locale', key: key) unless locale.zero? || key == 'purl'
         data_type
       end
       if type != 'covr' && data_types.uniq.length > 1
