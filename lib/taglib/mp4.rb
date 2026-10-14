@@ -178,11 +178,12 @@ module TagLib::MP4
   class ChapterSaveError < StandardError; end
   class MdtaItemError < ArgumentError; end
   class MdtaSaveError < StandardError
-    attr_reader :committed, :phase
+    attr_reader :committed, :phase, :code
 
-    def initialize(message, committed: false, phase: nil)
+    def initialize(message, committed: false, phase: nil, code: nil)
       @committed = committed
       @phase = phase
+      @code = code
       super(message)
     end
   end
@@ -331,6 +332,12 @@ module TagLib::MP4
     def ensure_purl_context_preserved!
       return unless tag.item_map['purl']
 
+      original = @mp4_metadata_snapshot[:items].assoc('purl')
+      current = metadata_save_signature[:items].assoc('purl')
+      if original && original[1][1] != current[1][1]
+        raise MdtaSaveError.new('purl data type change is unsupported', phase: :prepare, code: :purl_data_type_change)
+      end
+
       report = MetadataStructureReader.read(name, detailed: true)
       contexts = report[:structure][:contexts]
       unless contexts
@@ -340,7 +347,7 @@ module TagLib::MP4
         next unless context[:handler] == 'mdta'
         next if context[:items].any? { |item| item[:raw_type] == 'purl' }
 
-        raise MdtaSaveError.new('cannot introduce fourcc purl into mdta ilst; separate mdir context writing is unsupported', phase: :prepare)
+        raise MdtaSaveError.new('cannot introduce fourcc purl into mdta ilst; separate mdir context writing is unsupported', phase: :prepare, code: :purl_context_creation_unsupported)
       end
     end
 
@@ -384,6 +391,7 @@ module TagLib::MP4
                      end
       temp_path = "#{source_path}.taglib-mdta-#{Process.pid}-#{object_id}"
       committed = false
+      source_digest = Digest::SHA256.file(source_path).hexdigest
 
       begin
         ::FileUtils.cp(source_path, temp_path)
@@ -391,6 +399,9 @@ module TagLib::MP4
 
         verify_saved_copy(temp_path, expected_metadata, expected_chapters, source_media,
                           chapter_edits: chapter_edits)
+        unless Digest::SHA256.file(source_path).hexdigest == source_digest
+          raise MdtaSaveError.new('source changed during metadata save', phase: :verify, code: :source_changed)
+        end
         ::FileUtils.mv(temp_path, source_path)
         committed = true
 
@@ -466,7 +477,7 @@ module TagLib::MP4
     end
 
     def metadata_dirty?
-      metadata_save_signature != @mp4_metadata_snapshot
+      !@purl_pair_snapshot.nil? || metadata_save_signature != @mp4_metadata_snapshot
     end
 
     def chapter_media_signature(path)
@@ -1194,3 +1205,4 @@ require_relative "mp4_chapter_references"
 require_relative "mp4_atom_repair"
 require_relative "mp4_unindexed_mdta"
 require_relative "mp4_color_metadata"
+require_relative "mp4_purl_snapshot"

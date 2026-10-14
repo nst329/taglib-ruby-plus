@@ -6,10 +6,10 @@ module TagLib::MP4
     attr_reader :result
 
     # 例: timing_track: 4。metadata_transformはraw meta bytesだけを受け取る内部処理。
-    def initialize(file, timing_track: nil, metadata_transform: nil)
-      @timing_track, @metadata_transform = timing_track, metadata_transform
+    def initialize(file, timing_track: nil, metadata_transform: nil, metadata_transforms: nil)
+      @timing_track, @metadata_transform, @metadata_transforms = timing_track, metadata_transform, metadata_transforms
       @atom_replacements = {}
-      super(file, timing: !timing_track.nil?, ignore_metadata: !metadata_transform.nil?)
+      super(file, timing: !timing_track.nil?, ignore_metadata: !metadata_transform.nil? || !metadata_transforms.nil?)
     end
 
     # 元境界と期待signatureだけを持つ不変計画を返す。
@@ -24,12 +24,16 @@ module TagLib::MP4
 
     def prepare_atom_edits
       fail!('repair dangling references before other atom edits', :pending_changes) unless @report.none? { |r| r[:status] == :missing }
-      if @metadata_transform
+      if @metadata_transform || @metadata_transforms
         metas = []
         walk(@moov[:children]) { |atom| metas << atom if atom[:type] == 'meta' }
-        fail!('single moov/udta/meta required', :unsupported) unless metas.size == 1 &&
-          @moov[:children].select { |a| a[:type] == 'udta' }.any? { |u| u[:children].include?(metas.first) }
-        @atom_replacements[metas.first[:offset]] = @metadata_transform.call(bytes(metas.first))
+        expected = @metadata_transforms ? @metadata_transforms.keys.sort : [metas.first&.fetch(:offset)]
+        fail!('metadata targets do not match moov/udta/meta', :unsupported) unless metas.map { |m| m[:offset] }.sort == expected &&
+          metas.all? { |m| @moov[:children].select { |a| a[:type] == 'udta' }.any? { |u| u[:children].include?(m) } }
+        metas.each do |meta|
+          transform = @metadata_transforms ? @metadata_transforms.fetch(meta[:offset]) : @metadata_transform
+          @atom_replacements[meta[:offset]] = transform.call(bytes(meta))
+        end
       else
         prepare_timing_edit
       end

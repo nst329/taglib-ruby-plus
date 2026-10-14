@@ -158,8 +158,8 @@ class MP4PurlContextTest < Test::Unit::TestCase
     end
   end
 
-  def test_unedited_purl_data_type_change_is_rejected_by_both_save_paths
-    [false, true].each do |unindexed|
+  def test_unindexed_unedited_purl_data_type_change_is_rejected
+    [true].each do |unindexed|
       inject_metadata(@path, keys: ['opaque'], indices: unindexed ? [0] : [1])
       edit_fixture(@path) do |moov|
         meta = fixture_child(fixture_child(moov, 'udta'), 'meta')
@@ -179,6 +179,194 @@ class MP4PurlContextTest < Test::Unit::TestCase
       assert_equal before, File.binread(@path)
       assert_empty Dir.glob("#{@path}.taglib-mdta-*")
     end
+  end
+
+  # mdirで取得したpurlはraw型・data順も復元候補へ引き継ぐ。
+  def source_purl_snapshot
+    source = File.join(@dir, 'source.mp4')
+    FileUtils.cp(@path, source)
+    edit_fixture(source) do |moov|
+      meta = fixture_child(fixture_child(moov, 'udta'), 'meta')
+      fixture_child(meta, 'hdlr')[:data][8, 4] = 'mdir'
+      meta[:children].reject! { |row| row[:type] == 'keys' }
+      fixture_child(meta, 'ilst')[:children] = parse_boxes(atom_box('purl',
+        atom_box('data', [1, 0].pack('N2') + 'https://example.test/feed') +
+        atom_box('data', [1, 0].pack('N2') + 'https://example.test/second')))
+    end
+    TagLib::MP4::File.open(source, false) { |file| file.metadata_snapshot }
+  end
+
+  def add_mdir_context
+    edit_fixture(@path) do |moov|
+      udta = fixture_child(moov, 'udta')
+      handler = fixture_child(fixture_child(udta, 'meta'), 'hdlr')[:data].dup
+      handler[8, 4] = 'mdir'
+      udta[:children] << parse_boxes(atom_box('meta', "\0".b * 4 + atom_box('hdlr', handler) + atom_box('ilst', ''.b))).first
+    end
+  end
+
+  def test_mdta_only_restore_is_rejected_before_native_changes
+    snapshot = source_purl_snapshot
+    digest = Digest::SHA256.file(@path).hexdigest
+    TagLib::MP4::File.open(@path, false) do |file|
+      before = file.metadata_snapshot
+      assert_equal :purl_context_creation_unsupported, file.metadata_context_diagnostics[:purl][:code]
+      error = assert_raise(TagLib::MP4::MetadataSnapshotError) { file.restore_metadata_snapshot(snapshot) }
+      assert_equal :purl_context_creation_unsupported, error.code
+      assert_equal :restore, error.phase
+      assert_equal before, file.metadata_snapshot
+    end
+    assert_equal digest, Digest::SHA256.file(@path).hexdigest
+    assert_empty probe.last
+  end
+
+  def test_restore_into_existing_mdir_preserves_purl_raw_and_values
+    snapshot = source_purl_snapshot
+    add_mdir_context
+    packets, warnings = probe
+    assert_empty warnings
+    TagLib::MP4::File.open(@path, false) do |file|
+      assert_equal 'mdir', file.metadata_context_diagnostics[:purl][:context][:handler]
+      assert file.metadata_context_diagnostics[:purl][:writable]
+      file.restore_metadata_snapshot(snapshot)
+      assert file.save
+    end
+    TagLib::MP4::File.open(@path, false) do |file|
+      restored = file.metadata_snapshot
+      assert snapshot.same_values?(restored)
+      assert_equal snapshot.purl_raw_digests, restored.purl_raw_digests
+    end
+    assert_equal packets, probe.first
+    assert_empty probe.last
+  end
+
+  def test_snapshot_preserves_existing_mdta_purl_and_rejects_type_edits
+    snapshot = source_purl_snapshot
+    edit_fixture(@path) do |moov|
+      ilst = fixture_child(fixture_child(fixture_child(moov, 'udta'), 'meta'), 'ilst')
+      ilst[:children] << parse_boxes(snapshot.source_structure[:purl_raw].first[:raw]).first
+    end
+    warnings = probe.last
+    TagLib::MP4::File.open(@path, false) do |file|
+      original = file.metadata_snapshot
+      file.restore_metadata_snapshot(original)
+      assert file.save
+      assert_equal original.purl_raw_digests, file.metadata_snapshot.purl_raw_digests
+      altered = original.with(items: [['purl', :string_list, 1, original.item('purl')[:value]]])
+      error = assert_raise(TagLib::MP4::MetadataSnapshotError) { file.restore_metadata_snapshot(altered) }
+      assert_equal :purl_raw_mismatch, error.code
+    end
+    assert_equal warnings.gsub(/0x[0-9a-f]+/, 'ADDRESS'), probe.last.gsub(/0x[0-9a-f]+/, 'ADDRESS')
+  end
+
+  def test_multiple_mdir_contexts_are_rejected_without_changes
+    snapshot = source_purl_snapshot
+    add_mdir_context
+    add_mdir_context
+    digest = Digest::SHA256.file(@path).hexdigest
+    TagLib::MP4::File.open(@path, false) do |file|
+      assert_false file.metadata_context_diagnostics[:purl][:writable]
+      error = assert_raise(TagLib::MP4::MetadataSnapshotError) { file.restore_metadata_snapshot(snapshot) }
+      assert_equal :ambiguous_purl_context, error.code
+    end
+    assert_equal digest, Digest::SHA256.file(@path).hexdigest
+  end
+
+  def test_paired_save_failure_preserves_original_sha
+    snapshot = source_purl_snapshot
+    add_mdir_context
+    digest = Digest::SHA256.file(@path).hexdigest
+    TagLib::MP4::File.open(@path, false) do |file|
+      file.restore_metadata_snapshot(snapshot)
+      file.define_singleton_method(:stage_purl_pair) do |*_args|
+        raise TagLib::MP4::MdtaSaveError.new('injected staging failure', phase: :taglib_save, code: :injected)
+      end
+      error = assert_raise(TagLib::MP4::MdtaSaveError) { file.save }
+      assert_equal :taglib_save, error.phase
+      assert_equal :injected, error.code
+      assert_false error.committed
+    end
+    assert_equal digest, Digest::SHA256.file(@path).hexdigest
+    assert_empty Dir.glob("#{@path}.taglib-mdta-*")
+  end
+
+  def test_paired_snapshot_restores_mdta_and_can_be_reapplied_or_remove_purl
+    original = source_purl_snapshot.with(mdta: { 'gain' => [[1, 1041, '日本語'.b], [33, 0, "\xff".b]] },
+      items: [['desc', :string_list, 255, ['説明']]])
+    add_mdir_context
+    TagLib::MP4::File.open(@path, false) do |file|
+      2.times do
+        file.restore_metadata_snapshot(original)
+        assert file.save
+        assert original.same_values?(file.metadata_snapshot)
+        assert_equal original.purl_raw_digests, file.metadata_snapshot.purl_raw_digests
+      end
+      without_purl = original.without(items: ['purl'])
+      file.restore_metadata_snapshot(without_purl)
+      assert file.save
+      assert_nil file.metadata_snapshot.item('purl')
+    end
+    assert_not_match(/The index of 'data' is out of range/, probe.last)
+  end
+
+  def test_single_existing_purl_property_save_preserves_raw_type_and_position
+    snapshot = source_purl_snapshot
+    edit_fixture(@path) do |moov|
+      ilst = fixture_child(fixture_child(fixture_child(moov, 'udta'), 'meta'), 'ilst')
+      ilst[:children].unshift(parse_boxes(snapshot.source_structure[:purl_raw].first[:raw]).first)
+    end
+    TagLib::MP4::File.open(@path, false) do |file|
+      original = file.metadata_snapshot
+      file.tag.set_property('description', 'keep purl')
+      assert file.save
+      assert_equal original.purl_raw_digests, file.metadata_snapshot.purl_raw_digests
+      context = file.metadata_context_diagnostics[:structure][:contexts].first
+      assert_equal 'purl', context[:items].first[:raw_type]
+      file.tag.item_map['purl'].set_atom_data_type(1)
+      error = assert_raise(TagLib::MP4::MdtaSaveError) { file.save }
+      assert_equal :purl_data_type_change, error.code
+      assert_equal :prepare, error.phase
+      assert_false error.committed
+    end
+  end
+
+  def test_handler_and_invalid_keys_refuse_restore_before_mutation
+    snapshot = source_purl_snapshot
+    [:handler, :keys].each do |fault|
+      path = File.join(@dir, "invalid-#{fault}.mp4")
+      FileUtils.cp(@path, path)
+      edit_fixture(path) do |moov|
+        meta = fixture_child(fixture_child(moov, 'udta'), 'meta')
+        if fault == :handler
+          fixture_child(meta, 'hdlr')[:data][8, 4] = 'mdir'
+        else
+          fixture_child(meta, 'keys')[:data][4, 4] = [9999].pack('N')
+        end
+      end
+      digest = Digest::SHA256.file(path).hexdigest
+      TagLib::MP4::File.open(path, false) do |file|
+        error = assert_raise(TagLib::MP4::MetadataSnapshotError) { file.restore_metadata_snapshot(snapshot) }
+        assert_equal :ambiguous_purl_context, error.code
+      end
+      assert_equal digest, Digest::SHA256.file(path).hexdigest
+    end
+  end
+
+  def test_paired_verification_failure_preserves_original_and_blocks_chapter_only_save
+    snapshot = source_purl_snapshot
+    add_mdir_context
+    digest = Digest::SHA256.file(@path).hexdigest
+    TagLib::MP4::File.open(@path, false) do |file|
+      file.restore_metadata_snapshot(snapshot)
+      assert_raise(TagLib::MP4::ChapterSaveError) { file.save_chapters }
+      file.define_singleton_method(:mdat_payload_signature) { |_path| :injected_mismatch }
+      error = assert_raise(TagLib::MP4::MdtaSaveError) { file.save }
+      assert_equal :verify, error.phase
+      assert_false error.committed
+      assert snapshot.same_values?(file.metadata_snapshot), '失敗後も候補snapshotを保持する'
+    end
+    assert_equal digest, Digest::SHA256.file(@path).hexdigest
+    assert_empty Dir.glob("#{@path}.taglib-mdta-*")
   end
 
   def test_real_short_colr_warning_diagnosis_and_reference_save_preservation

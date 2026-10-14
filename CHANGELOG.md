@@ -8,6 +8,21 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.17
+
+### Added
+- metadata snapshotにpurlの所有raw bytesを保持し、`purl_raw_digests`で再読込後の完全一致を検証可能にした。
+- `metadata_context_diagnostics[:purl]`に保存可否・保存先context・拒否codeを追加。
+- `metadata_capabilities`にpurl raw snapshot・既存mdir復元・context生成可否を追加。
+- MListNew向け移行手順と制限を`Docs/mp4-purl-snapshot-restore.md`へ記載。
+
+### Fixed
+- 単一contextの既存purlをraw復元し、native writerによるdata type変更を防止。
+- mdtaとmdirが各1個で保存先が一意な場合、Fileのsnapshot復元で通常itemを既存mdirへ保存。
+- 複合contextは既存mdirをmdtaより前に配置し、FFprobeのdata index警告の新規発生を防止。
+- 単一mdtaにpurlが存在しない場合は、復元前に`MetadataSnapshotError(code: :purl_context_creation_unsupported, phase: :restore)`で拒否。purlの暗黙省略やcontextの新規生成はしない。
+- purlの型変更・不正keys・handler不一致・曖昧なcontextを拒否し、保存失敗時の原本不変を維持。
+
 ## 2.3.2.16
 
 ### Added

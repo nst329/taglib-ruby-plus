@@ -70,6 +70,10 @@ Gem::Specification.new do |s|
     'README.md'
   ]
   s.files = [
+    'lib/taglib/mp4_purl_snapshot.rb',
+    'docs/mp4-purl-snapshot-restore.md',
+    'docs/ADR/2026-10-14-purlのraw復元と既存mdirへの保存.md',
+    'docs/Memos/2026-10-14-purl復元の検証.md',
     'lib/taglib/mp4_color_metadata.rb',
     'test/mp4_color_metadata_test.rb',
     'test/mp4_purl_context_test.rb',
