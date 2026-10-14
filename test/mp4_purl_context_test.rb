@@ -41,6 +41,173 @@ class MP4PurlContextTest < Test::Unit::TestCase
      parse_boxes(fixture_child(meta, 'ilst')[:data]).map { |row| [row[:type], row[:data]] }]
   end
 
+  # 公開setterの保存を閉じた後に読み直し、raw contextとmediaの保持を検証する。
+  def test_public_mdta_purl_add_update_equal_remove_and_combined_save
+    packets = probe.first
+    original = 'https://example.test/original'
+    changed = 'https://example.test/changed'
+    TagLib::MP4::File.open(@path, false) do |file|
+      file.tag.set_mdta_item('purl', original)
+      assert file.save
+    end
+    TagLib::MP4::File.open(@path, false) do |file|
+      assert_equal [original.b], file.metadata_snapshot.mdta_values('purl').map { |row| row[:data] }
+    end
+    [[:changed, changed], [:equal, changed], [:other, changed], [:combined, original], [:remove, nil]].each do |mode, value|
+      before = raw_context.last
+      index = TagLib::MP4::File.open(@path, false) do |file|
+        file.metadata_context_diagnostics[:structure][:contexts].first[:keys].index('purl') + 1
+      end
+      TagLib::MP4::File.open(@path, false) do |file|
+        if mode == :remove
+          file.tag.remove_mdta_item('purl')
+        elsif mode != :other
+          file.tag.set_mdta_item('purl', value)
+        end
+        file.tag.set_mdta_item('title', mode.to_s) if %i[other combined].include?(mode)
+        assert file.save, mode.to_s
+      end
+      TagLib::MP4::File.open(@path, false) do |file|
+        assert_equal value ? [value.b] : [], Array(file.metadata_snapshot.mdta_values('purl')).map { |row| row[:data] }, mode.to_s
+        assert_equal mode.to_s, file.tag.mdta_items.find { |row| row.key == 'title' }.data if %i[other combined].include?(mode)
+        context = file.metadata_context_diagnostics[:structure][:contexts].first
+        assert_equal ['mdta'], file.metadata_context_diagnostics[:structure][:contexts].map { |row| row[:handler] }
+        assert context[:items].none? { |row| row[:raw_type] == 'purl' }
+        untouched = before.reject { |type, _| type == [index].pack('N') || (%i[other combined].include?(mode) && type == [1].pack('N')) }
+        assert_equal untouched, raw_context.last.select { |row| untouched.map(&:first).include?(row.first) }
+      end
+      assert_equal before, raw_context.last if mode == :equal
+      assert_equal packets, probe.first
+      assert_empty probe.last
+    end
+  end
+
+  def test_public_mdta_purl_preserves_typed_raw_when_other_key_changes
+    snapshot = source_purl_snapshot(values: ['https://example.test/first', 'https://example.test/second'], locales: [1041, 7])
+    TagLib::MP4::File.open(@path, false) do |file|
+      file.restore_metadata_snapshot(snapshot)
+      assert file.save
+    end
+    # UTF-8以外の型でも、未編集のmdta data atomをそのまま保持する。
+    edit_fixture(@path) do |moov|
+      meta = fixture_child(fixture_child(moov, 'udta'), 'meta')
+      item = fixture_child(meta, 'ilst')[:children].last
+      item[:data][8, 4] = [33].pack('N')
+    end
+    expected = TagLib::MP4::File.open(@path, false) { |file| file.metadata_snapshot }
+    before = raw_context.last
+    packets, warnings = probe
+    assert_match(/Skipping unhandled metadata purl of type 33/, warnings)
+    TagLib::MP4::File.open(@path, false) do |file|
+      file.tag.set_mdta_item('title', 'other tag changed')
+      assert file.save
+    end
+    TagLib::MP4::File.open(@path, false) do |file|
+      assert_equal expected.purl_raw_digests, file.metadata_snapshot.purl_raw_digests
+      assert_equal [[33, 1041, 'https://example.test/first'.b], [1, 7, 'https://example.test/second'.b]],
+        file.metadata_snapshot.mdta_values('purl').map { |row| [row[:data_type], row[:locale], row[:data]] }
+    end
+    assert_equal before.drop(1), raw_context.last.drop(1)
+    assert_equal packets, probe.first
+    assert_match(/Skipping unhandled metadata purl of type 33/, probe.last)
+    assert_not_match(/index.*out of range|1886745196/, probe.last)
+  end
+
+  def test_public_mdir_purl_update_equal_other_tag_and_remove
+    source_purl_snapshot
+    FileUtils.cp(File.join(@dir, 'source.mp4'), @path)
+    packets = probe.first
+    [:equal, :other, :changed, :remove].each do |mode|
+      before = raw_context.last
+      TagLib::MP4::File.open(@path, false) do |file|
+        original_type = file.tag.item_map['purl']&.atom_data_type
+        case mode
+        when :equal
+          file.tag.item_map.insert('purl', TagLib::MP4::Item.from_string_list(['https://example.test/feed', 'https://example.test/second']))
+          file.tag.item_map['purl'].set_atom_data_type(original_type)
+        when :other
+          file.tag.set_property('description', 'unrelated')
+        when :changed
+          file.tag.set_property('podcastURL', 'https://example.test/changed')
+          file.tag.item_map['purl'].set_atom_data_type(original_type)
+        when :remove
+          file.tag.item_map.erase('purl')
+        end
+        assert file.save
+      end
+      TagLib::MP4::File.open(@path, false) do |file|
+        if mode == :remove
+          assert_nil file.metadata_snapshot.item('purl')
+        elsif mode == :changed
+          assert_equal ['https://example.test/changed'], file.metadata_snapshot.item('purl')[:value]
+        else
+          assert_equal ['https://example.test/feed', 'https://example.test/second'], file.metadata_snapshot.item('purl')[:value]
+          assert_equal before.select { |type, _| type == 'purl' }, raw_context.last.select { |type, _| type == 'purl' }
+        end
+      end
+      assert_equal packets, probe.first
+      assert_empty probe.last
+    end
+  end
+
+  def test_public_mdta_purl_failure_preserves_original_and_cleans_resources
+    TagLib::MP4::File.open(@path, false) do |file|
+      file.tag.set_mdta_item('purl', 'https://example.test/original')
+      assert file.save
+    end
+    before = File.binread(@path)
+    TagLib::MP4::File.open(@path, false) do |file|
+      file.tag.set_mdta_item('purl', 'https://example.test/changed')
+      file.define_singleton_method(:verify_saved_copy) do |*_args, **_options|
+        raise TagLib::MP4::MdtaSaveError.new('injected verification failure', phase: :verify)
+      end
+      error = assert_raise(TagLib::MP4::MdtaSaveError) { file.save }
+      assert_equal 'injected verification failure', error.message
+      assert_false error.committed
+    end
+    assert_equal before, File.binread(@path)
+    assert_empty Dir.glob("#{@path}.taglib-mdta-*")
+  end
+
+  def test_tag_snapshot_restores_numeric_mdta_without_fourcc_rewrite
+    TagLib::MP4::File.open(@path, false) do |file|
+      file.tag.set_mdta_item('purl', 'https://example.test/original')
+      assert file.save
+    end
+    snapshot = TagLib::MP4::File.open(@path, false) { |file| file.tag.metadata_snapshot }
+    packets = probe.first
+    TagLib::MP4::File.open(@path, false) do |file|
+      file.tag.restore_metadata_snapshot(snapshot)
+      assert file.save
+    end
+    TagLib::MP4::File.open(@path, false) do |file|
+      assert snapshot.same_values?(file.tag.metadata_snapshot)
+      assert_equal snapshot.purl_raw_digests, file.tag.metadata_snapshot.purl_raw_digests
+    end
+    assert_equal packets, probe.first
+    assert_empty probe.last
+  end
+
+  def test_raw_rewrite_failure_preserves_original_and_cleans_partial_copy
+    source_purl_snapshot
+    FileUtils.cp(File.join(@dir, 'source.mp4'), @path)
+    before = File.binread(@path)
+    TagLib::MP4::File.open(@path, false) do |file|
+      file.tag.set_property('description', 'unrelated')
+      file.define_singleton_method(:rewrite_metadata_copy) do |path, suffix, &_transform|
+        super(path, suffix) do |_meta|
+          File.binwrite(path + suffix, 'partial output')
+          raise 'injected atom rewrite failure'
+        end
+      end
+      error = assert_raise(TagLib::MP4::MdtaSaveError) { file.save }
+      assert_equal 'injected atom rewrite failure', error.message
+      assert_false error.committed
+    end
+    assert_equal before, File.binread(@path)
+    assert_empty Dir.glob("#{@path}.taglib-mdta-*")
+  end
+
   def test_native_writer_minimal_reproduction_and_public_save_refusal
     before = raw_context
     packets, warnings = probe

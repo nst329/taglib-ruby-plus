@@ -76,3 +76,15 @@ FFprobeはgemの実行時依存にはせず、回帰テストで警告の新規�
 
 `purl`以外のmacOS系UTF-8 mdta keyは、snapshotの`mdta`に存在すれば既存のsnapshot復元経路で同じく末尾追加できる。
 通常itemからmdtaへ意味を移す互換変換は、4文字コードとの衝突を避けるためpurlに限定する。
+
+## 2.3.2.19のmdta保存
+
+数値keyのmdtaはキー名にかかわらず既存native writerが保存する。公開APIの
+`tag.set_mdta_item`でpurlを追加・変更・同値設定し、`tag.remove_mdta_item`で削除できる。
+未編集値はnativeのraw保持を使い、通常itemのfourcc raw復元へ数値key atomを渡さない。
+
+自動fourcc raw保持は元の通常item署名が存在し、現在と一致する場合だけ行う。
+明示snapshotの数値keyもfourcc復元から除外する。atom変換の作業コピー、mode保持、
+置換、cleanupは共通処理に集約し、保存後検証と既存contextの制限を維持する。
+詳細と採用理由は[ADR](ADR/2026-10-14-mdta数値keyとfourcc復元の分離.md)、
+[回帰検証](Memos/2026-10-14-mdta数値key保存の回帰検証.md)を参照。

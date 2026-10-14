@@ -70,6 +70,8 @@ Gem::Specification.new do |s|
     'README.md'
   ]
   s.files = [
+    'docs/ADR/2026-10-14-mdta数値keyとfourcc復元の分離.md',
+    'docs/Memos/2026-10-14-mdta数値key保存の回帰検証.md',
     'lib/taglib/mp4_purl_snapshot.rb',
     'docs/mp4-purl-snapshot-restore.md',
     'docs/ADR/2026-10-14-purlのraw復元と既存mdirへの保存.md',

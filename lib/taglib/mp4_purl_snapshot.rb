@@ -508,22 +508,46 @@ module TagLib::MP4
       ::FileUtils.rm_f(path) if path && !committed
     end
 
-    # 単一contextもnative保存後の一時コピー内でraw purlを復元し、検証してからcommitする。
+    # native保存後は明示された復元計画か未編集fourccだけを補完する。mdtaはnativeへ任せる。
     def save_temporary_copy(path, write_metadata:)
       save_temporary_copy_without_purl_raw(path, write_metadata: write_metadata)
-      if write_metadata && @purl_mdta_plan&.fetch(:mode) == :native
-        restore_mdta_purl_copy(path, @purl_mdta_plan.fetch(:raw))
-      end
-      return if @purl_mdta_plan
+      return unless write_metadata
 
-      rows = tag.instance_variable_get(:@metadata_purl_restore)
-      if rows.nil? && @mp4_metadata_snapshot[:items].assoc('purl') == metadata_save_signature[:items].assoc('purl')
-        rows = PurlSnapshot.raw_items(name, PurlSnapshot.destination(name)[:contexts])
+      if @purl_mdta_plan
+        restore_mdta_purl_copy(path, @purl_mdta_plan.fetch(:raw)) if @purl_mdta_plan.fetch(:mode) == :native
+        return
       end
-      return unless write_metadata && rows && !rows.empty?
-      restore_purl_raw_copy(path, rows.first[:raw])
+
+      rows = ordinary_purl_restore_rows
+      restore_purl_raw_copy(path, rows.first.fetch(:raw)) unless rows.empty?
     end
 
+    # 通常itemの署名が存在し不変の場合だけrawを補完する。数値keyをfourccへ渡さない。
+    def ordinary_purl_restore_rows
+      rows = tag.instance_variable_get(:@metadata_purl_restore)
+      if rows.nil?
+        original = @mp4_metadata_snapshot[:items].assoc('purl')
+        return [] unless original && original == metadata_save_signature[:items].assoc('purl')
+
+        rows = PurlSnapshot.raw_items(name, PurlSnapshot.destination(name)[:contexts])
+      end
+      rows.select { |row| row[:key_index].nil? }
+    end
+
+    # atom変換の作業コピー作成・mode保持・置換・cleanupを全復元経路で共有する。
+    def rewrite_metadata_copy(path, suffix, &transform)
+      output = path + suffix
+      self.class.open(path, false) do |file|
+        editor = MP4AtomEditor.new(file, metadata_transform: transform)
+        editor.atom_plan.write_copy(path, output)
+      end
+      ::File.chmod(::File.stat(path).mode & 0o777, output)
+      ::FileUtils.mv(output, path)
+    ensure
+      ::FileUtils.rm_f(output) if output
+    end
+
+    # snapshotの明示rawを既存の数値keyへ適用する。公開mdta setterの保存には使わない。
     def restore_mdta_purl_copy(path, raw)
       target = PurlSnapshot.destination(path)
       unless target[:context_handler] == 'mdta' && !target[:paired]
@@ -531,39 +555,27 @@ module TagLib::MP4
           code: :purl_atom_extension_unsupported)
       end
       key_index = target.fetch(:key_index)
-      output = path + '.purl-mdta'
-      self.class.open(path, false) do |file|
-        editor = MP4AtomEditor.new(file,
-          metadata_transform: ->(meta) { PurlSnapshot.apply_mdta_purl(meta, raw, key_index) })
-        editor.atom_plan.write_copy(path, output)
+      rewrite_metadata_copy(path, '.purl-mdta') do |meta|
+        PurlSnapshot.apply_mdta_purl(meta, raw, key_index)
       end
-      ::File.chmod(::File.stat(path).mode & 0o777, output)
-      ::FileUtils.mv(output, path)
     rescue MdtaSaveError
       raise
     rescue StandardError => error
       raise MdtaSaveError.new("cannot restore purl raw mdta item: #{error.message}",
         phase: :taglib_save, code: :purl_atom_extension_unsupported)
-    ensure
-      ::FileUtils.rm_f(output) if output
     end
 
+    # 通常itemのrawを元位置へ戻し、独立parserで完全一致を検証する。
     def restore_purl_raw_copy(path, raw)
       original = PurlSnapshot.destination(name)
       position = original[:contexts].flat_map { |c| c[:items] }.find { |r| r[:raw_type] == 'purl' }&.fetch(:item_index)
-      output = path + '.purl-raw'
-      self.class.open(path, false) do |file|
-        editor = MP4AtomEditor.new(file, metadata_transform: ->(meta) { PurlSnapshot.replace_raw(meta, raw, position: position) })
-        editor.atom_plan.write_copy(path, output)
+      rewrite_metadata_copy(path, '.purl-raw') do |meta|
+        PurlSnapshot.replace_raw(meta, raw, position: position)
       end
-      ::File.chmod(::File.stat(path).mode & 0o777, output)
-      ::FileUtils.mv(output, path)
       actual = PurlSnapshot.raw_items(path, PurlSnapshot.destination(path)[:contexts])
       unless actual.map { |r| r[:raw] } == [raw]
         raise MdtaSaveError.new('restored purl raw verification failed', phase: :verify, code: :purl_raw_mismatch)
       end
-    ensure
-      ::FileUtils.rm_f(output) if output
     end
 
     # contextを隠した作業コピーでnativeへ候補を適用し、各保存済みmeta bytesを得る。

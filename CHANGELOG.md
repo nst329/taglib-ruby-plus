@@ -8,6 +8,14 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.19
+
+### Fixed
+- 単一mdta contextの既存purlを公開setterで更新・削除した際、数値key atomをfourcc用raw復元へ渡して保存が失敗する問題を修正。
+- 自動raw復元は通常itemのfourcc purlに限定し、mdtaの意図的更新と未編集の型・locale・bytes・値順を既存native保存で保持。
+- raw保持の対象選択と保存制御を分離し、atom作業コピーの変換・置換・cleanupを共通化。
+- 新規追加・変更・同値設定・削除・他タグとの同時保存、独立再読込、Tag/File snapshot、media保持、失敗時の原本保持・cleanupの回帰テストを追加。
+
 ## 2.3.2.18
 
 ### Added
