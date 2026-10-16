@@ -8,6 +8,11 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.21
+
+### Fixed
+- native gem smoke testをPlus APIの内部実装境界に合わせ、公開native APIの誤検出で公開workflowが失敗しないようにした。
+
 ## 2.3.2.20
 
 ### Added

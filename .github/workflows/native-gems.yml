@@ -88,7 +88,7 @@ jobs:
           require 'taglib_plus'
           require 'fileutils'
           require 'tmpdir'
-          snapshot = TagLib::MP4::File.open('test/data/mp4.m4a', false) do |file|
+          snapshot = TagLib::MP4::Internal::File.open('test/data/mp4.m4a', false) do |file|
             abort 'native snapshot API unavailable' unless file.tag.metadata_capabilities[:atomic_restore_v1]
             colors = file.color_metadata_diagnostics
             abort 'color diagnostics unavailable' unless colors[:status] == :complete && colors.frozen? && !colors[:entries].empty?
@@ -99,7 +99,7 @@ jobs:
           Dir.mktmpdir('native-gem-snapshot-') do |dir|
             path = File.join(dir, 'copy.m4a')
             FileUtils.cp('test/data/mp4.m4a', path)
-            TagLib::MP4::File.open(path, false) do |file|
+            TagLib::MP4::Internal::File.open(path, false) do |file|
               file.tag.restore_metadata_snapshot(snapshot)
               abort 'snapshot save failed' unless file.save
               abort 'snapshot mismatch' unless snapshot.logical_equal?(file.tag.metadata_snapshot)
