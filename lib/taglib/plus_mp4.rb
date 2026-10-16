@@ -5,6 +5,7 @@ require 'fileutils'
 require 'tempfile'
 require_relative 'plus_mp4_io'
 require_relative 'plus_mp4_info'
+require_relative 'mp4_structure_diagnostics'
 
 module TagLib
   module Plus
@@ -517,12 +518,16 @@ module TagLib
           ensure_current!
           operations = { metadata: :metadata_diagnostics, chapters: :chapter_diagnostics,
                          chapter_references: :chapter_reference_diagnostics,
-                         chapter_timing: :chapter_timing_diagnostics, color: :color_metadata_diagnostics }
+                         chapter_timing: :chapter_timing_diagnostics, color: :color_metadata_diagnostics,
+                         structure: nil }
           raise ArgumentError, "unknown diagnostic area: #{area.inspect}" unless operations.key?(area)
 
           return @diagnostics[area] if @diagnostics.key?(area)
           if area == :chapters && (reader = @generation.cached_chapter_reader(false))
             return @diagnostics[area] = diagnostic_report(area, reader.report)
+          end
+          if area == :structure
+            return @diagnostics[area] = ::TagLib::Plus::MP4::StructureDiagnostics.new(@path, @generation).report
           end
           @diagnostics[area] = read_native do |native|
             begin
@@ -1170,6 +1175,13 @@ module TagLib
 
         def diagnostic_failure(area, error)
           status = %i[unsupported limit].include?(error.code) ? error.code : :malformed
+          if area == :chapter_references
+            structure = ::TagLib::Plus::MP4::StructureDiagnostics.new(@path, @generation).report
+            unless structure[:issues].empty?
+              issues = structure[:issues].map { |issue| issue.merge(location: 'chapter_references') }
+              return DeepCopy.call(status: structure[:status], data: structure[:data], issues: issues)
+            end
+          end
           DeepCopy.call(status: status, data: nil,
                         issues: [diagnostic_issue(error.code, error.message, area.to_s)])
         end

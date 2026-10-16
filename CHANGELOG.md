@@ -8,6 +8,15 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.25
+
+### Added
+- MP4構造診断でatom境界、track、stco/co64、mdat範囲、sample終端を読み取り専用で検査可能にした。
+- 不正chunk offsetのtrack別件数、先頭・末尾entry、最大参照位置、ファイルサイズ、mdat範囲を公開する診断を追加した。
+
+### Fixed
+- chapter参照診断が最初の不正chunk offsetで詳細を失わず、構造診断結果を返すようにした。
+
 ## 2.3.2.24
 
 ### Added

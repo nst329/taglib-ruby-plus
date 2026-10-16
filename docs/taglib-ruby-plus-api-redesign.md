@@ -123,7 +123,7 @@ puts file.changes
 file.save!
 ```
 
-診断領域はmetadata、chapters、chapter_references、chapter_timing、color。各戻り値は`{ status:, data:, issues: }`。statusはcomplete/unsupported/malformed/limit、issueはcode/message/location/detailsを持つ不変Hash。対象不在はcompleteと空配列/nil。Report.sectionsという外側の階層と専用Issueクラスは削除する。I/O障害・プログラミングエラーを空の診断へ変換しない。
+診断領域はmetadata、chapters、chapter_references、chapter_timing、color、structure。各戻り値は`{ status:, data:, issues: }`。statusはcomplete/unsupported/malformed/limit、issueはcode/message/location/detailsを持つ不変Hash。structureはatom境界、track、stco/co64、sample配置、mdat範囲を読み取り専用で診断し、確認済みの部分dataを返す。対象不在はcompleteと空配列/nil。Report.sectionsという外側の階層と専用Issueクラスは削除する。I/O障害・プログラミングエラーを空の診断へ変換しない。
 
 参照解除は診断元世代と位置・ID・観測値を再検証する。欠落だけを解除する場合も利用側がstatusで選択する。トラックやmediaは削除しない。空選択は無操作。時間修復はprofile必須とし、不一致を明示的に拒否する。
 

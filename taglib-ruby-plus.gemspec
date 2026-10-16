@@ -72,6 +72,10 @@ Gem::Specification.new do |s|
   s.files = [
     'lib/taglib/mp4_atom_parsing.rb',
     'lib/taglib/plus_mp4_info.rb',
+    'lib/taglib/mp4_structure_diagnostics.rb',
+    'test/plus_mp4_structure_test.rb',
+    'docs/mp4-structure-diagnostics-design.md',
+    'docs/ADR/2026-10-17-MP4構造診断を読み取り専用で分離する.md',
     'test/plus_mp4_info_test.rb',
     'test/plus_mp4_reuse_test.rb',
     'docs/ADR/2026-10-16-header情報共有と保存snapshotの再利用.md',

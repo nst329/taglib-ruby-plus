@@ -39,7 +39,7 @@ class PlusMP4IOTest < Test::Unit::TestCase
       2.times do
         file.metadata.properties[:title]
         file.chapters
-        %i[metadata chapters chapter_references chapter_timing color].each { |area| file.diagnose(area) }
+        %i[metadata chapters chapter_references chapter_timing color structure].each { |area| file.diagnose(area) }
       end
       assert_empty file.detach_chapter_references(references: [])
       result = file.save!

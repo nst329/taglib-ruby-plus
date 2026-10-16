@@ -310,7 +310,7 @@ class PlusMP4APITest < Test::Unit::TestCase
   should 'return fixed immutable diagnostic schemas for every area' do
     API.open(@source) do |file|
       { metadata: %i[structure capabilities], chapters: [:formats], chapter_references: [:references],
-        chapter_timing: [:tracks], color: [:entries] }.each do |area, keys|
+        chapter_timing: [:tracks], color: [:entries], structure: %i[coverage file_size mdat_ranges tracks] }.each do |area, keys|
         report = file.diagnose(area)
         assert_equal %i[data issues status], report.keys.sort
         assert_include %i[complete unsupported malformed limit], report[:status]
