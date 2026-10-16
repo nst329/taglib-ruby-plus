@@ -103,6 +103,28 @@ class PlusMP4APITest < Test::Unit::TestCase
     assert snapshot.frozen?
   end
 
+  should 'diagnose the mdir and mdta contexts produced by public snapshot saving' do
+    output = File.join(@dir, 'mdir-mdta.m4a')
+    values = {
+      'audio_normalization' => [API::MdtaValue.new(data_type: 1, locale: 0, data: 'loudnorm'.b)],
+      'audio_normalization_target' => [API::MdtaValue.new(data_type: 1, locale: 0, data: '-16-LUFS'.b)]
+    }
+    API.open(@source) do |file|
+      file.metadata = file.metadata.with(mdta: values)
+      file.save!(to: output)
+    end
+
+    API.open(output) do |file|
+      report = file.diagnose(:metadata)
+      assert_equal :complete, report[:status]
+      assert_empty report[:issues]
+      snapshot = file.metadata
+      assert_equal ['Title'], snapshot.properties[:title]
+      assert_equal values['audio_normalization'], snapshot.mdta.fetch('audio_normalization')
+      assert_equal values['audio_normalization_target'], snapshot.mdta.fetch('audio_normalization_target')
+    end
+  end
+
   should 'expose cover art through public symbols and preserve duplicate order' do
     data = File.binread('test/data/globe_east_90.jpg')
     image = API::Artwork.new(format: :jpeg, data: data)

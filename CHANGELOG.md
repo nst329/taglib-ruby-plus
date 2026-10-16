@@ -8,6 +8,11 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.23
+
+### Fixed
+- 公開snapshot保存で生成されるmdirとmdtaの併存をmetadata診断で正しく扱う。
+
 ## 2.3.2.22
 
 ### Fixed

@@ -390,7 +390,7 @@ module TagLib::MP4
       @issues, @metas, @count = [], [], 0
       @ordinary_keys = {}
       ::File.open(path, 'rb') { |io| walk(io, 0, io.stat.size, []) }
-      issue(:multiple_meta, 'metadata', 'multiple metadata contexts') if @metas.length > 1
+      issue(:multiple_meta, 'metadata', 'multiple metadata contexts') if @metas.length > 1 && !valid_context_pair?
       { issues: @issues, structure: { contexts: @metas } }
     rescue ParseError => error
       { issues: [{ code: :unreadable_structure, severity: :error, path: 'metadata', message: error.message }], structure: {} }
@@ -400,6 +400,19 @@ module TagLib::MP4
 
     def issue(code, path, message, **fields)
       @issues << { code: code, severity: :error, path: path, message: message, **fields }
+    end
+
+    # Plus保存が通常item(mdir)とmdtaを同じudtaへ配置する形だけを許可する。
+    def valid_context_pair?
+      return false unless @metas.length == 2
+
+      handlers = @metas.map { |context| context[:handler] }
+      return false unless handlers.sort == %w[mdir mdta]
+      return false unless @metas.map { |context| context[:path] }.uniq.length == 1
+
+      mdir = @metas.find { |context| context[:handler] == 'mdir' }
+      mdta = @metas.find { |context| context[:handler] == 'mdta' }
+      mdir[:keys].empty? && mdta[:keys].is_a?(Array)
     end
 
     def boxes(io, start, limit)
@@ -618,7 +631,12 @@ module TagLib::MP4
       if @metadata_file_valid == false
         issues << { code: :invalid_file, severity: :error, path: 'metadata', message: 'native File is invalid' }
       end
-      if native == :unknown || native == :unsupported
+      structure = info[:structure]
+      paired_contexts = structure[:contexts]&.length == 2 &&
+                        structure[:contexts].map { |context| context[:handler] }.sort == %w[mdir mdta] &&
+                        structure[:contexts].map { |context| context[:path] }.uniq.length == 1 &&
+                        structure[:contexts].find { |context| context[:handler] == 'mdir' }[:keys].empty?
+      if (native == :unknown || native == :unsupported) && !paired_contexts
         issues << { code: :unsupported_native_structure, severity: :error, path: 'metadata', message: "native status: #{native}" }
       end
       entries.each do |key, item|
@@ -626,7 +644,6 @@ module TagLib::MP4
         issues << { code: :unsupported_item, severity: :error, path: 'metadata/ilst', key: key,
                     message: 'item type/encoding cannot round-trip through native writer' }
       end
-      structure = info[:structure]
       if native == :editable && structure[:contexts]&.length == 1
         structure = { contexts: [structure[:contexts].first.merge(keys: _metadata_keys)] }
       end
