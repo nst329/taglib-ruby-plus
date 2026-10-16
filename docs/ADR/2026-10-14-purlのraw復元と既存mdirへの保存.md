@@ -20,10 +20,10 @@ mdtaのilstへ新規fourcc purlを追加するとFFmpegがkeysの数値indexと�
   通常のproperty保存でも未編集purlの型と位置を維持するため。
 - 単一mdtaにpurlが存在しない場合は、既存contextの`keys`末尾へ追加し、同じindexの数値itemを
   `ilst`へ追加する。mdtaとmdirの新設は行わず、通常itemの4文字コード解釈を避けるため。
-- purl-onlyの復元はnative writerを通さず、検証済み`MP4AtomEditor`でmetadata全体を一度に拡張する。
+- 対応表に収まる通常itemだけの復元はnative writerを通さず、検証済み`MP4AtomEditor`でmetadata全体を一度に拡張する。
   既存keys、ilst item順、対象外atom、media payloadをそのまま保持するため。
-- 複合snapshotでは既存native復元を利用した後、作業コピー上のpurl itemだけをraw data子atomへ置換する。
-  他のmdta keyへの一般的なUTF-8 key追加は、既存snapshot復元のkeys末尾追加契約を利用するため。
+- 複合snapshotでは既存native復元を利用した後、作業コピー上のApple系通常itemを対応する数値keyへ置換する。
+  対応外itemを捨てず、`purl`のraw data子atomと文字列itemのUTF-8表現を分けて扱うため。
 - mdtaとmdir各1個、mdta側に通常itemがなく、構造検証を通る場合のみ複合復元を認める。
   通常itemの保存先が既存mdirに一意に決まり、mdta値を混同しないため。
 - 複合contextは一時コピーで他方のmetaを同長freeへ隠し、既存native APIで個別検証・保存する。
@@ -49,7 +49,7 @@ mdtaのilstへ新規fourcc purlを追加するとFFmpegがkeysの数値indexと�
 `stco/co64`がmdat外を指す、atom境界が不正、再配置計画が作れない場合は
 `purl_atom_extension_unsupported`で復元前に拒否する。
 既存mdta内に誤ったfourcc `purl`がある場合は、二重化を避けるため`purl_fourcc_context`で拒否する。
-字幕mux後のこの構造を必ず成功させるには、別途context生成の設計が必要。
+字幕mux後の既存単一mdtaへの対応key追加を許可する。新規context生成や対応表外itemの推測変換は行わない。
 複合復元はFile#metadata_snapshot、File#restore_metadata_snapshot、File#saveを使用する。
 Tag API、通常のproperty setter、chapter保存の複数context対応は拡張しない。
 既存のindex 0専用保存経路は従来の拒否・保持契約を維持する。

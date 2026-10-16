@@ -628,7 +628,10 @@ module TagLib
         def verify_candidate(path)
           ::TagLib::MP4::Internal::File.open(path, false) do |native|
             actual = MetadataSnapshot.__send__(:from_legacy, native.metadata_snapshot)
-            raise IOError, 'metadata verification failed' unless actual == @metadata_candidate
+            expected = metadata_verification_snapshot
+            matches = actual == expected
+            matches ||= actual.__send__(:to_legacy).same_values?(expected.__send__(:to_legacy)) if expected != @metadata_candidate
+            raise IOError, 'metadata verification failed' unless matches
             if @chapters_candidate
               chapters = ChapterSnapshot.__send__(:from_legacy, native.chapter_snapshot)
               raise IOError, 'chapter verification failed' unless chapters == @chapters_candidate
@@ -646,6 +649,30 @@ module TagLib
             end
             { metadata: actual, chapters: @chapters_candidate ? chapters : nil }
           end
+        end
+
+        # mdta contextではApple系通常itemが数値keyへ移るため、保存先の既存keyを
+        # 保持した期待値を組み立てて検証する。対応表にないitemは正規化しない。
+        def metadata_verification_snapshot
+          candidate = @metadata_candidate.__send__(:to_legacy)
+          baseline = @metadata_baseline&.__send__(:to_legacy)
+          return @metadata_candidate unless baseline
+
+          helper = ::TagLib::MP4.send(:const_get, :PurlSnapshot, false)
+          entries = helper.mdta_migration_items(candidate)
+          return @metadata_candidate if entries.empty?
+
+          contexts = baseline.source_structure[:contexts] || []
+          mdta = contexts.find { |context| context[:handler] == 'mdta' }
+          return @metadata_candidate unless contexts.size == 1 && mdta
+
+          expected = if candidate.mdta.empty? && entries.length == candidate.items.length
+                       helper.expected_mdta_snapshot(baseline, candidate, { keys: mdta[:keys] }, entries)
+                     else
+                       staged = helper.mdta_candidate_snapshot(candidate, baseline, entries: entries)
+                       helper.expected_native_mdta_snapshot(staged, entries)
+                     end
+          MetadataSnapshot.__send__(:from_legacy, expected)
         end
 
         # 別出力はlinkの排他的作成を使い、競合した既存ファイルを上書きしない。

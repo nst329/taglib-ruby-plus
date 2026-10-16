@@ -7,6 +7,46 @@ module TagLib::MP4
   module PurlSnapshot
     module_function
 
+    # Apple系mdtaへ移せる通常itemを、nativeのproperty定義から一意に解決する。
+    def mdta_key_for_item(row)
+      atom = row.fetch(0)
+      return 'purl' if atom == 'purl'
+
+      property = Tag::PROPERTY_ATOMS.key(atom)
+      property && Tag::MDTA_PROPERTY_KEYS[property]
+    end
+
+    def mdta_migration_items(snapshot)
+      return [] unless snapshot.mdta.empty?
+
+      snapshot.items.filter_map do |row|
+        key = mdta_key_for_item(row)
+        next unless key
+
+        [key, mdta_item_raw(snapshot, row, key), row.fetch(0)]
+      end
+    rescue MetadataSnapshotError
+      raise
+    rescue StandardError => error
+      raise MetadataSnapshotError.new("cannot build mdta migration: #{error.message}",
+        code: :mdta_context_item_unsupported, phase: :restore)
+    end
+
+    def mdta_item_raw(snapshot, row, key)
+      if key == 'purl'
+        return (snapshot.source_structure[:purl_raw] || []).fetch(0).fetch(:raw)
+      end
+
+      kind, _atom_type, values = row.values_at(1, 2, 3)
+      raise ArgumentError, 'mdta migration requires string list items' unless kind == :string_list
+
+      children = values.map do |value|
+        data = value.encode(Encoding::UTF_8).b
+        box('data', [1, 0].pack('N2') + data)
+      end
+      box(row.fetch(0).encode(Encoding::ISO_8859_1).b, children.join.b)
+    end
+
     def box(type, data)
       [data.bytesize + 8].pack('N') + type.b + data.b
     end
@@ -185,28 +225,67 @@ module TagLib::MP4
       raise MetadataSnapshotError.new(error.message, code: :purl_raw_mismatch, phase: :restore)
     end
 
-    def mdta_candidate_snapshot(snapshot)
-      rows = snapshot_values(snapshot)
-      mdta = snapshot.mdta.reject { |row| row[0] == 'purl' }
-      next_index = mdta.map { |row| row[1] }.max.to_i
-      mdta << ['purl', next_index + 1, rows]
+    def mdta_candidate_snapshot(snapshot, baseline = nil, entries: [])
+      purl = snapshot.items.assoc('purl') || snapshot.mdta.find { |row| row[0] == 'purl' }
+      return snapshot if !purl && entries.empty?
+
+      target_indices = (baseline&.mdta || []).to_h { |key, index, _values| [key, index] }
+      mdta = []
+      next_index = target_indices.values.max.to_i
+      snapshot.mdta.reject { |row| row[0] == 'purl' }.each do |key, _index, values|
+        index = target_indices[key] || (next_index += 1)
+        mdta << [key, index, values]
+      end
+      if purl
+        index = target_indices['purl'] || (next_index += 1)
+        mdta << ['purl', index, snapshot_values(snapshot)]
+      end
+      entries.each do |key, raw, _source_atom|
+        next if key == 'purl'
+
+        index = target_indices[key] || (next_index += 1)
+        mdta << [key, index, value_rows(raw)]
+      end
       MetadataSnapshot.new(items: snapshot.items.reject { |row| row[0] == 'purl' }, mdta: mdta,
                            source_structure: snapshot.source_structure, format_version: snapshot.format_version)
     end
 
-    def expected_mdta_snapshot(current, snapshot, target)
-      rows = snapshot_values(snapshot)
-      key_index = target[:key_index] || current.mdta.map { |row| row[1] }.max.to_i + 1
-      mdta = current.mdta.reject { |row| row[0] == 'purl' }
-      mdta << ['purl', key_index, rows]
+    def expected_mdta_snapshot(current, snapshot, target, entries = mdta_migration_items(snapshot))
+      key_indices = current.mdta.to_h { |key, index, _values| [key, index] }
+      next_index = current.mdta.map { |row| row[1] }.max.to_i
+      rows = current.mdta.to_h { |key, index, values| [key, [key, index, values]] }
+      entries.each do |key, raw, _source_atom|
+        index = key_indices[key] || target.fetch(:keys, []).index(key)&.+(1)
+        unless index
+          next_index += 1
+          index = next_index
+        end
+        rows[key] = [key, index, value_rows(raw)]
+      end
       raw_rows = snapshot.source_structure[:purl_raw] || []
-      structure = current.source_structure.merge(purl_raw: raw_rows)
-      MetadataSnapshot.new(items: current.items.reject { |row| row[0] == 'purl' }, mdta: mdta,
-                           source_structure: structure, format_version: current.format_version)
+      structure = raw_rows.empty? ? current.source_structure : current.source_structure.merge(purl_raw: raw_rows)
+      MetadataSnapshot.new(items: current.items.reject { |row| entries.any? { |key, _raw, _source_atom| mdta_key_for_item(row) == key } },
+                           mdta: rows.values.sort_by { |row| row[1] }, source_structure: structure,
+                           format_version: current.format_version)
+    end
+
+    def expected_native_mdta_snapshot(candidate, entries)
+      mdta = candidate.mdta.map { |row| row.map { |value| value.is_a?(Array) ? value.map(&:dup) : value } }
+      next_index = mdta.map { |row| row[1] }.max.to_i
+      entries.each do |key, raw, _source_atom|
+        row = mdta.find { |candidate_row| candidate_row[0] == key }
+        index = row ? row[1] : (next_index += 1)
+        mdta.reject! { |candidate_row| candidate_row[0] == key }
+        mdta << [key, index, value_rows(raw)]
+      end
+      MetadataSnapshot.new(
+        items: candidate.items.reject { |row| entries.any? { |key, _raw, _source_atom| mdta_key_for_item(row) == key } },
+        mdta: mdta, source_structure: candidate.source_structure, format_version: candidate.format_version
+      )
     end
 
     # metadata atom全体を一度に再構成し、keysとilstのindexを同じ計画で更新する。
-    def apply_mdta_purl(raw, source_raw, key_index)
+    def apply_mdta_items(raw, entries)
       children = boxes(raw, 12)
       keys_row = children.find { |type, _bytes| type == 'keys' }
       ilst_row = children.find { |type, _bytes| type == 'ilst' }
@@ -214,27 +293,30 @@ module TagLib::MP4
 
       keys = boxes(keys_row[1], 16)
       key_names = keys.map { |_type, bytes| bytes.byteslice(8..).force_encoding(Encoding::UTF_8) }
-      if key_names.include?('purl')
-        raise ArgumentError, 'purl key index mismatch' unless key_names.index('purl') + 1 == key_index
-        keys_bytes = keys_row[1]
-      else
-        raise ArgumentError, 'purl key must be appended' unless key_index == key_names.length + 1
-        key_entry = box('mdta', 'purl'.b)
-        keys_bytes = box('keys', keys_row[1].byteslice(8, 4) + [key_names.length + 1].pack('N') +
-          keys.map(&:last).join.b + key_entry)
-      end
+      entries.each do |key, _raw, _source_atom|
+        next if key_names.include?(key)
 
-      item_type = [key_index].pack('N')
-      item = [source_raw.bytesize].pack('N') + item_type + source_raw.byteslice(8..).to_s.b
+        key_names << key
+        keys << ['mdta', box('mdta', key.b)]
+      end
+      keys_bytes = box('keys', keys_row[1].byteslice(8, 4) + [key_names.length].pack('N') + keys.map(&:last).join.b)
+
       ilst_items = boxes(ilst_row[1], 8)
-      matches = ilst_items.each_index.select { |index| ilst_items[index][0] == item_type }
-      if matches.empty?
-        ilst_items << [item_type, item]
-      else
-        first = matches.first
-        ilst_items[first] = [item_type, item]
-        ilst_items = ilst_items.each_with_index.filter_map do |row, index|
-          row unless matches.include?(index) && index != first
+      entries.each do |key, source_raw, source_atom|
+        key_index = key_names.index(key) + 1
+        item_type = [key_index].pack('N')
+        item = [source_raw.bytesize].pack('N') + item_type + source_raw.byteslice(8..).to_s.b
+        source_type = source_atom.to_s.encode(Encoding::ISO_8859_1).b
+        ilst_items.reject! { |type, _bytes| type.b == source_type }
+        matches = ilst_items.each_index.select { |index| ilst_items[index][0] == item_type }
+        if matches.empty?
+          ilst_items << [item_type, item]
+        else
+          first = matches.first
+          ilst_items[first] = [item_type, item]
+          ilst_items = ilst_items.each_with_index.filter_map do |row, index|
+            row unless matches.include?(index) && index != first
+          end
         end
       end
       ilst_bytes = box('ilst', ilst_items.map(&:last).join.b)
@@ -244,9 +326,9 @@ module TagLib::MP4
       box('meta', raw.byteslice(8, 4) + payload)
     end
 
-    def extension_plan(file, source_raw, target)
+    def extension_plan(file, entries)
       editor = MP4AtomEditor.new(file,
-        metadata_transform: ->(raw) { apply_mdta_purl(raw, source_raw, target.fetch(:key_index)) })
+        metadata_transform: ->(raw) { apply_mdta_items(raw, entries) })
       editor.atom_plan
     rescue MetadataSnapshotError
       raise
@@ -352,8 +434,40 @@ module TagLib::MP4
     alias metadata_snapshot_without_purl_pair metadata_snapshot
     alias restore_metadata_snapshot_without_purl_pair restore_metadata_snapshot
     alias save_without_purl_pair save
+    alias verify_saved_copy_without_mdta_extension verify_saved_copy
     alias save_temporary_copy_without_purl_raw save_temporary_copy
     private :save_temporary_copy_without_purl_raw
+
+    # native writerの一時検証は通常itemを残した候補を比較するため、
+    # mdta移行後の最終snapshotを使う検証へ差し替える。
+    def verify_saved_copy(path, _expected_metadata, expected_chapters, source_media, chapter_edits:)
+      unless @purl_mdta_plan&.fetch(:mode) == :native
+        return verify_saved_copy_without_mdta_extension(path, _expected_metadata, expected_chapters, source_media,
+                                                        chapter_edits: chapter_edits)
+      end
+
+      verify_unchanged_purl_bytes!(path)
+      self.class.open(path, false) do |verification|
+        actual = verification.metadata_snapshot
+        expected = @purl_mdta_plan.fetch(:expected)
+        unless expected.same_values?(actual) && expected.purl_raw_digests == actual.purl_raw_digests
+          raise MdtaSaveError.new('temporary MP4 metadata verification failed', phase: :verify)
+        end
+        unless verification.chapter_snapshot == expected_chapters
+          raise MdtaSaveError.new('temporary MP4 chapter verification failed', phase: :verify)
+        end
+        actual_media = if chapter_edits
+                         verification.send(:chapter_media_signature, path)
+                       else
+                         verification.send(:mdat_payload_signature, path)
+                       end
+        unless chapter_edits ? media_tracks_preserved?(source_media, actual_media) : actual_media == source_media
+          raise MdtaSaveError.new('temporary MP4 media payload changed', phase: :verify)
+        end
+      end
+    rescue ChapterSnapshotError => error
+      raise MdtaSaveError.new(error.message, phase: :verify)
+    end
 
     def initialize(*args)
       initialize_without_purl_plan(*args)
@@ -390,7 +504,8 @@ module TagLib::MP4
       target = PurlSnapshot.destination(name)
       has_purl = snapshot.is_a?(MetadataSnapshot) &&
         (snapshot.items.assoc('purl') || snapshot.mdta.find { |row| row[0] == 'purl' })
-      if target[:context_handler] == 'mdta' && !target[:paired] && has_purl
+      migration_items = snapshot.is_a?(MetadataSnapshot) ? PurlSnapshot.mdta_migration_items(snapshot) : []
+      if target[:context_handler] == 'mdta' && !target[:paired] && (has_purl || !migration_items.empty?)
         return prepare_mdta_purl_restore(snapshot, target)
       end
       return restore_metadata_snapshot_without_purl_pair(snapshot) unless target[:paired]
@@ -428,34 +543,41 @@ module TagLib::MP4
       checked = MetadataSnapshot.new(items: snapshot.items, mdta: snapshot.mdta,
         source_structure: snapshot.source_structure, format_version: snapshot.format_version)
       rows = PurlSnapshot.validate_raw!(checked)
-      if rows.empty?
-        raise MetadataSnapshotError.new('purl raw bytes are required for mdta restoration',
-          code: :purl_raw_missing, phase: :restore)
+      if checked.items.assoc('purl')
+        if rows.empty?
+          raise MetadataSnapshotError.new('purl raw bytes are required for mdta restoration',
+            code: :purl_raw_missing, phase: :restore)
+        end
+        context = target[:contexts].find { |candidate| candidate[:offset] == target[:context][:offset] }
+        if PurlSnapshot.context_has_fourcc_purl?(context)
+          raise MetadataSnapshotError.new('cannot add purl while mdta contains a fourcc purl item',
+            code: :purl_fourcc_context, phase: :restore)
+        end
+        PurlSnapshot.validate_destination_data_type!(name, target, rows.first.fetch(:raw))
       end
-      context = target[:contexts].find { |candidate| candidate[:offset] == target[:context][:offset] }
-      if PurlSnapshot.context_has_fourcc_purl?(context)
-        raise MetadataSnapshotError.new('cannot add purl while mdta contains a fourcc purl item',
-          code: :purl_fourcc_context, phase: :restore)
-      end
-      PurlSnapshot.validate_destination_data_type!(name, target, rows.first.fetch(:raw))
       current = metadata_snapshot_without_purl_pair
-      expected = PurlSnapshot.expected_mdta_snapshot(current, checked, target)
+      migration_items = PurlSnapshot.mdta_migration_items(checked)
+      native_entries = migration_items.empty? && rows.any? ? [['purl', rows.first.fetch(:raw)]] : migration_items
+      if native_entries.empty?
+        raise MetadataSnapshotError.new('mdta migration contains unsupported ordinary items',
+          code: :mdta_context_item_unsupported, phase: :restore)
+      end
+      expected = PurlSnapshot.expected_mdta_snapshot(current, checked, target, migration_items) unless migration_items.empty?
       source_digest = Digest::SHA256.file(name).hexdigest
       baseline = metadata_save_signature
-      purl_only = (checked.items.all? { |row| row[0] == 'purl' } && checked.mdta.empty?) ||
-        (checked.items.empty? && checked.mdta.all? { |row| row[0] == 'purl' })
-      if purl_only
-        atom_plan = PurlSnapshot.extension_plan(self, rows.first.fetch(:raw), target)
-        @purl_mdta_plan = { mode: :direct, atom_plan: atom_plan, raw: rows.first.fetch(:raw),
+      if checked.mdta.empty? && migration_items.length == checked.items.length && !migration_items.empty?
+        atom_plan = PurlSnapshot.extension_plan(self, migration_items)
+        @purl_mdta_plan = { mode: :direct, atom_plan: atom_plan, entries: migration_items,
                             expected: expected, baseline: baseline, source_digest: source_digest,
                             chapters: chapter_snapshot }
         @purl_mdta_snapshot = expected
         return self
       end
 
-      candidate = PurlSnapshot.mdta_candidate_snapshot(checked)
+      candidate = PurlSnapshot.mdta_candidate_snapshot(checked, current, entries: native_entries)
       restore_metadata_snapshot_without_purl_pair(candidate)
-      @purl_mdta_plan = { mode: :native, raw: rows.first.fetch(:raw), expected: candidate,
+      expected = PurlSnapshot.expected_native_mdta_snapshot(candidate, migration_items)
+      @purl_mdta_plan = { mode: :native, entries: native_entries, expected: expected,
                           baseline: baseline, source_digest: source_digest }
       @purl_mdta_snapshot = candidate
       self
@@ -514,7 +636,7 @@ module TagLib::MP4
       return unless write_metadata
 
       if @purl_mdta_plan
-        restore_mdta_purl_copy(path, @purl_mdta_plan.fetch(:raw)) if @purl_mdta_plan.fetch(:mode) == :native
+        restore_mdta_purl_copy(path, @purl_mdta_plan.fetch(:entries)) if @purl_mdta_plan.fetch(:mode) == :native
         return
       end
 
@@ -548,15 +670,14 @@ module TagLib::MP4
     end
 
     # snapshotの明示rawを既存の数値keyへ適用する。公開mdta setterの保存には使わない。
-    def restore_mdta_purl_copy(path, raw)
+    def restore_mdta_purl_copy(path, entries)
       target = PurlSnapshot.destination(path)
       unless target[:context_handler] == 'mdta' && !target[:paired]
         raise MdtaSaveError.new('cannot locate destination mdta for purl', phase: :taglib_save,
           code: :purl_atom_extension_unsupported)
       end
-      key_index = target.fetch(:key_index)
       rewrite_metadata_copy(path, '.purl-mdta') do |meta|
-        PurlSnapshot.apply_mdta_purl(meta, raw, key_index)
+        PurlSnapshot.apply_mdta_items(meta, entries)
       end
     rescue MdtaSaveError
       raise

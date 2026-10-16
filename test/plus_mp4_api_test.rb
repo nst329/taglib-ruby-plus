@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative 'helper'
+require 'open3'
 require 'tmpdir'
 require 'fileutils'
 require_relative 'support/mp4_investigation_fixture'
@@ -449,6 +450,38 @@ class PlusMP4APITest < Test::Unit::TestCase
       assert_equal before[:preservation_signature], file.chapter_samples[:preservation_signature]
       assert_empty file.diagnose(:chapter_timing)[:data][:tracks].first[:observations]
       assert_equal false, file.changes[:changed]
+    end
+  end
+
+  should 'restore a common Apple mdta property from a mdir snapshot after muxing' do
+    base = File.join(@dir, 'base.m4a')
+    target = File.join(@dir, 'muxed.m4a')
+    FileUtils.cp('test/data/mp4.m4a', base)
+    output, error, status = Open3.capture3(ENV.fetch('FFMPEG', '/Users/nasu/Bin/ffmpeg'), '-v', 'error',
+      '-i', base, '-map', '0', '-c', 'copy', '-movflags', 'use_metadata_tags',
+      '-metadata', 'title=destination title', '-write_btrt', '0', target)
+    assert status.success?, "ffmpeg failed: #{output}\n#{error}"
+
+    FileUtils.cp(base, @source)
+    TagLib::MP4::Internal::File.open(@source, false) do |native|
+      native.tag.set_property('artist', 'source artist')
+      native.tag.set_property('podcastURL', 'https://example.test/feed')
+      assert native.save
+    end
+    source = API.open(@source) { |file| file.metadata }
+    assert_equal ['source artist'], source.properties[:artist]
+
+    API.open(target) do |file|
+      file.metadata = source
+      file.save!
+    end
+
+    API.open(target) do |file|
+      actual = file.metadata
+      assert_equal ['Title'], actual.properties[:title]
+      assert_equal ['source artist'], actual.properties[:artist]
+      assert_equal ['source artist'.b], actual.mdta.fetch('artist').map(&:data)
+      assert_equal ['https://example.test/feed'.b], actual.mdta.fetch('purl').map(&:data)
     end
   end
 

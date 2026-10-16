@@ -74,8 +74,10 @@ purl_raw_mismatch、purl_data_type_change。
 moov/udta/meta以外、断片化MP4、既存atom editorが保証できないmedia構造は対象外。
 FFprobeはgemの実行時依存にはせず、回帰テストで警告の新規発生を検証する。
 
-`purl`以外のmacOS系UTF-8 mdta keyは、snapshotの`mdta`に存在すれば既存のsnapshot復元経路で同じく末尾追加できる。
-通常itemからmdtaへ意味を移す互換変換は、4文字コードとの衝突を避けるためpurlに限定する。
+`purl`、`title`、`artist`、`description`、`show`は、保存元の通常itemから既存`mdta` contextへ移行できる。
+不足keyは末尾へ追加し、`purl`はrawのdata type・locale・順序を保持する。対応表にない通常itemは推測変換しない。
+
+この移行と保存後検証の判断は[ADR](ADR/2026-10-16-mdta通常item移行の一般化.md)に記録する。
 
 ## 2.3.2.19のmdta保存
 
