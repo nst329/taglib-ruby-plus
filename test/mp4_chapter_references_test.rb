@@ -793,4 +793,191 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
       end
     end
   end
+  # 実mediaを参照するRTP hint 2本とMPEG-4 Systems trackを独立parserで合成する。
+  def add_hint_tracks(path)
+    list = atoms(File.binread(path))
+    mdat = list.find { |a| a[:type] == 'mdat' }
+    offset = render(list.take_while { |a| a != mdat }).bytesize + 8 + mdat[:data].bytesize
+    immediate = [1, 2].pack('C2') + 'AB' + "\0".b * 12
+    sample = [2, 0, 1, 1, 0, 1, 1].pack('CCnNNnn')
+    extra = [16, 12].pack('N2') + 'rtpo' + [17].pack('N')
+    hint = [1, 0].pack('n2') + [0, 0x8060, 1, 4, 2].pack('Nn4') + extra + immediate + sample
+    mdat[:data] += hint
+    File.binwrite(path, render(list))
+    edit(path) do |_roots, moov|
+      originals = moov[:children].select { |a| a[:type] == 'trak' }
+      originals.take(2).each_with_index do |source, index|
+        track = Marshal.load(Marshal.dump(source))
+        child(track, 'tkhd')[:data][12, 4] = [600 + index].pack('N')
+        track[:children].reject! { |a| %w[tref udta].include?(a[:type]) }
+        track[:children] << { type: 'tref', children: [{ type: 'hint', data: [track_id(source)].pack('N') }] }
+        track[:children] << { type: 'udta', children: [{ type: 'hnti', data: box('sdp ', "m=video 0 RTP/AVP 96\r\n".b) }] }
+        mdia = child(track, 'mdia')
+        child(mdia, 'hdlr')[:data][8, 4] = 'hint'
+        minf = child(mdia, 'minf')
+        minf[:children].reject! { |a| %w[vmhd smhd].include?(a[:type]) }
+        minf[:children].unshift(type: 'hmhd', data: [0, 1400, 1000, 128000, 96000, 0].pack('NnnN3'))
+        stbl = child(minf, 'stbl')
+        entry = "\0".b * 6 + [1, 1, 1, 1400].pack('n3N') + box('tims', [90000].pack('N'))
+        stbl[:children] = [
+          { type: 'stsd', data: [0, 1].pack('N2') + box('rtp ', entry) },
+          { type: 'stts', data: [0, 1, 1, 1000].pack('N4') },
+          { type: 'stsc', data: [0, 1, 1, 1, 1].pack('N5') },
+          { type: 'stsz', data: [0, hint.bytesize, 1].pack('N3') },
+          { type: 'stco', data: [0, 1, offset].pack('N3') }
+        ]
+        moov[:children] << track
+      end
+      %w[odsm sdsm].each_with_index do |handler, index|
+        track = Marshal.load(Marshal.dump(originals.last))
+        child(track, 'tkhd')[:data][12, 4] = [700 + index].pack('N')
+        track[:children].reject! { |a| a[:type] == 'tref' }
+        child(child(track, 'mdia'), 'hdlr')[:data][8, 4] = handler
+        moov[:children] << track
+      end
+      udta = moov[:children].find { |a| a[:type] == 'udta' }
+      udta[:children] << { type: 'hnti', data: box('rtp ', 'sdp '.b + "b=AS:128\r\n".b) }
+    end
+  end
+
+  def test_hint_video_chapter_detach_preserves_all_tracks_metadata_and_media
+    with_fixture(quicktime: true, faststart: true) do |path|
+      target = references(path).first.last
+      inject(path, 1 => [target], 2 => [])
+      edit(path) do |_list, moov|
+        audio = moov[:children].find { |a| a[:type] == 'trak' && track_id(a) == 2 }
+        audio[:children].reject! { |a| a[:type] == 'tref' }
+      end
+      add_hint_tracks(path)
+      before = retained(path)
+      metadata = TagLib::MP4::File.open(path, false) { |f| f.tag.metadata_snapshot }
+      TagLib::MP4::File.open(path, false) do |file|
+        rows = file.chapter_reference_diagnostics
+        assert_equal [[:chapter_candidate, 'vide', target]], rows.map { |r| r.values_at(:status, :source_handler, :target_track_id) }
+        assert_raise(TagLib::MP4::ChapterSnapshotError) { file.chapter_snapshot }
+        assert_empty file.quicktime_chapters
+        assert_empty file.remove_dangling_chapter_references
+        file.remove_chapter_references(references: rows)
+        assert file.save_chapters
+      end
+      assert_equal before, retained(path)
+      TagLib::MP4::File.open(path, false) do |file|
+        assert_empty file.chapter_reference_diagnostics
+        assert metadata.structure_equal?(file.tag.metadata_snapshot)
+        assert_empty file.chapter_snapshot.quicktime
+      end
+    end
+  end
+
+  def test_hint_chunk_offsets_follow_eight_byte_moov_growth
+    [false, true].each do |co64|
+      with_fixture(faststart: true) do |path|
+        add_hint_tracks(path)
+        if co64
+          edit(path) do |list, _moov|
+            walk(list) do |atom|
+              next unless atom[:type] == 'stco'
+              atom[:type] = 'co64'
+              atom[:data] = atom[:data].byteslice(0, 8) + atom[:data].byteslice(8..).unpack('N*').pack('Q>*')
+            end
+          end
+        end
+        inject(path, 2 => [1, 999])
+        before = hint_fixture_offsets(path, co64)
+        repair_and_check(path, [[2, 1]])
+        assert_equal before.map { |rows| rows.map { |v| v + 8 } }, hint_fixture_offsets(path, co64)
+      end
+    end
+  end
+
+  def hint_fixture_offsets(path, co64)
+    tracks(path).select { |t| track_id(t) >= 600 }.map do |track|
+      stbl = child(child(child(track, 'mdia'), 'minf'), 'stbl')
+      child(stbl, co64 ? 'co64' : 'stco')[:data].byteslice(8..).unpack(co64 ? 'Q>*' : 'N*')
+    end
+  end
+
+  def test_hint_unsupported_and_malformed_structures_keep_original
+    [:hmhd_short, :version, :reserved, :handler, :entry, :extension, :target, :size, :constructor,
+     :sample_reference, :tlv, :hnti, :stsc, :stts, :sample_limit, :duplicate_hmhd,
+     :hint_ref_index, :block_ratio, :description_mode, :self_mode, :immediate_length,
+     :flags, :packet_count, :extra_boundary, :additional_data].each do |kind|
+      with_fixture(faststart: true) do |path|
+        add_hint_tracks(path)
+        inject(path, 1 => [0])
+        edit(path) do |list, moov|
+          hint = moov[:children].find { |a| a[:type] == 'trak' && track_id(a) == 600 }
+          mdia = child(hint, 'mdia'); minf = child(mdia, 'minf'); stbl = child(minf, 'stbl')
+          case kind
+          when :hmhd_short then child(minf, 'hmhd')[:data] = "\0".b * 19
+          when :version then child(minf, 'hmhd')[:data].setbyte(0, 1)
+          when :reserved then child(minf, 'hmhd')[:data].setbyte(19, 1)
+          when :handler then child(mdia, 'hdlr')[:data][8, 4] = 'vide'
+          when :entry then child(stbl, 'stsd')[:data][12, 4] = 'xxxx'
+          when :extension then child(stbl, 'stsd')[:data][-8, 4] = 'xxxx'
+          when :target then child(child(hint, 'tref'), 'hint')[:data] = [999].pack('N')
+          when :size then child(stbl, 'stsz')[:data][4, 4] = [0xffff_ffff].pack('N')
+          when :hnti then child(child(hint, 'udta'), 'hnti')[:data] = box('xxxx', ''.b)
+          when :stsc then child(stbl, 'stsc')[:data][12, 4] = [2].pack('N')
+          when :stts then child(stbl, 'stts')[:data][8, 4] = [2].pack('N')
+          when :sample_limit then child(stbl, 'stsz')[:data][8, 4] = [1_000_001].pack('N')
+          when :duplicate_hmhd then minf[:children] << child(minf, 'hmhd').dup
+          else
+            mdat = list.find { |a| a[:type] == 'mdat' }[:data]
+            start = mdat.bytesize - 64
+            case kind
+            when :constructor then mdat.setbyte(start + 32, 4)
+            when :sample_reference then mdat[start + 52, 4] = [0xffff_ffff].pack('N')
+            when :tlv then mdat[start + 24, 4] = 'xxxx'
+            when :hint_ref_index then mdat.setbyte(start + 49, 1)
+            when :block_ratio then mdat[start + 60, 2] = [2].pack('n')
+            when :description_mode then mdat.setbyte(start + 48, 3)
+            when :self_mode then mdat.setbyte(start + 49, 255)
+            when :immediate_length then mdat.setbyte(start + 33, 15)
+            when :flags then mdat[start + 12, 2] = [8].pack('n')
+            when :packet_count then mdat[start, 2] = [2].pack('n')
+            when :extra_boundary then mdat[start + 16, 4] = [0xffff_ffff].pack('N')
+            when :additional_data then mdat[start + 14, 2] = [1].pack('n')
+            end
+          end
+        end
+        digest = Digest::SHA256.file(path).hexdigest
+        TagLib::MP4::File.open(path, false) do |file|
+          assert_raise(TagLib::MP4::ChapterReferenceError, kind.to_s) { file.chapter_reference_diagnostics }
+          assert_raise(TagLib::MP4::ChapterReferenceError, kind.to_s) { file.remove_dangling_chapter_references }
+          assert_nil file.instance_variable_get(:@chapter_reference_repair)
+        end
+        assert_equal digest, Digest::SHA256.file(path).hexdigest
+      end
+    end
+  end
+
+  def test_hint_verification_failure_keeps_original_and_pending_plan
+    with_fixture do |path|
+      add_hint_tracks(path)
+      inject(path, 1 => [0])
+      before = File.binread(path)
+      TagLib::MP4::File.open(path, false) do |file|
+        file.remove_chapter_references(references: file.chapter_reference_diagnostics)
+        original = file.method(:write_reference_copy)
+        file.define_singleton_method(:write_reference_copy) do |plan, source, destination|
+          original.call(plan, source, destination)
+          data = File.binread(destination)
+          # 有効な統計値の改変でもraw保持検証が拒否する。
+          data.setbyte(data.index('hmhd') + 8, 1)
+          File.binwrite(destination, data)
+          Digest::SHA256.file(destination).hexdigest
+        end
+        error = assert_raise(TagLib::MP4::MdtaSaveError) { file.save_chapters }
+        assert_equal :verify, error.phase
+        assert_false error.committed
+        assert_equal before, File.binread(path)
+        assert_empty Dir.glob("#{path}.taglib-mdta-*")
+        assert_not_nil file.instance_variable_get(:@chapter_reference_repair)
+        file.singleton_class.remove_method(:write_reference_copy)
+        assert file.save_chapters
+      end
+    end
+  end
+
 end

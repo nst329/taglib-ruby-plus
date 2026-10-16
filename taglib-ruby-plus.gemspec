@@ -70,6 +70,10 @@ Gem::Specification.new do |s|
     'README.md'
   ]
   s.files = [
+    'lib/taglib/mp4_hint_validation.rb',
+    'docs/mp4-rtp-hint-reference-repair-design.md',
+    'docs/ADR/2026-10-16-RTP-hintを検証してchapter参照解除を許可.md',
+    'docs/Memos/2026-10-16-RTP-hint付き実MP4の参照診断修復.md',
     'docs/ADR/2026-10-14-mdta数値keyとfourcc復元の分離.md',
     'docs/Memos/2026-10-14-mdta数値key保存の回帰検証.md',
     'lib/taglib/mp4_purl_snapshot.rb',

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative 'mp4_hint_validation'
+
 module TagLib::MP4
   # 参照診断・修復計画の拒否理由。保存失敗は既存のMdtaSaveErrorで報告する。
   class ChapterReferenceError < ArgumentError
@@ -21,9 +23,9 @@ module TagLib::MP4
       'moov' => %w[mvhd trak udta meta iods free skip],
       'trak' => %w[tkhd tref edts mdia udta free skip],
       'mdia' => %w[mdhd hdlr minf free skip],
-      'minf' => %w[vmhd smhd gmhd nmhd hdlr dinf stbl free skip],
+      'minf' => %w[vmhd smhd gmhd nmhd hmhd hdlr dinf stbl free skip],
       'stbl' => %w[stsd stts ctts cslg stsc stsz stz2 stco co64 stss stps sdtp sgpd sbgp padb stdp free skip],
-      'edts' => %w[elst], 'dinf' => %w[dref], 'udta' => %w[chpl meta name free skip]
+      'edts' => %w[elst], 'dinf' => %w[dref], 'udta' => %w[chpl meta name hnti free skip]
     }.freeze
     attr_reader :report, :removed, :source_digest, :preservation_signature, :timing_report
 
@@ -39,7 +41,8 @@ module TagLib::MP4
         @moov = one(@atoms, 'moov')
         fail!('moov exceeds repair limit', :unsupported) if length(@moov) > MAX_MOOV_BYTES
         walk(@atoms) { |atom| fail!("unsupported #{atom[:type]} structure", :unsupported) if UNSUPPORTED.include?(atom[:type]) }
-        validate_structure(@atoms, :root)
+        hint_validator = HintValidator.new(file: file, io: io)
+        validate_structure(@atoms, :root, hint_validator)
         @mdat_ranges = @atoms.select { |a| a[:type] == 'mdat' }.map { |a| [a[:payload_offset], a[:end_offset]] }
         @raw = bytes(@moov)
         @edits = {}
@@ -49,6 +52,8 @@ module TagLib::MP4
         @report = collect_references
         validate_selection!
         collect_offsets
+        tracks = @moov[:children].select { |atom| atom[:type] == 'trak' }.map { |track| track_info(track) }
+        hint_validator.validate_tracks(tracks: tracks, offset_tables: @offset_tables, mdat_ranges: @mdat_ranges)
         @timing_report = MetadataSnapshot.copy(collect_timing) if timing
         prepare_atom_edits
         @preservation_signature = MetadataSnapshot.copy(preservation(@atoms))
@@ -161,7 +166,7 @@ module TagLib::MP4
       end
     end
 
-    def validate_structure(atoms, parent)
+    def validate_structure(atoms, parent, hint_validator)
       atoms.each do |atom|
         supported = STRUCTURES[parent]
         fail!("unsupported #{parent}/#{atom[:type]}", :unsupported) if supported && !supported.include?(atom[:type])
@@ -170,7 +175,8 @@ module TagLib::MP4
           children = @file.send(:parse_mp4_atoms, @io, atom[:payload_offset] + 4, atom[:end_offset])
           fail!('unsupported meta structure', :unsupported) unless children.all? { |a| %w[hdlr keys ilst free].include?(a[:type]) }
         end
-        validate_structure(atom[:children], atom[:type])
+        hint_validator.validate_information(atom) if atom[:type] == 'hnti'
+        validate_structure(atom[:children], atom[:type], hint_validator)
       end
     end
 

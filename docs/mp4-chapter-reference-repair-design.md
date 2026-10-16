@@ -1,5 +1,7 @@
 # QuickTime chapter参照の診断・明示的除去
 
+hmhd・hntiを含む検証済みRTP hintの対応条件は[RTP hintの診断・解除](mp4-rtp-hint-reference-repair-design.md)を参照。許可リストだけでなく、hint全sampleと参照先sample境界を検証する。
+
 指定参照だけの解除とsample読取の対応拡張は[参照読取と明示的解除](mp4-chapter-reference-read-design.md)を参照。既存一括欠落除去・native chapter書込の範囲は維持する。
 
 
