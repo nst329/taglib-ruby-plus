@@ -8,7 +8,7 @@ module MP4SnapshotExtensionsProbe
 
     def verify_saved_copy(path, *args, **keywords)
       super
-      TagLib::MP4::File.open(path, false) do |verification|
+      TagLib::MP4::Internal::File.open(path, false) do |verification|
         changes = probe_expected_snapshot.diff(verification.tag.metadata_snapshot)
         unless changes.empty?
           raise TagLib::MP4::MdtaSaveError.new("unauthorized metadata changes: #{changes.inspect}", phase: :verify)

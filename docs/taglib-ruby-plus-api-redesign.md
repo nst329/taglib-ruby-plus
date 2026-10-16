@@ -7,7 +7,7 @@
 
 独自APIの入口を`TagLib::Plus::MP4.open`にまとめ、利用者は編集用Fileと不変のmetadata/chapter値を扱う。保存は`save!`だけにする。Update、SavePlan、RepairUpdate、Reportの公開クラスは設けない。
 
-互換性は前提としない。元のtaglib-ruby由来のラッパーは別の低水準層として残し、独自APIを`TagLib::Plus::MP4`に分離する。旧fork追加メソッドや互換aliasは削除する。対象は現在のMP4独自機能で、他形式へ一般化しない。
+互換性は前提としない。元のtaglib-ruby由来のラッパーは別の低水準層として残し、独自APIを`TagLib::Plus::MP4`に分離する。旧fork追加メソッドは通常のFile/Tagではprivateにし、`TagLib::MP4::Internal::File`だけがwriter用に利用する。内部の値クラス・エラー・native変換も公開契約に含めず、互換aliasは設けない。元から存在する`save`/`tag`/`title`等の低水準操作は維持する。対象は現在のMP4独自機能で、他形式へ一般化しない。
 
 前案のDocument → Update → SavePlanは、更新の受渡しと検証を明確にできた一方、通常操作にも内部transactionの概念を要求した。これらは内部責務として維持し、公開の利用モデルを「読む・編集する・保存する」にする。
 
@@ -26,7 +26,7 @@ end
 
 `with`は元の値を変えず、新しい不変値を返す。Fileへの代入はメモリ上の編集だけ。`save!`が明示的なディスク書込で、ブロック終了はcloseだけを行う。
 
-別ファイルへの出力は`file.save!(to: output_path)`。snapshotの復元も、別Documentの値を代入するだけにする。
+別ファイルへの出力は`file.save!(to: output_path)`。snapshotの復元も、別Fileから取得した値を代入するだけにする。
 
 ```ruby
 metadata = MP4.open(source) { |file| file.metadata }
@@ -64,13 +64,13 @@ Fileは一つの原本世代と、そこから作った編集候補を所有す�
 
 原本の外部変更を検出したら、cache済み候補の返却も含めて操作を拒否する。mtime/sizeだけで世代同一性を証明しない。再openしてやり直し、暗黙reload・自動merge・自動再試行はしない。
 
-原本へのsave成功後は、保存前に独立再読込・検証した出力値とdigestを新baselineとして採用し、保留編集を空にする。Fileはnative handleを長期保持せず、公開後のnative再openを必要としない構成にする。これにより同じFileで次の編集ができる。返却値や原本への書込成功後に問題が起きた場合はcommitted=trueを通知し、そのFileを使用不可にして再openを求める。
+原本へのsave成功後は、保存前に独立再読込・検証した出力値とdigestを新baselineとして採用し、保留編集を空にする。Fileはnative handleを長期保持せず、公開後のnative再openを行わない。公開前に独立再読込したsnapshotとdigestだけを採用する。これにより同じFileで次の編集ができる。返却値や原本への書込成功後に問題が起きた場合はcommitted=trueを通知し、そのFileはclose以外の読取・編集・診断・保存すべてを拒否し、再openを求める。別出力への保存後に失敗した場合も同じとする。
 
 別出力へのsave成功後は原本とbaselineを変えず、編集候補も維持する。候補はまだ原本に適用されていないためである。続けて原本にも保存したり、別の新規出力を作れる。closeで破棄する。別出力をFileの新しい原本へ暗黙に切り替えない。
 
 ## metadata値と編集
 
-MetadataSnapshotは`items`、`mdta`、`properties`、`artworks`を持つ不変値とする。通常itemは名前付きMetadataItem、mdtaはMdtaValue、画像はArtwork、ratingはContentRatingで表現する。位置依存の行配列は公開しない。値はnativeなしで構築・比較でき、ネストしたString/Array/Hashまで所有コピー・freezeする。
+`MetadataSnapshot.new(items: [...], mdta: {...})`でnativeなしに構築できる。MetadataSnapshotは`items`、`mdta`、`properties`、`artworks`を持つ不変値とする。通常itemは名前付きMetadataItem、mdtaはMdtaValue、画像は`MP4::Artwork`、ratingは`MP4::ContentRating`で表現する。位置依存の行配列は公開しない。値はnativeなしで構築・比較でき、ネストしたString/Array/Hashまで所有コピー・freezeする。
 
 ```ruby
 metadata = file.metadata
@@ -144,7 +144,7 @@ save!は内部で入力全体とwriter可否を検証し、候補作成 → 別h
 
 MetadataSnapshotの==/eql?/hashは型・locale・順序・重複・空キーの存在を含む値の厳密比較。取得元配置・raw情報は別である。diff(other)も同じ厳密値基準とし、比較modeや同義aliasを公開しない。別ファイルへの復元で空keysの残存を許すのは保存検証の責務にする。
 
-ChapterSnapshotは両形式のms/title/順序を完全比較。ChapterSamplesはticks、source_references、payload署名、時刻写像の照合可否を観測情報として保持し、論理章やbytesの一致と混同しない。公開の任意比較policyや汎用Diff階層は作らない。
+ChapterSnapshotは両形式のms/title/順序を完全比較。`chapter_samples`はnilまたは固定キーの不変Hashであり、旧snapshotオブジェクトを返さない。ticks、source_references、payload署名、時刻写像の照合可否を観測情報として保持し、論理章やbytesの一致と混同しない。公開の任意比較policyや汎用Diff階層は作らない。
 
 ## 前案から減らすもの
 
@@ -159,16 +159,49 @@ ChapterSnapshotは両形式のms/title/順序を完全比較。ChapterSamplesは
 
 名前付きitem/mdta値や各snapshotまでHash一つに潰さない。型・単位・復元能力の違いを保つことには実益がある。一方、操作要求と内部保存計画を独立した公開値にする理由は、通常利用に対して薄い。
 
-## 実装と検証の範囲
+## 診断とsampleの固定schema
 
-初版は`lib/taglib/plus_mp4.rb`に実装した。`TagLib::Plus::MP4.open`、不変metadata/chapter値、`changes`、`diagnose`、明示的なchapter参照・時間修復、世代検査付き`save!`を提供する。native Fileは操作間だけ開き、保存候補は一時ファイルを独立再読込してから公開する。
+全領域が`{ status:, data:, issues: }`を返す。statusは`:complete`、`:unsupported`、`:malformed`、`:limit`。
+issueは`{ code:, message:, location:, details: }`。既知の構造拒否だけを診断へ変換し、I/O障害はcause付きError、プログラミングエラーは元の例外を通知する。読取不能で観測値を作れない場合のdataはnil。
 
-利用テストは[plus_mp4_api_test.rb](../test/plus_mp4_api_test.rb)に置き、別出力後の候補維持、原本置換後の継続、stale source拒否、close/既存出力拒否、typed mdtaの所有コピーを確認する。前案の[設計probe](Memos/2026-10-16-Plus独自API設計のテスト検証.md)は、旧Document/Update/SavePlan案の履歴として残す。
+| 領域 | data |
+| --- | --- |
+| metadata | `{ structure:, capabilities: }` |
+| chapters | `{ formats: { nero: { status:, reason: }, quicktime: { status:, reason: } } }` |
+| chapter_references | `{ references: [...] }` |
+| chapter_timing | `{ tracks: [...] }` |
+| color | `{ entries: [...] }` |
 
-初版ではcolor/chapter sampleの戻り値を既存診断値へ委譲している。名前付きitemの全編集形式、保存後失敗の強制再現、実ファイルの映像デコード検証は後続受入条件とする。
+領域固有の観測値は保持する。chaptersの不在形式は`:absent`だが、診断全体は`:complete`。
+colorはvideo entryとcolrの拒否も集約する。非video entryは色診断の対象外で、観測値として保持する。
 
-実装前に簡素化案の利用テストを作り、特にsetterの全入力検証、編集後getter、失敗後の候補保持、原本保存後の継続、別出力後の候補維持、逆順での修復混在拒否を確認する。既存のpurl/context/未index mdta/hint/offset補正と媒体保持の受入条件も維持する。
+chapter_samplesのキーは`track_id`、`source_track_id`、`media_timescale`、`media_duration`、`samples`、`movie`、`edit`、`preservation_signature`、`ffprobe_comparison`、`source_references`、`signature_version`。
+samplesのticksとpayload署名を保持し、close後も参照できる。pending章編集・修復中は拒否する。
 
-世代固定の遅延capture/cache、協調writerの排他、非上書き公開のOS差異は実装時の検討事項。公開クラスを先に増やして解決しない。JSON永続化や計画のシリアライズ、汎用plugin writerは初版に含めない。
+## 保存失敗時の状態
 
-[簡素化ADR](ADR/2026-10-16-Plus独自APIを編集セッションへ簡素化.md)・[前案のADR](ADR/2026-10-16-Plus独自APIをDocumentと保存計画へ集約.md)
+| 失敗点 | committed | 原本・出力 | セッション |
+| --- | --- | --- | --- |
+| 候補生成・検証・公開前の競合 | false | 原本を維持。競合出力も上書きしない | 候補を維持し再試行可 |
+| 公開後のbaseline採用・結果生成 | true | 検証済み出力は公開済み | close以外を拒否 |
+| 一時ファイル削除 | 公開済みかを反映 | 原本・出力の公開状態を維持 | 公開済みならclose以外を拒否 |
+
+cleanup失敗はmessageに削除エラー、temporary_pathに対象を残す。先行エラーがあればcauseとして保持し、さらに元の失敗原因まで辿れる。公開後の失敗は自動再試行しない。
+
+## 実装・検証済みと残る制限
+
+実装は`lib/taglib/plus_mp4.rb`、旧操作の公開境界は`lib/taglib/mp4_internal.rb`に置く。
+セッション状態と原本世代の確認は共通化し、metadata・chapterともbaselineと候補を同じ不変値で比較する。[状態確認と比較の簡素化ADR](ADR/2026-10-16-Plus編集状態の確認と比較を簡素化.md)に判断を記録する。
+metadataとchaptersは遅延読取し、完全snapshotを取得できないファイルも診断できる。
+受入テストは[plus_mp4_api_test.rb](../test/plus_mp4_api_test.rb)で、公開境界、型付き値、通常保存、保存前後の障害、cleanupの原因連鎖、公開競合、再試行と再利用拒否、診断schema、sample値の所有を確認する。
+既存の構造・保持テストは内部Fileを使い、purl/context/未index mdta/hint/offset補正の検証を維持する。
+
+映像からtextへのchapは診断・sample観測・明示的参照解除の範囲に限り、論理章snapshotの制約を緩和しない。
+原本世代の完全排他、symlinkを含む出力親ディレクトリの外部変更、電源断耐性、ACL等の完全保持、実ファイルの全映像デコードは保証しない。
+名前付きitemの全編集形式と、特殊metadata保持を新API経由で網羅する受入検証は残る。
+旧未index mdta専用の保存操作は内部専用で、新APIで完全snapshotを取得できないmetadataの編集を許さない。
+JSON永続化、任意のsample復元、計画シリアライズ、汎用plugin writerは対象外。
+
+前案の[設計probe](Memos/2026-10-16-Plus独自API設計のテスト検証.md)は履歴であり現行APIの受入結果には数えない。
+
+[公開境界・保存失敗・診断ADR](ADR/2026-10-16-Plus公開境界と保存失敗状態と診断schemaの確定.md)・[簡素化ADR](ADR/2026-10-16-Plus独自APIを編集セッションへ簡素化.md)・[前案ADR](ADR/2026-10-16-Plus独自APIをDocumentと保存計画へ集約.md)

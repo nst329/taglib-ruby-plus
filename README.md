@@ -41,9 +41,9 @@ The TagLib shared library is also required at runtime.
 パッケージマネージャー版のTagLibを使う場合も、MP4のmdta機能には上記パッチを
 適用したTagLibを別prefixへ構築して指定してください。
 
-Then install taglib-ruby-plus 2.3.2.19:
+Then install taglib-ruby-plus 2.3.2.20:
 
-    gem install taglib-ruby-plus --version 2.3.2.19
+    gem install taglib-ruby-plus --version 2.3.2.20
 
 ### macOS platform gem
 
@@ -68,9 +68,9 @@ Gemfile:
     source 'https://rubygems.org'
     source 'https://rubygems.pkg.github.com/nst329' do
       # Apple Siliconの場合
-      gem 'taglib-ruby-plus-arm64-darwin', '2.3.2.19'
+      gem 'taglib-ruby-plus-arm64-darwin', '2.3.2.20'
       # Intelの場合は上記の代わりに次を指定
-      # gem 'taglib-ruby-plus-x86_64-darwin', '2.3.2.19'
+      # gem 'taglib-ruby-plus-x86_64-darwin', '2.3.2.20'
     end
 
 platform gemがまだ公開されていない環境、または対応外platformでは、同じregistryの
@@ -91,7 +91,7 @@ which makes it hard for taglib-ruby-plus to find it. To get the library location
 Note the line with the path at the end. Provide that using the `TAGLIB_DIR`
 environment variable when installing, like this:
 
-    TAGLIB_DIR=/opt/homebrew/opt/taglib gem install taglib-ruby-plus --version 2.3.2.19
+    TAGLIB_DIR=/opt/homebrew/opt/taglib gem install taglib-ruby-plus --version 2.3.2.20
 
 If you're using bundler, like this:
 
@@ -115,139 +115,27 @@ because it represents the wrapped C++ library:
 
 Begin with the `TagLib` namespace.
 
-For MP4 chapters, use the explicit chapter save operation when only chapter
-data should be changed:
-
-    file = TagLib::MP4::File.new('sample.m4a', false)
-    chapters = [
-      TagLib::MP4::Chapter.new(start_time: 0, title: 'Opening'),
-      TagLib::MP4::Chapter.new(start_time: 500, title: 'Main')
-    ]
-    file.set_chapters(chapters, style: :preserve)
-    file.save_chapters
-    file.close
-
-`style: :preserve` keeps the existing Nero/QuickTime chapter format. If no
-chapter format exists, both formats are created. SWIG is only needed by
-contributors regenerating wrappers; it is not needed to install the gem.
-Chapter comparison allows a 1ms start-time difference. Chapter input duration
-is validated even when the file was opened with `read_properties: false`.
-
-MP4 iTunes properties and artwork can be accessed through the high-level API:
-
-    file = TagLib::MP4::File.new('sample.m4a', false)
-    file.tag.set_property('TVShowName', 'Example Show')
-    artworks = file.tag.artwork
-    file.tag.set_artwork(artworks)
-    file.save
-    file.close
-
-`Artwork` returns Ruby-owned image data and supports JPEG, PNG, and BMP. GIF is
-not supported by the safe artwork API. `contentRating` uses a
-`TagLib::MP4::ContentRating` value object because its MP4 representation is a
-reverse-DNS item.
-
-## MP4 metadataとsnapshot
-
-MP4の複数値mdta復元には、2.3.2.7と同改訂のTagLibパッチが必要です。
-`replace_mdta_items` の使用例・対応構造は
-[設計書](docs/mp4-mdta-replace-design.md)を参照してください。
-
-提案用のgrouped mdta APIにもRuby bindingを接続しています。native要件は
-TagLib 2.3.2基準＋`proposals/0001`＋binding用`proposals/0002`です。
-`TAGLIB_DIR`で指定したライブラリのAPIをビルド時に判別し、既存Ruby APIを維持します。
-本体への適用は行っておらず、一時コピーでの再現手順とMListNew向け使用例は
-[Ruby binding結合検証](docs/Memos/2026-10-08-mdtaのRubyBinding結合検証.md)を参照してください。
-`tag.mdta_status`はgrouped版で`:absent`、`:editable`、`:unsupported`を返し、
-legacy版では推測せず`:unknown`を返します。
-
-公開MP4 snapshot／一括復元／構造診断は2.3.2.8から利用できます。
+MP4の独自機能は`TagLib::Plus::MP4`を入口にします。読取・編集候補・保存を一つのセッションで扱います。
 
 ```ruby
-snapshot = TagLib::MP4::File.open(source, false) { |f| f.tag.metadata_snapshot }
-TagLib::MP4::File.open(output, false) do |f|
-  raise 'snapshot native API unavailable' unless f.tag.metadata_capabilities[:atomic_restore_v1]
-  raise 'unsupported metadata' unless f.tag.metadata_diagnostics.restorable?
-  f.tag.restore_metadata_snapshot(snapshot)
-  f.save
-  raise 'metadata mismatch' unless snapshot.logical_equal?(f.tag.metadata_snapshot)
+TagLib::Plus::MP4.open('sample.m4a') do |file|
+  file.metadata = file.metadata.with(properties: { title: '作品名', tv_show: '番組名' })
+  file.chapters = file.chapters.with(nero: [
+    TagLib::Plus::MP4::Chapter.new(start_ms: 0, title: '開始')
+  ])
+  file.save!
 end
 ```
 
-字幕mux／音声変換後の一時出力へ復元する例です。字幕の保持検証と原本置換はMListNew側で行います。
-対応構造・native要件・保存失敗時の契約は[設計書](docs/mp4-metadata-snapshot-design.md)、
-判断理由は[ADR](docs/ADR/2026-10-08-mp4公開snapshotの実装.md)を参照してください。
+`save!(to: output_path)`は既存出力を上書きせず別ファイルを作ります。ブロック終了時の自動保存はありません。
+診断は`file.diagnose(:chapter_references)`、参照解除は診断行を選択して
+`file.detach_chapter_references(references: selected)`、保存は同じ`save!`を使います。
 
-### MP4 snapshotの部分編集・差分とcopyright
-
-`MetadataSnapshot#without`は指定キーを除いた新snapshot、`with`は指定キーの型付き値を置換・追加した新snapshotを返します。
-元snapshotは不変です。復元は全体置換なので、除外した値は復元先からも削除されます。mdtaのkeys表には値なしキーが残る場合があります。
-
-```ruby
-expected = original.without(items: ['©cpy'], mdta: ['gain'])
-expected = expected.with(mdta: { 'gain' => [[1, 0, 'new'.b]] })
-changes = expected.diff(actual) # 空ならlogical_equal?。binaryと画像はサイズ・SHA-256で表示。
-effects = tag.property_update_effects(:title) # ©nam設定、mdta title削除
-native_effects = tag.property_update_effects(:title, via: :native_setter) # mdtaを保持
-tag.set_property('copyright', '著作権表示') # ©cpyの単一値を設定
-```
-
-`copyright`の読み取りは先頭値、`property_values('copyright')`は全値です。更新・削除は©cpyだけを対象とし、cprtとmdta copyrightを保持します。
-2.3.2.9のnativeビルドには`0003-mp4-property-atoms.patch`も必要です。
-保存幅などnative writer固有の制約は復元時にcommit前検証します。変更許可範囲の保持確認と変換後の原本置換は[連携設計](Docs/mp4-snapshot-extensions-design.md)を参照してください。
-
-### snapshot値取得・property期待値・chapter退避
-
-2.3.2.10では配列配置を知らずにsnapshotの値を取得できます。返却値は文字列を含め不変で、Fileを閉じても利用できます。
-
-```ruby
-snapshot.mdta_values('gain') # 型・locale・dataを持つHashの配列。キーなしはnil、値なしキーは[]。
-snapshot.item('©cpy')        # kind・atom_data_type・value。キーなしはnil。
-snapshot.artworks           # format整数・dataの配列。画像の順序と重複を保持。
-expected = snapshot.with_properties(title: '作品名', copyright: '著作権')
-```
-
-`with_properties`は`set_properties`と同じ変換規則で期待値を生成します。空文字は値として保持し、nilを削除の略記にはしません。既存の論理比較は値なしmdtaキーとキーなしを同一扱いにします。
-
-```ruby
-chapters = TagLib::MP4::File.open(source, false, &:chapter_snapshot)
-TagLib::MP4::File.open(destination, false) do |file|
-  file.tag.restore_metadata_snapshot(expected)
-  file.restore_chapter_snapshot(chapters) # 両形式を独立に全置換。選択形式が空なら削除。
-  file.save
-  raise 'chapter mismatch' unless chapters.diff(file.chapter_snapshot).empty?
-end
-```
-
-`styles: [:nero]`ならQuickTimeを維持します。`chapter_diagnostics`は形式別の`status`と`reason`を返し、未対応・不完全構造はsnapshot取得・復元・保存で拒否します。chapterはミリ秒時刻とタイトルの論理値が対象です。トラック構造やミリ秒未満の精度の復元は保証しません。対応範囲と上限は[設計書](docs/mp4-snapshot-access-chapter-design.md)を参照してください。
-
-### QuickTime chapterの欠落参照修復
-
-明示的な呼出しで、存在しないトラックへのchapter参照だけを除去できます。通常の読込・保存では自動修復しません。
-
-```ruby
-TagLib::MP4::File.open(path, false) do |file|
-  report = file.chapter_reference_diagnostics
-  removed = file.remove_dangling_chapter_references # 不変の修復記録。まだ原本は変更しない。
-  file.save_chapters unless removed.empty?        # 保存後の参照と保持対象を検証して原子的置換。
-end
-```
-
-実在する参照先は適否にかかわらず保持します。タグ・chapterの更新とは別々に保存してください。未対応・不正構造は例外で拒否します。返り値と対応範囲は[設計書](docs/mp4-chapter-reference-repair-design.md)を参照してください。
-
-
-### MP4の時間診断と未対応metadataの保持保存
-
-`chapter_timing_diagnostics`はchapter候補のmvhd/mdhd/tkhd/stts/elstの生値と不整合の観測を返します。補正は自動で行いません。再現済みnative writer profileに一致し、呼出側がmovie全域の章と判断した場合だけ、別保存で修復できます。
-
-```ruby
-result = file.repair_native_chapter_timing(track_id: 4, profile: :taglib_full_movie)
-file.save_chapters if result[:status] == :planned
-```
-
-先頭に連続したmdta index 0がある限定構造では、`file.save_preserving_unindexed_mdta`でraw群を保持しながら通常タグを保存できます。indexの意味は復元せず、診断と完全snapshotの拒否は残ります。章・参照・時間修復とは別に保存してください。[条件・結果例・制約](docs/mp4-unindexed-metadata-and-chapter-timing-repair-design.md)を参照してください。
-
-nativeの新規章生成の単位・64bit幅修正には`0004-mp4-chapter-movie-duration.patch`も必要です。
+旧fork追加メソッドは公開APIから除外しました。内部writer・構造検証用の
+`TagLib::MP4::Internal`には互換性を保証しません。元のtaglib-ruby由来の低水準APIは
+`TagLib::MP4::File`に残します。新しい利用例・診断schema・保存失敗時の状態は
+[Plus API仕様](docs/taglib-ruby-plus-api-redesign.md)を参照してください。
+過去の機能別仕様にある旧APIの例は、内部実装と履歴の説明です。
 
 ## Documentation
 

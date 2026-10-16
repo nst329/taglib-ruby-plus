@@ -35,7 +35,7 @@ class MP4MdtaBindingAdapterTest < Test::Unit::TestCase
   end
 
   def test_layout_selection_and_flat_snapshot_ownership
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       actual = file.tag.mdta_status
       assert_include [:editable, :unknown], actual
       expected = ENV['MDTA_BINDING_LAYOUT']
@@ -54,7 +54,7 @@ class MP4MdtaBindingAdapterTest < Test::Unit::TestCase
   end
 
   def test_single_setter_removal_and_explicit_empty_itunes_title_keep_legacy_contract
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       assert_equal 'MDTA Title', file.tag.title
       file.tag.title = ''
       assert_equal 'MDTA Title', file.tag.title
@@ -74,7 +74,7 @@ class MP4MdtaBindingAdapterTest < Test::Unit::TestCase
 
   def test_ambiguous_new_item_is_rejected_in_grouped_mode_before_original_changes
     original = File.binread(@path)
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       grouped = file.tag.mdta_status == :editable
       file.tag.item_map.insert('zzzz', TagLib::MP4::Item.from_string_list(['ambiguous']))
       if grouped
@@ -91,7 +91,7 @@ class MP4MdtaBindingAdapterTest < Test::Unit::TestCase
   def test_unsupported_source_refuses_save_without_losing_original
     bytes = File.binread(@path).sub('mdtatitle', 'xxxxtitle')
     File.binwrite(@path, bytes)
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       if ENV['MDTA_BINDING_LAYOUT'] == 'grouped'
         assert_equal :unsupported, file.tag.mdta_status
         assert_empty file.tag.mdta_items

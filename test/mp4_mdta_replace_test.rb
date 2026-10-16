@@ -67,13 +67,13 @@ class MP4MdtaReplaceTest < Test::Unit::TestCase
 
   def test_existing_and_new_keys_preserve_every_value_and_other_metadata
     art = TagLib::MP4::Artwork.new(format: :jpeg, data: File.binread(File.join(__dir__, 'data/globe_east_90.jpg')))
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.tag.title = 'iTunes title'
       file.tag.set_artwork(art)
       file.set_chapters([TagLib::MP4::Chapter.new(start_time: 0, title: 'Opening')])
       assert file.save
     end
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       tag = file.tag
       key = 'audio_normalization'
       index = tag.mdta_item(key).key_index
@@ -102,12 +102,12 @@ class MP4MdtaReplaceTest < Test::Unit::TestCase
   end
 
   def test_reads_and_replaces_multiple_data_children_and_repeated_key_atoms
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.tag.replace_mdta_items('audio_normalization', values)
       assert file.save
     end
     index = nil
-    TagLib::MP4::File.open(@path, false) { |f| index = f.tag.mdta_item('audio_normalization').key_index }
+    TagLib::MP4::Internal::File.open(@path, false) { |f| index = f.tag.mdta_item('audio_normalization').key_index }
     name = [index].pack('N')
     data_children = values.map { |v| box('data', [v[:data_type], v[:locale]].pack('N2') + v[:data]) }.join.b
     # Rebuild the first numeric item and remove the remaining items for this key.
@@ -138,7 +138,7 @@ class MP4MdtaReplaceTest < Test::Unit::TestCase
       end
       meta.byteslice(0, 4) + children
     end
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       assert_values(file.tag, 'audio_normalization', index)
       file.tag.replace_mdta_items('audio_normalization', values)
       assert file.save
@@ -151,7 +151,7 @@ class MP4MdtaReplaceTest < Test::Unit::TestCase
                   [values.first.merge(locale: 0x1_0000_0000)], [values.first.merge(data_type: 1.0)],
                   [values.first.merge(locale: nil)], [values.first.merge(data: nil)],
                   [values.first.merge(extra: true)], [{ 'data_type' => 1, 'locale' => 0, 'data' => 'x' }]]
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       before = snapshot(file.tag)
       bad_values.each do |bad|
         assert_raise(TagLib::MP4::MdtaItemError) { file.tag.replace_mdta_items('new-key', bad) }
@@ -167,7 +167,7 @@ class MP4MdtaReplaceTest < Test::Unit::TestCase
   end
 
   def test_save_failure_keeps_disk_and_pending_values_then_allows_retry
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.tag.replace_mdta_items('audio_normalization', values)
       expected = snapshot(file.tag)
       original = Digest::SHA256.file(@path).hexdigest
@@ -187,7 +187,7 @@ class MP4MdtaReplaceTest < Test::Unit::TestCase
   end
 
   def test_single_value_setter_still_replaces_all_values
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.tag.replace_mdta_items('audio_normalization', values)
       file.tag.set_mdta_item('audio_normalization', 'last')
       assert file.save
@@ -233,7 +233,7 @@ class MP4MdtaReplaceTest < Test::Unit::TestCase
       File.binwrite(@path, original)
       rewrite_meta(&mutation)
       before_disk = File.binread(@path)
-      TagLib::MP4::File.open(@path, false) do |file|
+      TagLib::MP4::Internal::File.open(@path, false) do |file|
         before = snapshot(file.tag)
         assert_raise(TagLib::MP4::MdtaItemError) { file.tag.replace_mdta_items('new-key', values) }
         assert_equal before, snapshot(file.tag)
@@ -244,7 +244,7 @@ class MP4MdtaReplaceTest < Test::Unit::TestCase
 
   def test_pure_mdir_does_not_create_an_unsupported_mdta_structure
     FileUtils.cp(File.join(__dir__, 'data/mp4.m4a'), @path)
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       title = file.tag.title
       before = File.binread(@path)
       assert_raise(TagLib::MP4::MdtaItemError) { file.tag.replace_mdta_items('new-key', values) }
@@ -277,7 +277,7 @@ class MP4MdtaReplaceTest < Test::Unit::TestCase
         result
       end
       File.binwrite(@path, transform.call(bytes))
-      TagLib::MP4::File.open(@path, false) do |file|
+      TagLib::MP4::Internal::File.open(@path, false) do |file|
         before = snapshot(file.tag)
         assert_raise(TagLib::MP4::MdtaItemError) { file.tag.replace_mdta_items('new-key', values) }
         assert_equal before, snapshot(file.tag)

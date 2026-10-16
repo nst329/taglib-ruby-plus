@@ -41,7 +41,7 @@ class MP4MetadataSnapshotTest < Test::Unit::TestCase
   end
 
   def open_mp4(path, &block)
-    TagLib::MP4::File.open(path, false, &block)
+    TagLib::MP4::Internal::File.open(path, false, &block)
   end
 
   def snapshot(path)
@@ -237,7 +237,7 @@ class MP4MetadataSnapshotTest < Test::Unit::TestCase
   def test_reopen_failure_reports_committed_and_snapshot_remains_usable
     expected = seed
     # 再オープン失敗後はnative Fileが閉じているため、block形式の自動closeを使わない。
-    f = TagLib::MP4::File.new(@destination, false)
+    f = TagLib::MP4::Internal::File.new(@destination, false)
     f.tag.restore_metadata_snapshot(expected)
     f.define_singleton_method(:initialize) { |*_args| raise IOError, 'injected reopen failure' }
     error = assert_raise(TagLib::MP4::MdtaSaveError) { f.save }

@@ -27,7 +27,7 @@ class MP4MdtaTagLibTest < Test::Unit::TestCase
   end
 
   def open_file
-    file = TagLib::MP4::File.new(@fixture, false)
+    file = TagLib::MP4::Internal::File.new(@fixture, false)
     yield file
   ensure
     file.close if file

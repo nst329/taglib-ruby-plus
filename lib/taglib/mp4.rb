@@ -767,7 +767,7 @@ module TagLib::MP4
     def metadata_save_signature
       {
         items: tag.item_map.to_a.sort_by(&:first).map { |key, item| [key, item_snapshot(item, key)] },
-        mdta: tag.mdta_items.group_by(&:key_index).sort_by(&:first).flat_map do |_index, values|
+        mdta: tag.__send__(:mdta_items).group_by(&:key_index).sort_by(&:first).flat_map do |_index, values|
           values.map { |item| [item.key, item.key_index, item.data_type, item.locale, item.data] }
         end,
         mdta_keys: tag.respond_to?(:_metadata_keys) ? tag._metadata_keys : nil
@@ -1206,3 +1206,4 @@ require_relative "mp4_atom_repair"
 require_relative "mp4_unindexed_mdta"
 require_relative "mp4_color_metadata"
 require_relative "mp4_purl_snapshot"
+require_relative "mp4_internal"

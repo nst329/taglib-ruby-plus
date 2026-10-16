@@ -61,7 +61,7 @@ class MP4SnapshotAccessChapterTest < Test::Unit::TestCase
   def test_detached_access_survives_save_close_and_gc
     with_mdta do |path|
       values = [[1, 1041, '日本語'.b], [33, 7, "\0\xff".b], [1, 1041, '日本語'.b]]
-      snapshot = TagLib::MP4::File.open(path, false) do |file|
+      snapshot = TagLib::MP4::Internal::File.open(path, false) do |file|
         file.tag.restore_metadata_snapshot(file.tag.metadata_snapshot.with(mdta: { 'typed' => values, 'empty-key' => [] }))
         assert file.save
         file.tag.metadata_snapshot
@@ -76,7 +76,7 @@ class MP4SnapshotAccessChapterTest < Test::Unit::TestCase
 
   def test_file_owns_fork_snapshot_entry_points
     with_copy do |path|
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         from_file = file.metadata_snapshot
         assert from_file.same_values?(file.tag.metadata_snapshot)
         assert_equal file.tag.metadata_capabilities, file.metadata_capabilities
@@ -95,7 +95,7 @@ class MP4SnapshotAccessChapterTest < Test::Unit::TestCase
 
   def test_property_expectation_matches_all_setters_and_reloaded_values
     with_mdta do |path|
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         initial = file.tag.metadata_snapshot.with(mdta: { 'title' => [[1, 1041, 'old'.b]] })
         TagLib::MP4::Tag::PROPERTY_ATOMS.each_key do |name|
           file.tag.restore_metadata_snapshot(initial)
@@ -111,14 +111,14 @@ class MP4SnapshotAccessChapterTest < Test::Unit::TestCase
         assert_equal ['著作権'], expected.item('©cpy')[:value]
         file.tag.set_properties(updates)
         assert file.save
-        TagLib::MP4::File.open(path, false) { |read| assert_empty expected.diff(read.tag.metadata_snapshot) }
+        TagLib::MP4::Internal::File.open(path, false) { |read| assert_empty expected.diff(read.tag.metadata_snapshot) }
       end
     end
   end
 
   def test_invalid_property_plan_does_not_change_snapshot_or_disk
     with_copy do |path|
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         initial = file.tag.metadata_snapshot
         disk = Digest::SHA256.file(path).hexdigest
         [{ title: 'valid', comment: "bad\0" }, { show: 'a', 'TVShowName' => 'b' }, { unknown: 'x' }, { title: nil }].each do |updates|
@@ -140,14 +140,14 @@ class MP4SnapshotAccessChapterTest < Test::Unit::TestCase
     assert_equal [[0, '開始']], snapshot.nero.map { |c| [c.start_time, c.title] }
     assert_raise(FrozenError) { snapshot.nero.first.title << 'x' }
     with_copy do |path|
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         before_tag = file.tag.metadata_snapshot
         file.restore_chapter_snapshot(snapshot)
         assert_raise(TagLib::MP4::ChapterConflictError) { file.chapters }
         assert file.save
         assert before_tag.logical_equal?(file.tag.metadata_snapshot)
       end
-      actual = TagLib::MP4::File.open(path, false) { |file| file.chapter_snapshot }
+      actual = TagLib::MP4::Internal::File.open(path, false) { |file| file.chapter_snapshot }
       GC.start
       assert snapshot.logical_equal?(actual)
       assert_empty snapshot.diff(actual)
@@ -157,7 +157,7 @@ class MP4SnapshotAccessChapterTest < Test::Unit::TestCase
 
   def test_partial_chapter_restore_leaves_other_style_and_deletes_selected_empty_style
     with_copy do |path|
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         file.set_chapters([chapter(0, 'Nero')], style: :nero)
         file.set_chapters([chapter(0, 'QuickTime')], style: :quicktime)
         assert file.save
@@ -166,7 +166,7 @@ class MP4SnapshotAccessChapterTest < Test::Unit::TestCase
         assert_empty file.nero_chapters
         assert file.save
       end
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         assert_equal :quicktime, file.chapter_style
         assert_equal ['QuickTime'], file.quicktime_chapters.map(&:title)
       end
@@ -175,7 +175,7 @@ class MP4SnapshotAccessChapterTest < Test::Unit::TestCase
 
   def test_invalid_second_chapter_style_does_not_replace_pending_first_style
     with_copy do |path|
-      TagLib::MP4::File.open(path, true) do |file|
+      TagLib::MP4::Internal::File.open(path, true) do |file|
         file.set_chapters([chapter(0, 'pending')], style: :nero)
         before = file.chapter_snapshot
         disk = Digest::SHA256.file(path).hexdigest
@@ -198,7 +198,7 @@ class MP4SnapshotAccessChapterTest < Test::Unit::TestCase
 
   def test_mdta_creation_on_mdir_is_explicitly_rejected_without_changes
     with_copy do |path|
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         initial = file.tag.metadata_snapshot
         disk = Digest::SHA256.file(path).hexdigest
         error = assert_raise(TagLib::MP4::MetadataSnapshotError) do
@@ -214,11 +214,11 @@ class MP4SnapshotAccessChapterTest < Test::Unit::TestCase
   def test_duration_validation_depends_on_audio_property_loading
     with_copy do |path|
       beyond = C.new(nero: [chapter(10**12, 'too late')], quicktime: [])
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         file.restore_chapter_snapshot(beyond)
         assert_equal 10**12, file.nero_chapters.first.start_time
       end
-      TagLib::MP4::File.open(path, true) do |file|
+      TagLib::MP4::Internal::File.open(path, true) do |file|
         assert_raise(TagLib::MP4::ChapterSnapshotError) { file.restore_chapter_snapshot(beyond) }
       end
     end
@@ -226,7 +226,7 @@ class MP4SnapshotAccessChapterTest < Test::Unit::TestCase
 
   def test_partial_nero_read_is_rejected_with_reason_before_save
     with_copy do |path|
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         file.set_chapters([chapter(0, 'one')], style: :nero)
         assert file.save
       end
@@ -237,7 +237,7 @@ class MP4SnapshotAccessChapterTest < Test::Unit::TestCase
       assert_equal 1, bytes.getbyte(name_offset + 12), '宣言chapter数'
       bytes.setbyte(name_offset + 12, 2) # payloadは1件のまま、宣言数だけ2へ変更する。
       File.binwrite(path, bytes)
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         assert_equal :nero, file.chapter_style
         disk = Digest::SHA256.file(path).hexdigest
         assert_equal :malformed, file.chapter_diagnostics[:nero][:status]
@@ -253,7 +253,7 @@ class MP4SnapshotAccessChapterTest < Test::Unit::TestCase
   def test_nero_title_truncation_is_rejected_before_original_replacement
     with_copy do |path|
       disk = Digest::SHA256.file(path).hexdigest
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         assert_raise(TagLib::MP4::ChapterSnapshotError) do
           C.new(nero: [chapter(0, 'a' * 256)], quicktime: [])
         end
@@ -266,7 +266,7 @@ class MP4SnapshotAccessChapterTest < Test::Unit::TestCase
   def test_tag_and_chapter_verification_failure_keeps_original_and_pending_state
     with_copy do |path|
       disk = Digest::SHA256.file(path).hexdigest
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         file.tag.set_property(:copyright, '著作権')
         expected_tag = file.tag.metadata_snapshot
         expected_chapters = C.new(nero: [chapter(0, '')], quicktime: [chapter(0, '別タイトル')])
@@ -288,7 +288,7 @@ class MP4SnapshotAccessChapterTest < Test::Unit::TestCase
 
   def test_partial_quicktime_stts_is_rejected_with_reason
     with_copy do |path|
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         file.set_chapters([chapter(0, 'first'), chapter(500, 'second')], style: :quicktime)
         assert file.save
       end
@@ -297,7 +297,7 @@ class MP4SnapshotAccessChapterTest < Test::Unit::TestCase
       assert_equal 2, bytes.byteslice(offset + 8, 4).unpack1('N')
       bytes[offset + 8, 4] = [3].pack('N')
       File.binwrite(path, bytes)
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         assert_equal %w[first second], file.quicktime_chapters.map(&:title), 'nativeの部分取得を公開snapshotでは拒否する'
         assert_equal :malformed, file.chapter_diagnostics[:quicktime][:status]
         error = assert_raise(TagLib::MP4::ChapterSnapshotError) { file.chapter_snapshot }
@@ -320,7 +320,7 @@ class MP4SnapshotAccessChapterTest < Test::Unit::TestCase
     }
     mutations.each do |label, (expected_status, mutate)|
       with_copy do |path|
-        TagLib::MP4::File.open(path, false) do |file|
+        TagLib::MP4::Internal::File.open(path, false) do |file|
           file.restore_chapter_snapshot(C.new(quicktime: [chapter(0, 'first'), chapter(500, 'second')]))
           assert file.save
         end
@@ -328,7 +328,7 @@ class MP4SnapshotAccessChapterTest < Test::Unit::TestCase
         mutate.call(bytes)
         File.binwrite(path, bytes)
         disk = Digest::SHA256.file(path).hexdigest
-        TagLib::MP4::File.open(path, false) do |file|
+        TagLib::MP4::Internal::File.open(path, false) do |file|
           report = file.chapter_diagnostics
           assert_equal expected_status, report[:quicktime][:status], label
           assert_not_nil report[:quicktime][:reason], label
@@ -347,8 +347,8 @@ class MP4SnapshotAccessChapterTest < Test::Unit::TestCase
   def test_nonzero_quicktime_start_and_detached_diff_fields
     expected = C.new(nero: [chapter(500, '開始')], quicktime: [chapter(500, '別の開始'), chapter(800, '続き')])
     with_copy do |path|
-      TagLib::MP4::File.open(path, false) { |file| file.restore_chapter_snapshot(expected); assert file.save }
-      actual = TagLib::MP4::File.open(path, false, &:chapter_snapshot)
+      TagLib::MP4::Internal::File.open(path, false) { |file| file.restore_chapter_snapshot(expected); assert file.save }
+      actual = TagLib::MP4::Internal::File.open(path, false, &:chapter_snapshot)
       GC.start
       assert actual.quicktime.first.title.frozen?
       assert_empty expected.diff(actual)
@@ -378,7 +378,7 @@ class MP4SnapshotAccessChapterTest < Test::Unit::TestCase
     assert_raise(TagLib::MP4::ChapterSnapshotError) { C.new(nero: [chapter(0x7fff_ffff_ffff_ffff, '')]) }
     assert_raise(TagLib::MP4::ChapterSnapshotError) { C.new(quicktime: [chapter(0, ''), chapter(500, 'title')]) }
     with_copy do |path|
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         before = file.chapter_snapshot
         [nil, [:both], [:nero, :nero]].each do |styles|
           assert_raise(TagLib::MP4::ChapterSnapshotError) { file.restore_chapter_snapshot(C.new, styles: styles) }
@@ -398,7 +398,7 @@ class MP4SnapshotAccessChapterTest < Test::Unit::TestCase
     }
     mutations.each do |label, (status, mutate)|
       with_copy do |path|
-        TagLib::MP4::File.open(path, false) do |file|
+        TagLib::MP4::Internal::File.open(path, false) do |file|
           file.restore_chapter_snapshot(C.new(nero: [chapter(0, 'one')]))
           assert file.save
         end
@@ -406,7 +406,7 @@ class MP4SnapshotAccessChapterTest < Test::Unit::TestCase
         mutate.call(bytes, bytes.index('chpl'))
         File.binwrite(path, bytes)
         disk = Digest::SHA256.file(path).hexdigest
-        TagLib::MP4::File.open(path, false) do |file|
+        TagLib::MP4::Internal::File.open(path, false) do |file|
           assert_equal status, file.chapter_diagnostics[:nero][:status], label
           error = assert_raise(TagLib::MP4::ChapterSnapshotError) { file.chapter_snapshot }
           assert_equal status, error.code
@@ -420,7 +420,7 @@ class MP4SnapshotAccessChapterTest < Test::Unit::TestCase
   def test_incomplete_temporary_chapters_fail_in_verify_phase_and_keep_pending_state
     with_copy do |path|
       disk = Digest::SHA256.file(path).hexdigest
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         expected = C.new(nero: [chapter(0, 'pending')])
         file.restore_chapter_snapshot(expected)
         # 実際の一時出力を不完全にし、再読込拒否が原本置換より前に働くことを確認する。

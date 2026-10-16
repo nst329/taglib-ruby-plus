@@ -35,7 +35,7 @@ class MP4RepairInvestigationTest < Test::Unit::TestCase
 
   # native writerで16サンプルを作り、その後は独立parserで時間フィールドだけを差し替える。
   def seed_timing(track_duration: MEDIA_DURATION, edit_rows: [[TRUNCATED_DURATION, 0, 65_536]], movie_duration: MOVIE_DURATION)
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.set_chapters(Array.new(15) { |index| TagLib::MP4::Chapter.new((index + 1) * 50, '') }, style: :quicktime)
       assert file.save_chapters
     end
@@ -44,7 +44,7 @@ class MP4RepairInvestigationTest < Test::Unit::TestCase
   end
 
   def timing(path = @path)
-    TagLib::MP4::File.open(path, false) { |file| file.chapter_timing_diagnostics.first }
+    TagLib::MP4::Internal::File.open(path, false) { |file| file.chapter_timing_diagnostics.first }
   end
 
   def probe_chapters(path, *options)
@@ -59,7 +59,7 @@ class MP4RepairInvestigationTest < Test::Unit::TestCase
     observed = {}
     verifier = file.method(:verify_saved_copy)
     file.define_singleton_method(:verify_saved_copy) do |path, expected, *args, **keywords|
-      TagLib::MP4::File.open(path, false) do |read|
+      TagLib::MP4::Internal::File.open(path, false) do |read|
         observed[:expected] = expected
         observed[:actual] = read.send(:metadata_save_signature)
       end
@@ -119,7 +119,7 @@ class MP4RepairInvestigationTest < Test::Unit::TestCase
     inject_metadata(@path, keys: %w[first second], indices: [0, 0])
     raw_before = raw_opaque_metadata(@path)
     original = Digest::SHA256.file(@path).hexdigest
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       legacy_view = file.tag.item_map.to_a.any? { |key, _item| key.empty? }
       install_opaque_preservation_prototype(file)
       file.tag.title = 'updated-with-opaque-preservation'
@@ -139,7 +139,7 @@ class MP4RepairInvestigationTest < Test::Unit::TestCase
   def test_two_stage_test_only_prototype_updates_title_and_retains_opaque_bytes
     inject_metadata(@path, keys: %w[first second], indices: [0, 0])
     raw_before = raw_opaque_metadata(@path)
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       install_opaque_preservation_prototype(file, prepare_native: true)
       file.tag.title = 'updated-with-opaque-preservation'
       assert file.save
@@ -164,7 +164,7 @@ class MP4RepairInvestigationTest < Test::Unit::TestCase
 
   def test_valid_indexed_metadata_and_regular_title_roundtrip
     inject_metadata(@path, keys: %w[first second], indices: [1, 2, 1])
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       before = file.tag.metadata_snapshot
       assert_equal %w[first second], before.mdta.map(&:first)
       assert_equal 2, before.mdta.first.last.size
@@ -179,7 +179,7 @@ class MP4RepairInvestigationTest < Test::Unit::TestCase
   def test_existing_native_verification_cannot_detect_loss_of_a_second_opaque_atom
     inject_metadata(@path, keys: %w[first second], indices: [0, 0])
     raw_before = raw_opaque_metadata(@path)
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       install_opaque_preservation_prototype(file, prepare_native: true)
       prototype = file.method(:save_temporary_copy)
       editor = method(:edit_fixture)
@@ -203,7 +203,7 @@ class MP4RepairInvestigationTest < Test::Unit::TestCase
   def test_zero_index_items_collapse_in_native_view_and_are_lost_by_writer
     inject_metadata(@path, keys: %w[first second], indices: [0, 0])
     original = Digest::SHA256.file(@path).hexdigest
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       invalid = file.tag.metadata_diagnostics.issues.select { |issue| issue[:code] == :invalid_index }
       assert_equal [0, 0], invalid.map { |issue| issue[:key_index] }
       assert_raise(TagLib::MP4::MetadataSnapshotError) { file.tag.metadata_snapshot }
@@ -235,7 +235,7 @@ class MP4RepairInvestigationTest < Test::Unit::TestCase
   def test_nonzero_out_of_range_index_is_not_repaired_by_position
     inject_metadata(@path, keys: %w[first second], indices: [3])
     original = Digest::SHA256.file(@path).hexdigest
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       invalid = file.tag.metadata_diagnostics.issues.select { |issue| issue[:code] == :invalid_index }
       assert_equal [3], invalid.map { |issue| issue[:key_index] }
       assert_raise(TagLib::MP4::MetadataSnapshotError) { file.tag.metadata_snapshot }
@@ -249,7 +249,7 @@ class MP4RepairInvestigationTest < Test::Unit::TestCase
     inject_metadata(@path, keys: %w[first second], indices: [0, 0])
     inject_metadata(two, keys: %w[second first], indices: [0, 0])
     rows = [@path, two].map do |path|
-      TagLib::MP4::File.open(path, false) { |file| file.tag.item_map.to_a.map { |key, item| [key, item.type, item.to_string_list] } }
+      TagLib::MP4::Internal::File.open(path, false) { |file| file.tag.item_map.to_a.map { |key, item| [key, item.type, item.to_string_list] } }
     end
     assert_equal rows.first, rows.last, '同じnative viewからkeys順による割当を確定することはできない'
   end
@@ -263,7 +263,7 @@ class MP4RepairInvestigationTest < Test::Unit::TestCase
       suffix = original.getbyte(0) == 1 ? 32 : 20
       movie[:data] = [0x01000000].pack('N') + [0, 0].pack('Q>2') + [MOVIE_SCALE].pack('N') + [MOVIE_DURATION].pack('Q>') + original.byteslice(suffix..)
     end
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.set_chapters(Array.new(15) { |index| TagLib::MP4::Chapter.new((index + 1) * 227_000, '') }, style: :quicktime)
       assert file.save_chapters
       assert_equal 15, file.chapter_snapshot.quicktime.size
@@ -303,7 +303,7 @@ class MP4RepairInvestigationTest < Test::Unit::TestCase
 
   def test_full_movie_duration_candidate_restores_all_samples_without_changing_media
     seed_native_writer_error
-    before_chapters, before_media = TagLib::MP4::File.open(@path, false) do |file|
+    before_chapters, before_media = TagLib::MP4::Internal::File.open(@path, false) do |file|
       [file.chapter_snapshot.quicktime, file.send(:mdat_payload_signature, @path)]
     end
     inject_chapter_timing(@path, movie_scale: MOVIE_SCALE, movie_duration: MOVIE_DURATION,
@@ -315,7 +315,7 @@ class MP4RepairInvestigationTest < Test::Unit::TestCase
     assert_equal MOVIE_DURATION, report[:track_header][:duration]
     assert_equal MOVIE_DURATION, report[:edits].first[:segment_duration]
     assert_equal({ sample_count: 16, duration: MEDIA_DURATION }, report[:stts])
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       assert_equal before_chapters, file.chapter_snapshot.quicktime
       reader = prototype_timing_reader(file)
       reader.require_complete!
@@ -331,7 +331,7 @@ class MP4RepairInvestigationTest < Test::Unit::TestCase
      [[MOVIE_DURATION, 0, 131_072]], [[MOVIE_DURATION, 0, 0]]].each do |edits|
       inject_chapter_timing(@path, movie_scale: MOVIE_SCALE, movie_duration: MOVIE_DURATION,
         track_duration: MOVIE_DURATION, edit_rows: edits)
-      TagLib::MP4::File.open(@path, false) do |file|
+      TagLib::MP4::Internal::File.open(@path, false) do |file|
         reader = prototype_timing_reader(file)
         error = assert_raise(TagLib::MP4::ChapterSnapshotError) { reader.require_complete! }
         assert_equal :unsupported, error.code
@@ -355,7 +355,7 @@ class MP4RepairInvestigationTest < Test::Unit::TestCase
     assert_operator exact_duration, :>, 0xffffffff
     assert_equal :not_attempted, report[:correction]
     assert_equal original, Digest::SHA256.file(@path).hexdigest
-    TagLib::MP4::File.open(@path, false) { |file| assert_equal 15, file.chapter_snapshot.quicktime.size }
+    TagLib::MP4::Internal::File.open(@path, false) { |file| assert_equal 15, file.chapter_snapshot.quicktime.size }
   end
 
   def test_equal_tkhd_and_elst_can_still_be_a_legitimate_short_edit
@@ -435,7 +435,7 @@ class MP4RepairInvestigationTest < Test::Unit::TestCase
     source_digest = Digest::SHA256.file(source).hexdigest
     copy = File.join(@dir, 'real-reference-repair.mp4')
     FileUtils.cp(source, copy)
-    TagLib::MP4::File.open(copy, false) do |file|
+    TagLib::MP4::Internal::File.open(copy, false) do |file|
       report = file.chapter_reference_diagnostics
       assert_equal [[1, 0, 0], [2, 0, 0], [2, 1, 4], [3, 0, 0]],
         report.map { |row| row.values_at(:source_track_id, :tref_index, :target_track_id) }
@@ -448,7 +448,7 @@ class MP4RepairInvestigationTest < Test::Unit::TestCase
     assert_equal 16, probe_chapters(copy, '-ignore_editlist', '1').size
     assert_equal 16, probe_chapters(copy, '-advanced_editlist', '0').size
     repaired_digest = Digest::SHA256.file(copy).hexdigest
-    TagLib::MP4::File.open(copy, false) do |file|
+    TagLib::MP4::Internal::File.open(copy, false) do |file|
       capture_metadata_save(file) do |observed|
         file.tag.title = 'investigation-only'
         error = assert_raise(TagLib::MP4::MdtaSaveError) { file.save }
@@ -466,7 +466,7 @@ class MP4RepairInvestigationTest < Test::Unit::TestCase
     assert_equal repaired_digest, Digest::SHA256.file(copy).hexdigest
     # 失敗を再現した同じ一時コピーで、raw保持案が既存の全保存検証も通るか検証する。
     raw_before = raw_opaque_metadata(copy)
-    TagLib::MP4::File.open(copy, false) do |file|
+    TagLib::MP4::Internal::File.open(copy, false) do |file|
       install_opaque_preservation_prototype(file, prepare_native: true)
       file.tag.title = 'investigation-only'
       assert file.save
@@ -475,7 +475,7 @@ class MP4RepairInvestigationTest < Test::Unit::TestCase
     end
     assert_equal raw_before, raw_opaque_metadata(copy)
     assert_equal source_digest, Digest::SHA256.file(source).hexdigest
-    TagLib::MP4::File.open(copy, false) { |file| assert_equal 15, file.chapter_snapshot.quicktime.size }
+    TagLib::MP4::Internal::File.open(copy, false) { |file| assert_equal 15, file.chapter_snapshot.quicktime.size }
     assert_empty Dir.glob("#{copy}.taglib-mdta-*")
   end
 end

@@ -37,7 +37,7 @@ module MP4SnapshotDesignProbe
   def self.restore(file, snapshot, fail_after_key: nil)
     tag = file.tag
     # Existing grouped status requires a real ilst; a default-constructed Tag is unsupported.
-    owner = TagLib::MP4::File.new(file.name, false)
+    owner = TagLib::MP4::Internal::File.new(file.name, false)
     candidate = owner.tag
     tag._copy_state_to(candidate)
     candidate.item_map.clear

@@ -30,14 +30,14 @@ class MP4ChapterSampleSnapshotTest < Test::Unit::TestCase
   end
 
   def seed(rows = [[100, 'first'], [300, ''], [600, 'last'], [800, '']])
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.set_chapters(rows.map { |time, title| TagLib::MP4::Chapter.new(time, title) }, style: :quicktime)
       assert file.save_chapters
     end
   end
 
   def snapshot
-    TagLib::MP4::File.open(@path, false, &:chapter_sample_snapshot)
+    TagLib::MP4::Internal::File.open(@path, false, &:chapter_sample_snapshot)
   end
 
   def chapter_track(moov)
@@ -114,7 +114,7 @@ class MP4ChapterSampleSnapshotTest < Test::Unit::TestCase
     before = snapshot
     assert_equal :clipped, before.ffprobe_comparison[:status]
     assert_raise(TagLib::MP4::ChapterSnapshotError) { before.require_ffprobe_comparable! }
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       result = file.repair_native_chapter_timing(track_id: before.track_id, profile: :taglib_full_movie)
       assert_equal :planned, result[:status]
       pending = file.instance_variable_get(:@chapter_timing_repair)
@@ -153,7 +153,7 @@ class MP4ChapterSampleSnapshotTest < Test::Unit::TestCase
     seed
     before = snapshot
     original = digest
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.set_chapters([TagLib::MP4::Chapter.new(0, 'pending')], style: :quicktime)
       pending = file.instance_variable_get(:@chapter_changes)
       assert before.preserved_equal?(file.chapter_sample_snapshot)
@@ -228,7 +228,7 @@ class MP4ChapterSampleSnapshotTest < Test::Unit::TestCase
         end
       end
       original = digest
-      TagLib::MP4::File.open(@path, false) do |file|
+      TagLib::MP4::Internal::File.open(@path, false) do |file|
         file.tag.title = 'pending'
         pending = file.instance_variable_get(:@chapter_changes)
         assert_raise(TagLib::MP4::ChapterSnapshotError, name.to_s) { file.chapter_sample_snapshot }
@@ -270,7 +270,7 @@ class MP4ChapterSampleSnapshotTest < Test::Unit::TestCase
       source = fixture_tracks(moov).find { |track| fixture_child(track, 'tref') }
       source[:children].delete_at(source[:children].rindex { |node| node[:type] == 'tref' })
     end
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.set_chapters([TagLib::MP4::Chapter.new(0, 'Nero')], style: :nero)
       assert file.save_chapters
     end
@@ -296,7 +296,7 @@ class MP4ChapterSampleSnapshotTest < Test::Unit::TestCase
     assert before.preserved_equal?(snapshot)
     old_moov, = read_fixture_moov(@path)
     old_offset = fixture_child(sample_table(chapter_track(old_moov)), 'stco')[:data].byteslice(8, 4).unpack1('N')
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.tag.title = 'offset-movement-' + 'x' * 100_000
       assert file.save
       assert before.preserved_equal?(file.chapter_sample_snapshot)
@@ -331,7 +331,7 @@ class MP4ChapterSampleSnapshotTest < Test::Unit::TestCase
     seed(Array.new(15) { |i| [(i + 1) * 50, ''] })
     inject_chapter_timing(@path, movie_scale: 441_000_000, movie_duration: MOVIE_DURATION,
       track_duration: 3_640_937, edit_rows: [[MOVIE_DURATION & 0xffffffff, 0, 65_536]])
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.repair_native_chapter_timing(track_id: file.chapter_sample_snapshot.track_id, profile: :taglib_full_movie)
       plan = file.instance_variable_get(:@chapter_timing_repair)
       edit_fixture(@path) do |moov|
@@ -350,7 +350,7 @@ class MP4ChapterSampleSnapshotTest < Test::Unit::TestCase
     assert status.success?, error
     FileUtils.mv(setup_path, @path)
     seed
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.set_chapters([TagLib::MP4::Chapter.new(0, 'pending')], style: :quicktime)
       pending = file.instance_variable_get(:@chapter_changes)
       edit_fixture(@path) do |moov|
@@ -368,7 +368,7 @@ class MP4ChapterSampleSnapshotTest < Test::Unit::TestCase
     omit('real file path is not configured') unless original
     original_digest = Digest::SHA256.file(original).hexdigest
     FileUtils.copy_file(original, @path)
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       assert_raise(TagLib::MP4::ChapterSnapshotError) { file.chapter_sample_snapshot }
       assert_not_empty file.remove_dangling_chapter_references
       assert file.save_chapters

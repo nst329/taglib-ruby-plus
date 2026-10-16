@@ -35,7 +35,7 @@ module TagLib::MP4
         end
         MetadataSnapshot.copy(status: :complete, entries: entries)
       end
-    rescue MdtaSaveError, IOError, SystemCallError => error
+    rescue MdtaSaveError => error
       raise ColorMetadataError.new(error.message, code: error.message.include?('exceeds limit') ? :limit : :malformed), cause: error
     ensure
       @io = nil

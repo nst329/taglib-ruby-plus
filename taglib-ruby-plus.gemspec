@@ -70,6 +70,9 @@ Gem::Specification.new do |s|
     'README.md'
   ]
   s.files = [
+    'docs/ADR/2026-10-16-Plus編集状態の確認と比較を簡素化.md',
+    'lib/taglib/mp4_internal.rb',
+    'docs/ADR/2026-10-16-Plus公開境界と保存失敗状態と診断schemaの確定.md',
     'test/README.md',
     'docs/ADR/2026-10-16-テスト責務の現行APIと設計probe分離.md',
     'docs/ADR/2026-10-16-テストログの成功抑制と失敗詳細化.md',

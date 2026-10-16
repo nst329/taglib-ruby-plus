@@ -86,7 +86,7 @@ class Mp4MdtaDesignContractTest < Minitest::Test
 
   def test_direct_map_edits_are_visible_without_tag_setter
     path = saved_copy
-    TagLib::MP4::File.open(path) do |file|
+    TagLib::MP4::Internal::File.open(path) do |file|
       map = file.tag.item_map
       assert map.include?("\u00a9nam")
       map.erase("\u00a9nam")

@@ -31,7 +31,7 @@ class MP4ColorMetadataTest < Test::Unit::TestCase
     Dir.mktmpdir('colr-fixture-') do |dir|
       path = File.join(dir, 'fixture.mp4')
       File.binwrite(path, data)
-      file = TagLib::MP4::File.allocate
+      file = TagLib::MP4::Internal::File.allocate
       file.define_singleton_method(:name) { path }
       before = Digest::SHA256.file(path).hexdigest
       report = file.color_metadata_diagnostics
@@ -115,7 +115,7 @@ class MP4ColorMetadataTest < Test::Unit::TestCase
         io.write([1].pack('N') + 'mdat' + [128 * 1024 * 1024].pack('Q>'))
         io.truncate(io.pos + 128 * 1024 * 1024 - 16)
       end
-      file = TagLib::MP4::File.allocate
+      file = TagLib::MP4::Internal::File.allocate
       file.define_singleton_method(:name) { path }
       original = file.method(:read_mp4_bytes)
       read_bytes = 0

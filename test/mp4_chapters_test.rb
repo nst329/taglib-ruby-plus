@@ -17,7 +17,7 @@ class MP4ChaptersTest < Test::Unit::TestCase
 
   def with_chapter_fixture(nero: nil, quicktime: nil)
     with_copy do |path|
-      file = TagLib::MP4::File.new(path, false)
+      file = TagLib::MP4::Internal::File.new(path, false)
       file.set_chapters(nero, style: :nero) if nero
       file.set_chapters(quicktime, style: :quicktime) if quicktime
       assert file.save_chapters
@@ -35,7 +35,7 @@ class MP4ChaptersTest < Test::Unit::TestCase
 
   def test_empty_file_and_preserve_default
     with_copy do |path|
-      file = TagLib::MP4::File.new(path, false)
+      file = TagLib::MP4::Internal::File.new(path, false)
       assert_equal :none, file.chapter_style
       assert_empty file.chapters
 
@@ -45,7 +45,7 @@ class MP4ChaptersTest < Test::Unit::TestCase
       assert file.save_chapters
 
       file.close
-      file = TagLib::MP4::File.new(path, false)
+      file = TagLib::MP4::Internal::File.new(path, false)
       assert_equal :both, file.chapter_style
       assert_equal chapter_list, file.chapters
       file.close
@@ -54,13 +54,13 @@ class MP4ChaptersTest < Test::Unit::TestCase
 
   def test_style_specific_write_and_remove
     with_copy do |path|
-      file = TagLib::MP4::File.new(path, false)
+      file = TagLib::MP4::Internal::File.new(path, false)
       file.set_chapters(chapter_list, style: :nero)
       assert_equal :nero, file.chapter_style
       assert file.save_chapters
       file.close
 
-      file = TagLib::MP4::File.new(path, false)
+      file = TagLib::MP4::Internal::File.new(path, false)
       assert_equal chapter_list, file.nero_chapters
       assert_empty file.quicktime_chapters
       file.remove_chapters(style: :nero)
@@ -72,7 +72,7 @@ class MP4ChaptersTest < Test::Unit::TestCase
 
   def test_quicktime_only_read
     with_chapter_fixture(quicktime: chapter_list) do |path|
-      file = TagLib::MP4::File.new(path, false)
+      file = TagLib::MP4::Internal::File.new(path, false)
       assert_equal :quicktime, file.chapter_style
       assert_equal chapter_list, file.chapters(style: :quicktime)
       assert_empty file.chapters(style: :nero)
@@ -82,7 +82,7 @@ class MP4ChaptersTest < Test::Unit::TestCase
 
   def test_common_read_when_nero_and_quicktime_match
     with_chapter_fixture(nero: chapter_list, quicktime: chapter_list) do |path|
-      file = TagLib::MP4::File.new(path, false)
+      file = TagLib::MP4::Internal::File.new(path, false)
       assert_equal :both, file.chapter_style
       assert_equal chapter_list, file.chapters
       file.close
@@ -91,7 +91,7 @@ class MP4ChaptersTest < Test::Unit::TestCase
 
   def test_conflict_when_chapter_counts_differ
     with_chapter_fixture(nero: chapter_list, quicktime: [chapter_list.first]) do |path|
-      file = TagLib::MP4::File.new(path, false)
+      file = TagLib::MP4::Internal::File.new(path, false)
       assert_raise(TagLib::MP4::ChapterConflictError) { file.chapters }
       file.close
     end
@@ -103,7 +103,7 @@ class MP4ChaptersTest < Test::Unit::TestCase
       TagLib::MP4::Chapter.new(start_time: 600, title: 'Main')
     ]
     with_chapter_fixture(nero: chapter_list, quicktime: quicktime) do |path|
-      file = TagLib::MP4::File.new(path, false)
+      file = TagLib::MP4::Internal::File.new(path, false)
       assert_raise(TagLib::MP4::ChapterConflictError) { file.chapters }
       file.close
     end
@@ -111,7 +111,7 @@ class MP4ChaptersTest < Test::Unit::TestCase
 
   def test_conflicting_chapters_can_be_read_by_style_without_crashing
     with_chapter_fixture(nero: chapter_list, quicktime: [chapter_list.first]) do |path|
-      file = TagLib::MP4::File.new(path, false)
+      file = TagLib::MP4::Internal::File.new(path, false)
       assert_equal chapter_list, file.chapters(style: :nero)
       assert_equal [chapter_list.first], file.chapters(style: :quicktime)
       file.close
@@ -120,7 +120,7 @@ class MP4ChaptersTest < Test::Unit::TestCase
 
   def test_conflicting_chapters_report_both_styles
     with_chapter_fixture(nero: chapter_list, quicktime: [chapter_list.first]) do |path|
-      file = TagLib::MP4::File.new(path, false)
+      file = TagLib::MP4::Internal::File.new(path, false)
       assert_equal :both, file.chapter_style
       file.close
     end
@@ -131,7 +131,7 @@ class MP4ChaptersTest < Test::Unit::TestCase
     assert_raise(ArgumentError) { TagLib::MP4::Chapter.new(start_time: 0, title: "bad\0") }
 
     with_copy do |path|
-      file = TagLib::MP4::File.new(path, false)
+      file = TagLib::MP4::Internal::File.new(path, false)
       first = TagLib::MP4::Chapter.new(start_time: 0, title: 'a')
       second = TagLib::MP4::Chapter.new(start_time: 0, title: 'b')
       assert_raise(ArgumentError) { file.set_chapters([first, second]) }
@@ -141,13 +141,13 @@ class MP4ChaptersTest < Test::Unit::TestCase
 
   def test_save_chapters_preserves_existing_tag_and_artwork
     with_copy do |path|
-      file = TagLib::MP4::File.new(path, false)
+      file = TagLib::MP4::Internal::File.new(path, false)
       original = [file.tag.title, file.tag.artist, file.tag.item_map['covr'].to_cover_art_list.size]
       file.set_chapters(chapter_list)
       file.save_chapters
       file.close
 
-      file = TagLib::MP4::File.new(path, false)
+      file = TagLib::MP4::Internal::File.new(path, false)
       assert_equal original, [file.tag.title, file.tag.artist, file.tag.item_map['covr'].to_cover_art_list.size]
       file.close
     end

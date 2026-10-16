@@ -115,7 +115,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
         '-map', '0:v', '-map', '1:a', '-map', '2:s', '-c:v', 'mpeg4', '-c:a', 'aac', '-c:s', 'mov_text',
         '-metadata', 'title=保持する日本語', '-movflags', faststart ? '+faststart+use_metadata_tags' : '+use_metadata_tags', path)
       assert status.success?, error
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         snapshot = file.tag.metadata_snapshot.with(mdta: { 'binary' => [[33, 7, "\0\xff".b], [33, 7, "\0\xff".b]], 'empty-key' => [] })
         file.tag.restore_metadata_snapshot(snapshot)
         file.tag.item_map.insert('covr', TagLib::MP4::Item.from_cover_art_list([
@@ -141,8 +141,8 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
 
   def repair_and_check(path, expected)
     before = retained(path)
-    metadata = TagLib::MP4::File.open(path, false) { |f| f.tag.metadata_snapshot }
-    TagLib::MP4::File.open(path, false) do |file|
+    metadata = TagLib::MP4::Internal::File.open(path, false) { |f| f.tag.metadata_snapshot }
+    TagLib::MP4::Internal::File.open(path, false) do |file|
       digest = Digest::SHA256.file(path).hexdigest
       removed = file.remove_dangling_chapter_references
       assert removed.all? { |r| r[:status] == :missing && !r[:target_exists] }
@@ -153,7 +153,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
     end
     assert_equal expected, references(path), '保存後のatom構造'
     assert_equal before, retained(path), '全トラック・media・Nero・metadata・artworkのraw保持'
-    TagLib::MP4::File.open(path, false) do |read|
+    TagLib::MP4::Internal::File.open(path, false) do |read|
       assert_equal chapters, read.nero_chapters
       assert metadata.structure_equal?(read.tag.metadata_snapshot)
       assert_empty read.remove_dangling_chapter_references
@@ -163,7 +163,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
   def test_nero_only_zero_references_on_video_audio_subtitle
     with_fixture do |path|
       inject(path, 1 => [0], 2 => [0], 3 => [0])
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         report = file.chapter_reference_diagnostics
         assert_equal [[1, 0], [2, 0], [3, 0]], report.map { |r| [r[:source_track_id], r[:target_track_id]] }
         assert_raise(FrozenError) { report.first[:target_track_id] = 2 }
@@ -203,7 +203,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
   def test_existing_inappropriate_target_is_preserved_in_mixed_payload
     with_fixture(faststart: true) do |path|
       inject(path, 2 => [1, 99])
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         report = file.chapter_reference_diagnostics
         assert_equal [:inappropriate, :missing], report.map { |r| r[:status] }
         assert_equal [true, false], report.map { |r| r[:target_exists] }
@@ -221,7 +221,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
       assert_not_nil valid
       inject(path, valid.first => [valid.last, 0])
       repair_and_check(path, [valid])
-      TagLib::MP4::File.open(path, false) { |f| assert_equal chapters.take(2), f.quicktime_chapters }
+      TagLib::MP4::Internal::File.open(path, false) { |f| assert_equal chapters.take(2), f.quicktime_chapters }
     end
   end
 
@@ -229,7 +229,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
     [false, true].each do |quicktime|
       with_fixture(quicktime: quicktime) do |path|
         digest = Digest::SHA256.file(path).hexdigest
-        TagLib::MP4::File.open(path, false) do |file|
+        TagLib::MP4::Internal::File.open(path, false) do |file|
           assert_empty file.remove_dangling_chapter_references
           assert_empty file.remove_dangling_chapter_references
           assert_equal quicktime ? [:chapter_candidate] : [], file.chapter_reference_diagnostics.map { |r| r[:status] }
@@ -297,7 +297,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
           end
         end
         digest = Digest::SHA256.file(path).hexdigest
-        TagLib::MP4::File.open(path, false) do |file|
+        TagLib::MP4::Internal::File.open(path, false) do |file|
           assert_raise(TagLib::MP4::ChapterReferenceError) { file.remove_dangling_chapter_references }
         end
         assert_equal digest, Digest::SHA256.file(path).hexdigest
@@ -310,7 +310,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
       with_fixture do |path|
         inject(path, 2 => [0])
         digest = Digest::SHA256.file(path).hexdigest
-        TagLib::MP4::File.open(path, false) do |file|
+        TagLib::MP4::Internal::File.open(path, false) do |file|
           file.remove_dangling_chapter_references
           if phase != :replace
             original = file.method(:write_reference_copy)
@@ -351,7 +351,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
     with_fixture do |path|
       inject(path, 1 => [0])
       File.chmod(0o600, path)
-      TagLib::MP4::File.open(path, false) { |f| f.remove_dangling_chapter_references; assert f.save }
+      TagLib::MP4::Internal::File.open(path, false) { |f| f.remove_dangling_chapter_references; assert f.save }
       assert_equal 0o600, File.stat(path).mode & 0o777
       assert_empty references(path)
     end
@@ -377,7 +377,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
           File.binwrite(path, data)
         end
         digest = Digest::SHA256.file(path).hexdigest
-        TagLib::MP4::File.open(path, false) do |file|
+        TagLib::MP4::Internal::File.open(path, false) do |file|
           assert_raise(TagLib::MP4::ChapterReferenceError) { file.chapter_reference_diagnostics }
           assert_raise(TagLib::MP4::ChapterReferenceError) { file.remove_dangling_chapter_references }
         end
@@ -390,7 +390,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
     with_fixture do |path|
       inject(path, 2 => [0])
       digest = Digest::SHA256.file(path).hexdigest
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         assert_equal 1, file.remove_dangling_chapter_references.size
         file.define_singleton_method(:write_reference_copy) { |_plan, _source, destination| File.binwrite(destination, 'broken'); raise IOError, 'injected write failure' }
         error = assert_raise(TagLib::MP4::MdtaSaveError) { file.save_chapters }
@@ -407,16 +407,16 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
   def test_source_changes_and_pending_edits_are_rejected
     with_fixture do |path|
       inject(path, 2 => [0])
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         file.tag.title = '未保存'
         assert_raise(TagLib::MP4::ChapterReferenceError) { file.remove_dangling_chapter_references }
       end
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         file.remove_dangling_chapter_references
         file.set_chapters([], style: :nero)
         assert_raise(TagLib::MP4::MdtaSaveError) { file.save_chapters }
       end
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         file.remove_dangling_chapter_references
         File.open(path, 'ab') { |io| io.write(box('free', ''.b)) }
         digest = Digest::SHA256.file(path).hexdigest
@@ -429,7 +429,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
   def test_repair_plan_is_immutable_and_survives_closed_handle
     with_fixture do |path|
       inject(path, 2 => [0])
-      plan = TagLib::MP4::File.open(path, false) do |file|
+      plan = TagLib::MP4::Internal::File.open(path, false) do |file|
         file.remove_dangling_chapter_references
         file.instance_variable_get(:@chapter_reference_repair)
       end
@@ -437,7 +437,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
       assert_raise(FrozenError) { plan.removed.first[:target_track_id] = 1 }
       assert_raise(FrozenError) { plan.source_digest << 'x' }
       assert_raise(FrozenError) { plan.instance_variable_set(:@moov_start, 0) }
-      assert_equal false, plan.instance_variables.any? { |name| plan.instance_variable_get(name).is_a?(TagLib::MP4::File) }
+      assert_equal false, plan.instance_variables.any? { |name| plan.instance_variable_get(name).is_a?(TagLib::MP4::Internal::File) }
       output = File.join(File.dirname(path), 'detached.mp4')
       plan.write_copy(path, output)
       assert_empty references(output)
@@ -449,7 +449,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
   def test_diagnosis_and_saved_copy_verification_do_not_build_repair_bytes
     with_fixture do |path|
       inject(path, 2 => [0])
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         file.remove_dangling_chapter_references
         parser = TagLib::MP4::ChapterReferences
         original = parser.instance_method(:replacement)
@@ -470,7 +470,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
     with_fixture do |path|
       inject(path, 2 => [0])
       digest = Digest::SHA256.file(path).hexdigest
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         file.nero_chapters
         file.quicktime_chapters
         assert_raise(TagLib::MP4::MdtaSaveError) { file.save_chapters }
@@ -508,18 +508,18 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
         groups = [{ 'chap' => [0] }, { 'chap' => [target] }]
         groups.reverse! if reverse
         inject_groups(path, source => groups, 1 => [{ 'chap' => [0] }], 3 => [{ 'chap' => [0] }])
-        TagLib::MP4::File.open(path, false) do |file|
+        TagLib::MP4::Internal::File.open(path, false) do |file|
           rows = file.chapter_reference_diagnostics.select { |r| r[:source_track_id] == source }
           assert_equal [0, 1], rows.map { |r| r[:tref_index] }
           assert_equal [reverse ? target : 0, reverse ? 0 : target], rows.map { |r| r[:target_track_id] }
         end
         repair_and_check(path, [[source, target]])
-        TagLib::MP4::File.open(path, false) do |file|
+        TagLib::MP4::Internal::File.open(path, false) do |file|
           assert_equal chapters.take(2), file.chapter_snapshot.quicktime
           file.tag.title = '修復後のタグ保存'
           assert file.save
         end
-        TagLib::MP4::File.open(path, false) { |f| assert_equal chapters.take(2), f.chapter_snapshot.quicktime }
+        TagLib::MP4::Internal::File.open(path, false) { |f| assert_equal chapters.take(2), f.chapter_snapshot.quicktime }
       end
     end
   end
@@ -546,7 +546,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
         child(track, 'tkhd')[:data][12, 4] = [1].pack('N')
       end
       digest = Digest::SHA256.file(path).hexdigest
-      TagLib::MP4::File.open(path, false) do |f|
+      TagLib::MP4::Internal::File.open(path, false) do |f|
         assert_raise(TagLib::MP4::ChapterReferenceError) { f.remove_dangling_chapter_references }
       end
       assert_equal digest, Digest::SHA256.file(path).hexdigest
@@ -557,7 +557,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
     with_fixture do |path|
       inject(path, 2 => [0])
       digest = Digest::SHA256.file(path).hexdigest
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         file.remove_dangling_chapter_references
         file.define_singleton_method(:write_reference_copy) { |*_args| raise IOError, 'write fault' }
         original = FileUtils.method(:rm_f)
@@ -603,7 +603,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
 
   def test_reported_timing_inconsistency_is_diagnosed_and_preserved
     with_fixture(quicktime: true) do |path|
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         # native writerが時刻0の空タイトルpaddingを加え、実サンプルを16件にする。
         file.set_chapters(Array.new(15) { |i| TagLib::MP4::Chapter.new((i + 1) * 50, "時間検証#{i}") }, style: :quicktime)
         assert file.save_chapters
@@ -612,15 +612,15 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
       inject_timing(path, target, movie_scale: 441_000_000, movie_duration: 1_605_653_349_300,
         media_duration: 3_640_937, track_duration: 3_640_937, edits: [[0xd865c3b4, 0, 65_536]])
       inject_groups(path, source => [{ 'chap' => [0] }, { 'chap' => [target] }])
-      before = TagLib::MP4::File.open(path, false) { |f| f.chapter_timing_diagnostics }
+      before = TagLib::MP4::Internal::File.open(path, false) { |f| f.chapter_timing_diagnostics }
       assert_equal [:tkhd_elst_duration_mismatch, :elst_matches_movie_duration_low32], before.first[:observations]
       assert_equal({ sample_count: 16, duration: 3_640_937 }, before.first[:stts])
       assert_equal :not_attempted, before.first[:correction]
       assert_raise(FrozenError) { before.first[:movie][:duration] = 0 }
       repair_and_check(path, [[source, target]])
-      after = TagLib::MP4::File.open(path, false) { |f| f.chapter_timing_diagnostics }
+      after = TagLib::MP4::Internal::File.open(path, false) { |f| f.chapter_timing_diagnostics }
       assert_equal before, after
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         reader = TagLib::MP4.const_get(:ChapterReader).new(file)
         assert_equal :complete, reader.report[:quicktime][:status]
         assert_equal 15, reader.values[:quicktime].size
@@ -639,7 +639,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
         duration = edits ? edits.sum(&:first) : 1000
         inject_timing(path, target, movie_scale: 1000, movie_duration: 1000,
           media_duration: 1000, track_duration: duration, edits: edits)
-        report = TagLib::MP4::File.open(path, false) { |f| f.chapter_timing_diagnostics.first }
+        report = TagLib::MP4::Internal::File.open(path, false) { |f| f.chapter_timing_diagnostics.first }
         assert_empty report[:observations]
         assert_equal edits&.map { |d, t, r| { version: 0, segment_duration: d, media_time: t, media_rate: r } }, report[:edits]
       end
@@ -667,7 +667,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
     with_fixture do |path|
       inject_groups(path, 2 => [{ 'chap' => [1, 0] }, { 'chap' => [3] }])
       digest = Digest::SHA256.file(path).hexdigest
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         file.remove_dangling_chapter_references
         original = file.method(:write_reference_copy)
         fixture = self
@@ -699,7 +699,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
         end
         child(child(track, 'edts'), 'elst')[:data] = [0x01000000, 2].pack('N2') + [200, -1, 65_536, 800, 100, 65_536].pack('Q>q>l>Q>q>l>')
       end
-      report = TagLib::MP4::File.open(path, false) { |f| f.chapter_timing_diagnostics.first }
+      report = TagLib::MP4::Internal::File.open(path, false) { |f| f.chapter_timing_diagnostics.first }
       assert_empty report[:observations]
       assert_equal 1, report[:media][:version]
       assert_equal 1, report[:track_header][:version]
@@ -709,7 +709,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
         child(child(track, 'edts'), 'elst')[:data] = [0x01000000, 2].pack('N2')
       end
       digest = Digest::SHA256.file(path).hexdigest
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         assert_raise(TagLib::MP4::ChapterReferenceError) { file.chapter_timing_diagnostics }
       end
       assert_equal digest, Digest::SHA256.file(path).hexdigest
@@ -721,14 +721,14 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
       source, target = references(path).first
       inject_groups(path, source => [{ 'chap' => [0] }, { 'chap' => [target] }])
       # 保存フローが旧native handleをcloseするため、失敗後に二重closeしない。
-      file = TagLib::MP4::File.new(path, false)
+      file = TagLib::MP4::Internal::File.new(path, false)
       file.remove_dangling_chapter_references
       file.define_singleton_method(:initialize) { |*_args| raise IOError, 'reopen fault' }
       error = assert_raise(TagLib::MP4::MdtaSaveError) { file.save }
       assert_equal :reopen, error.phase
       assert_equal true, error.committed
       assert_empty Dir.glob("#{path}.taglib-mdta-*")
-      TagLib::MP4::File.open(path, false) do |read|
+      TagLib::MP4::Internal::File.open(path, false) do |read|
         assert_empty read.remove_dangling_chapter_references
         assert_equal chapters.take(2), read.chapter_snapshot.quicktime
       end
@@ -744,7 +744,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
                      '-show_data_hash', 'sha256', '-show_entries', 'packet=stream_index,size,data_hash', '-of', 'json', path]
       packets, _error, status = Open3.capture3(*packet_args)
       assert status.success?
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         rows = file.chapter_reference_diagnostics
         assert_equal %w[vide soun sbtl], rows.map { |row| row[:source_handler] }
         assert_equal [0, 4, 0], rows.map { |row| row[:target_track_id] }
@@ -754,14 +754,14 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
         assert file.save_chapters
       end
       assert_equal [[2, 4]], references(path), '未選択の非ゼロ欠落参照を保持'
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         assert_raise(TagLib::MP4::MdtaSaveError) { file.save }
         selected = file.chapter_reference_diagnostics
         assert_equal selected, file.remove_chapter_references(references: selected)
         assert file.save_chapters
       end
       assert_equal before, retained(path)
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         assert_empty file.chapter_reference_diagnostics
         assert_equal chapters, file.nero_chapters
         assert_equal 1, file.tag.artwork.size
@@ -783,13 +783,13 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
       with_fixture do |path|
         inject(path, 1 => [0], 2 => [0], 3 => [0])
         digest = Digest::SHA256.file(path).hexdigest
-        TagLib::MP4::File.open(path, false) do |file|
+        TagLib::MP4::Internal::File.open(path, false) do |file|
           file.remove_chapters(style: :quicktime)
           assert file.save_chapters
         end
         assert_equal digest, Digest::SHA256.file(path).hexdigest
         assert_equal [[1, 0], [2, 0], [3, 0]], references(path)
-        TagLib::MP4::File.open(path, false) { |f| assert_equal chapters, f.nero_chapters }
+        TagLib::MP4::Internal::File.open(path, false) { |f| assert_equal chapters, f.nero_chapters }
       end
     end
   end
@@ -850,8 +850,8 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
       end
       add_hint_tracks(path)
       before = retained(path)
-      metadata = TagLib::MP4::File.open(path, false) { |f| f.tag.metadata_snapshot }
-      TagLib::MP4::File.open(path, false) do |file|
+      metadata = TagLib::MP4::Internal::File.open(path, false) { |f| f.tag.metadata_snapshot }
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         rows = file.chapter_reference_diagnostics
         assert_equal [[:chapter_candidate, 'vide', target]], rows.map { |r| r.values_at(:status, :source_handler, :target_track_id) }
         assert_raise(TagLib::MP4::ChapterSnapshotError) { file.chapter_snapshot }
@@ -861,7 +861,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
         assert file.save_chapters
       end
       assert_equal before, retained(path)
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         assert_empty file.chapter_reference_diagnostics
         assert metadata.structure_equal?(file.tag.metadata_snapshot)
         assert_empty file.chapter_snapshot.quicktime
@@ -942,7 +942,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
           end
         end
         digest = Digest::SHA256.file(path).hexdigest
-        TagLib::MP4::File.open(path, false) do |file|
+        TagLib::MP4::Internal::File.open(path, false) do |file|
           assert_raise(TagLib::MP4::ChapterReferenceError, kind.to_s) { file.chapter_reference_diagnostics }
           assert_raise(TagLib::MP4::ChapterReferenceError, kind.to_s) { file.remove_dangling_chapter_references }
           assert_nil file.instance_variable_get(:@chapter_reference_repair)
@@ -957,7 +957,7 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
       add_hint_tracks(path)
       inject(path, 1 => [0])
       before = File.binread(path)
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         file.remove_chapter_references(references: file.chapter_reference_diagnostics)
         original = file.method(:write_reference_copy)
         file.define_singleton_method(:write_reference_copy) do |plan, source, destination|

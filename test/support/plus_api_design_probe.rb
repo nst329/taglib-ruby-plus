@@ -160,7 +160,7 @@ module PlusAPIDesignProbe
     def read
       raise ClosedError, 'document is closed' if @closed
       ensure_generation!
-      result = Legacy::File.open(@path, false) { |file| yield file }
+      result = Legacy::Internal::File.open(@path, false) { |file| yield file }
       ensure_generation!
       result
     end
@@ -233,7 +233,7 @@ module PlusAPIDesignProbe
 
     # 既存保存処理を再利用するためのadapter。特殊writerの選択は実装しない。
     def write_candidate(path)
-      Legacy::File.open(path, false) do |file|
+      Legacy::Internal::File.open(path, false) do |file|
         file.restore_metadata_snapshot(@metadata)
         @chapter_update&.formats&.each { |format, values| file.set_chapters(values, style: format) }
         raise IOError, 'backend save failed' unless file.save
@@ -242,7 +242,7 @@ module PlusAPIDesignProbe
 
     # 独立handleの値とmedia署名を照合する。probeはmdatを変えないNero更新だけを実行する。
     def verify_candidate(path)
-      Legacy::File.open(path, false) do |file|
+      Legacy::Internal::File.open(path, false) do |file|
         actual = file.metadata_snapshot
         removable = actual.mdta.filter_map { |key, _index, values| key if @allowed_empty.include?(key) && values.empty? }
         raise IOError, 'metadata mismatch' unless @metadata == actual.without(mdta: removable)

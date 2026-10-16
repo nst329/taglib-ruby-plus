@@ -20,7 +20,7 @@ class MP4MetadataAPITest < Test::Unit::TestCase
   end
 
   def open_file(path)
-    file = TagLib::MP4::File.new(path, false)
+    file = TagLib::MP4::Internal::File.new(path, false)
     yield file
   ensure
     file.close if file

@@ -8,6 +8,15 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.20
+
+### Added
+- `TagLib::Plus::MP4`に編集セッション、不変metadata/chapter値、診断、明示的修復、検証付き保存を追加。
+- 旧fork追加操作を内部専用入口へ分離し、保存失敗後の状態と診断schemaを固定。
+
+### Fixed
+- Plus APIの保存・診断状態確認とmetadata/chapter変更判定を共通化し、公開前後の失敗原因を保持。
+
 ## 2.3.2.19
 
 ### Fixed

@@ -2,9 +2,9 @@
 
 通常のRubyテストは`test/**/*_test.rb`を対象にし、`Rakefile`の`rake test`から実行する。Rake経由では成功時の進捗・テスト名・色を抑制し、失敗時だけ例外、backtrace、causeを出力する。MP4のnative bindingを使うため、ローカルのTagLibライブラリを`DYLD_LIBRARY_PATH`で指定する環境では、プロジェクトの標準テストと同じRubyを使う。
 
-現行のPlus APIは[plus_mp4_api_test.rb](plus_mp4_api_test.rb)で確認する。ここでは編集用File、不変metadata/chapter値、save/save-as、世代不一致、無変更コピー、typed mdtaの所有コピー、chapter形式の保持を検証する。
+現行のPlus APIは[plus_mp4_api_test.rb](plus_mp4_api_test.rb)で確認する。ここでは編集用File、不変metadata/chapter値、save/save-as、世代不一致、無変更コピー、typed mdtaの所有コピー、chapter形式の保持を検証する。公開前後の障害注入、cleanupの原因連鎖、公開競合、旧APIの非公開化、診断schema、chapter sampleの所有もここで確認する。
 
-既存の低水準MP4 APIは、metadata snapshot、chapter sample、chapter参照、atom修復などの責務別テストで検証する。Plus APIの保存処理がこれらを経由するため、関連変更時は次の範囲を合わせて実行する。
+内部専用の`TagLib::MP4::Internal::File`を使うテストは、metadata snapshot、chapter sample、chapter参照、atom修復などの責務別テストで検証する。Plus APIの保存処理がこれらを経由するため、関連変更時は次の範囲を合わせて実行する。
 
 ```sh
 bundle exec rake test:plus_mp4

@@ -229,11 +229,13 @@ module TagLib::MP4
     # @param style [Symbol, nil] `:nero`, `:quicktime`, or `nil` for automatic resolution
     # @return [Array<TagLib::MP4::Chapter>]
     # @raise [TagLib::MP4::ChapterConflictError] if both formats conflict
+    # @api private
     def chapters(style: nil)
     end
 
     # Return which chapter formats are present.
     # @return [Symbol] `:none`, `:nero`, `:quicktime`, or `:both`
+    # @api private
     def chapter_style
     end
 
@@ -248,50 +250,59 @@ module TagLib::MP4
     # @param style [Symbol] `:preserve`, `:nero`, `:quicktime`, or `:both`
     # @return [TagLib::MP4::File] self
     # @raise [ArgumentError] if chapters or style are invalid
+    # @api private
     def set_chapters(chapters, style: :preserve)
     end
 
     # Remove chapters in memory without writing the file.
     # @param style [Symbol] `:preserve`, `:nero`, `:quicktime`, or `:both`
     # @return [TagLib::MP4::File] self
+    # @api private
     def remove_chapters(style: :both)
     end
 
     # Return Nero chapters only.
     # @return [Array<TagLib::MP4::Chapter>]
+    # @api private
     def nero_chapters
     end
 
     # Set Nero chapters in memory without writing the file.
     # @param chapters [Array<TagLib::MP4::Chapter>]
     # @return [TagLib::MP4::File] self
+    # @api private
     def set_nero_chapters(chapters)
     end
 
     # Remove Nero chapters in memory without writing the file.
     # @return [TagLib::MP4::File] self
+    # @api private
     def remove_nero_chapters
     end
 
     # Return QuickTime chapters only.
     # @return [Array<TagLib::MP4::Chapter>]
+    # @api private
     def quicktime_chapters
     end
 
     # Set QuickTime chapters in memory without writing the file.
     # @param chapters [Array<TagLib::MP4::Chapter>]
     # @return [TagLib::MP4::File] self
+    # @api private
     def set_quicktime_chapters(chapters)
     end
 
     # Remove QuickTime chapters in memory without writing the file.
     # @return [TagLib::MP4::File] self
+    # @api private
     def remove_quicktime_chapters
     end
 
     # Save only chapter changes, preserving existing tag items and artwork.
     # @return [true]
     # @raise [TagLib::MP4::ChapterSaveError] if the file cannot be saved
+    # @api private
     def save_chapters
     end
   end
@@ -299,17 +310,20 @@ module TagLib::MP4
   class Tag < TagLib::Tag
     # Native support independently of per-file structural editability.
     # @return [Hash] snapshot_v1, atomic_restore_v1, diagnostics and reason
+    # @api private
     def metadata_capabilities
     end
 
     # Inspect metadata without repairing or writing it.
     # @return [MetadataDiagnostics] status, issues, structure and restorable?
+    # @api private
     def metadata_diagnostics
     end
 
     # Capture typed items, artwork and ordered mdta into immutable Ruby-owned values.
     # @return [MetadataSnapshot] usable after File#close
     # @raise [MetadataSnapshotError] if complete preservation is unavailable
+    # @api private
     def metadata_snapshot
     end
 
@@ -318,6 +332,7 @@ module TagLib::MP4
     # @param snapshot [MetadataSnapshot]
     # @return [Tag] self
     # @raise [MetadataSnapshotError] without partial updates
+    # @api private
     def restore_metadata_snapshot(snapshot)
     end
 
@@ -326,22 +341,26 @@ module TagLib::MP4
     # @example
     #   tag.property_update_effects(:title)[:mdta][:remove] # => ['title']
     # @return [Hash] frozen { items: { set: [...], remove: [...] }, mdta: { remove: [...] } }
+    # @api private
     def property_update_effects(name, via: :set_property, operation: :set)
     end
 
     # Return a managed MP4/iTunes property; copyright reads ©cpy only.
     # @param name [String, Symbol] property name
     # @return [String, ContentRating, nil] first value, or nil if absent
+    # @api private
     def property(name)
     end
 
     # Return all values for a managed MP4/iTunes property.
     # @return [Array<String, ContentRating>]
+    # @api private
     def property_values(name)
     end
 
     # Return all managed properties currently present.
     # @return [Hash<String, Array<String, ContentRating>>]
+    # @api private
     def properties
     end
 
@@ -352,6 +371,7 @@ module TagLib::MP4
     # @param name [String, Symbol]
     # @param value [String, ContentRating]
     # @return [TagLib::MP4::Tag] self
+    # @api private
     def set_property(name, value)
     end
 
@@ -364,6 +384,7 @@ module TagLib::MP4
     # @raise [ArgumentError] if a name or value is invalid
     # @param values [Hash<String, String, ContentRating>]
     # @return [TagLib::MP4::Tag] self
+    # @api private
     def set_properties(values)
     end
 
@@ -383,28 +404,33 @@ module TagLib::MP4
     #     { data_type: 1, locale: 0, data: 'first'.b },
     #     { data_type: 1, locale: 1041, data: 'second'.b }
     #   ])
+    # @api private
     def replace_mdta_items(key, values); end
 
     # Remove one managed MP4/iTunes property in memory.
     # This removes both the ilst value and its corresponding FFmpeg mdta
     # fallback, when one exists.
     # @return [TagLib::MP4::Tag] self
+    # @api private
     def remove_property(name)
     end
 
     # Return Ruby-owned copies of all MP4 cover art.
     # @return [Array<TagLib::MP4::Artwork>]
+    # @api private
     def artwork
     end
 
     # Replace all MP4 cover art in memory.
     # @param images [Array<TagLib::MP4::Artwork>]
     # @return [TagLib::MP4::Tag] self
+    # @api private
     def set_artwork(images)
     end
 
     # Remove all MP4 cover art in memory.
     # @return [TagLib::MP4::Tag] self
+    # @api private
     def remove_artwork
     end
 

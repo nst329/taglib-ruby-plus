@@ -21,7 +21,7 @@ class MP4SnapshotExtensionsTest < Test::Unit::TestCase
       '-v', 'error', '-f', 'lavfi', '-i', 'sine=duration=0.1', '-c:a', 'aac',
       '-movflags', 'use_metadata_tags', '-metadata', 'title=original', @path)
     assert status.success?, err
-    TagLib::MP4::File.open(@path, false) do |f|
+    TagLib::MP4::Internal::File.open(@path, false) do |f|
       assert f.tag.metadata_capabilities[:snapshot_v1], 'snapshot native support required; do not omit'
       f.tag.replace_mdta_items('gain', typed_values.map { |t, l, b| { data_type: t, locale: l, data: b } })
       f.tag.item_map.insert('cprt', TagLib::MP4::Item.from_string_list(['first', 'second', 'first']))
@@ -40,13 +40,13 @@ class MP4SnapshotExtensionsTest < Test::Unit::TestCase
   end
 
   def snapshot
-    TagLib::MP4::File.open(@path, false) { |f| f.tag.metadata_snapshot }
+    TagLib::MP4::Internal::File.open(@path, false) { |f| f.tag.metadata_snapshot }
   end
 
   def test_public_edit_preserves_typed_values_and_removes_excluded_values
     original = snapshot
     expected = original.without(items: ['cprt'], mdta: ['gain']).with(mdta: { 'new' => typed_values })
-    TagLib::MP4::File.open(@path, false) { |f| f.tag.restore_metadata_snapshot(expected); assert f.save }
+    TagLib::MP4::Internal::File.open(@path, false) { |f| f.tag.restore_metadata_snapshot(expected); assert f.save }
     actual = snapshot
     assert expected.logical_equal?(actual)
     assert_empty expected.diff(actual)
@@ -57,7 +57,7 @@ class MP4SnapshotExtensionsTest < Test::Unit::TestCase
   end
 
   def test_all_property_effects_match_the_real_set_and_remove_operations
-    TagLib::MP4::File.open(@path, false) do |f|
+    TagLib::MP4::Internal::File.open(@path, false) do |f|
       TagLib::MP4::Tag::PROPERTY_ATOMS.each_key do |name|
         key = TagLib::MP4::Tag::MDTA_PROPERTY_KEYS[name]
         f.tag.replace_mdta_items(key, [{ data_type: 1, locale: 0, data: 'old' }]) if key
@@ -95,7 +95,7 @@ class MP4SnapshotExtensionsTest < Test::Unit::TestCase
   end
 
   def test_title_setter_keeps_native_conversion_and_empty_value_semantics
-    TagLib::MP4::File.open(@path, false) do |f|
+    TagLib::MP4::Internal::File.open(@path, false) do |f|
       initial = f.tag.metadata_snapshot
       base_setter = TagLib::Tag.instance_method(:title=)
       convertible = Object.new
@@ -118,7 +118,7 @@ class MP4SnapshotExtensionsTest < Test::Unit::TestCase
     original = snapshot
     expected = original.with(items: [['©nam', :string_list, 255, ['allowed']]])
     disk = Digest::SHA256.file(@path).hexdigest
-    TagLib::MP4::File.open(@path, false) do |f|
+    TagLib::MP4::Internal::File.open(@path, false) do |f|
       f.extend(P::ExpectedSave)
       f.probe_expected_snapshot = expected
       f.tag.restore_metadata_snapshot(expected)

@@ -23,7 +23,7 @@ module TagLib::MP4
           ChapterSnapshot::STYLES.each { |style| capture(style) }
         end
       end
-    rescue ChapterSnapshotError, MdtaSaveError, SystemCallError, IOError => error
+    rescue ChapterSnapshotError, MdtaSaveError => error
       (@samples ? [:quicktime] : ChapterSnapshot::STYLES).each { |style| failed(style, error) }
     ensure
       @report = MetadataSnapshot.copy(@report)

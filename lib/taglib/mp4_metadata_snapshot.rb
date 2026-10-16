@@ -374,6 +374,9 @@ module TagLib::MP4
 
   # Bounded metadata-only inspection. Media payloads are skipped; no repair/write is performed.
   class MetadataStructureReader
+    # 構造拒否だけを診断へ変換し、I/O障害と実装エラーを伝播させる。
+    class ParseError < StandardError; end
+
     LIMIT = 64 * 1024 * 1024
     CONTAINERS = %w[moov udta trak mdia].freeze
 
@@ -389,7 +392,7 @@ module TagLib::MP4
       ::File.open(path, 'rb') { |io| walk(io, 0, io.stat.size, []) }
       issue(:multiple_meta, 'metadata', 'multiple metadata contexts') if @metas.length > 1
       { issues: @issues, structure: { contexts: @metas } }
-    rescue StandardError => error
+    rescue ParseError => error
       { issues: [{ code: :unreadable_structure, severity: :error, path: 'metadata', message: error.message }], structure: {} }
     end
 
@@ -404,19 +407,19 @@ module TagLib::MP4
       rows = []
       while offset < limit
         @count += 1
-        raise 'metadata atom count exceeds limit' if @count > 50_000
-        raise 'truncated atom header' if limit - offset < 8
+        raise ParseError, 'metadata atom count exceeds limit' if @count > 50_000
+        raise ParseError, 'truncated atom header' if limit - offset < 8
         io.seek(offset)
         size, type = io.read(8).unpack('Na4')
         header = 8
         if size == 1
           header = 16
-          raise 'truncated extended atom header' if limit - offset < header
+          raise ParseError, 'truncated extended atom header' if limit - offset < header
           size = io.read(8).unpack1('Q>')
         elsif size.zero?
           size = limit - offset
         end
-        raise 'invalid atom length' if size < header || size > limit - offset
+        raise ParseError, 'invalid atom length' if size < header || size > limit - offset
         rows << [type, offset + header, offset + size, header]
         offset += size
       end
@@ -424,7 +427,7 @@ module TagLib::MP4
     end
 
     def walk(io, start, limit, path)
-      raise 'metadata nesting exceeds limit' if path.length > 8
+      raise ParseError, 'metadata nesting exceeds limit' if path.length > 8
       boxes(io, start, limit).each do |type, payload, finish, header|
         current = path + [type]
         if type == 'meta'
@@ -440,11 +443,11 @@ module TagLib::MP4
 
     def inspect_meta(io, start, finish, path, header)
       name = path.join('/')
-      raise 'metadata exceeds inspection size limit' if finish - start > LIMIT
+      raise ParseError, 'metadata exceeds inspection size limit' if finish - start > LIMIT
       issue(:extended_metadata, name, 'extended metadata atom is unsupported') unless header == 8
       io.seek(start)
       flags = io.read(4)
-      raise 'truncated metadata FullBox' unless flags&.bytesize == 4
+      raise ParseError, 'truncated metadata FullBox' unless flags&.bytesize == 4
       issue(:invalid_fullbox, name, 'meta version/flags must be zero') unless flags == "\0".b * 4
       children = boxes(io, start + 4, finish)
       %w[hdlr keys ilst].each do |type|
@@ -477,7 +480,7 @@ module TagLib::MP4
           remaining = ending - payload + item_header
           while remaining.positive?
             chunk = io.read([remaining, 64 * 1024].min)
-            raise 'truncated metadata item digest' unless chunk && !chunk.empty?
+            raise ParseError, 'truncated metadata item digest' unless chunk && !chunk.empty?
             digest.update(chunk)
             remaining -= chunk.bytesize
           end
@@ -519,7 +522,7 @@ module TagLib::MP4
         issue(:unsupported_item_structure, path + '/ilst', 'scalar item has multiple values', key: key)
       end
       data_types = values.map do |row|
-        raise 'truncated ordinary data' if row[2] - row[1] < 8
+        raise ParseError, 'truncated ordinary data' if row[2] - row[1] < 8
         io.seek(row[1])
         data_type, locale = io.read(8).unpack('N2')
         issue(:unsupported_item_locale, path + '/ilst', 'native ordinary items cannot preserve locale', key: key) unless locale.zero? || key == 'purl'
@@ -535,7 +538,7 @@ module TagLib::MP4
       return unless @item_types[key] == 7
 
       values.each do |row|
-        raise 'truncated ordinary data' if row[2] - row[1] < 8
+        raise ParseError, 'truncated ordinary data' if row[2] - row[1] < 8
         io.seek(row[1] + 8)
         text = io.read(row[2] - row[1] - 8).force_encoding(Encoding::UTF_8)
         unless text.valid_encoding? && !text.include?("\0")
@@ -549,12 +552,12 @@ module TagLib::MP4
       key = type.dup.force_encoding(Encoding::ISO_8859_1).encode(Encoding::UTF_8)
       if type == '----'
         headers = %w[mean name].map do |name|
-          raise 'duplicate freeform header' unless parts.count { |entry| entry[0] == name } == 1
+          raise ParseError, 'duplicate freeform header' unless parts.count { |entry| entry[0] == name } == 1
           row = parts.find { |entry| entry[0] == name }
-          raise 'invalid freeform header' unless row && row[2] - row[1] >= 4
+          raise ParseError, 'invalid freeform header' unless row && row[2] - row[1] >= 4
           io.seek(row[1] + 4)
           value = io.read(row[2] - row[1] - 4).force_encoding(Encoding::UTF_8)
-          raise 'unsupported freeform name' unless value.valid_encoding? && !value.include?("\0")
+          raise ParseError, 'unsupported freeform name' unless value.valid_encoding? && !value.include?("\0")
           value
         end
         key = '----:' + headers.join(':')
@@ -565,21 +568,21 @@ module TagLib::MP4
     def read_keys(io, row, path)
       io.seek(row[1])
       data = io.read(row[2] - row[1])
-      raise 'truncated keys FullBox' if data.bytesize < 8
+      raise ParseError, 'truncated keys FullBox' if data.bytesize < 8
       flags, count = data.unpack('N2')
-      raise 'unsupported keys FullBox' unless flags.zero?
-      raise 'keys count exceeds metadata length' if count > (data.bytesize - 8) / 8
+      raise ParseError, 'unsupported keys FullBox' unless flags.zero?
+      raise ParseError, 'keys count exceeds metadata length' if count > (data.bytesize - 8) / 8
       offset = 8
       keys = Array.new(count) do
         size = data.byteslice(offset, 4)&.unpack1('N')
-        raise 'invalid keys entry' unless size && size >= 8 && offset + size <= data.bytesize
+        raise ParseError, 'invalid keys entry' unless size && size >= 8 && offset + size <= data.bytesize
         namespace = data.byteslice(offset + 4, 4)
         key = data.byteslice(offset + 8, size - 8).force_encoding(Encoding::UTF_8)
-        raise 'invalid mdta key' unless namespace == 'mdta' && !key.empty? && key.valid_encoding? && !key.include?("\0")
+        raise ParseError, 'invalid mdta key' unless namespace == 'mdta' && !key.empty? && key.valid_encoding? && !key.include?("\0")
         offset += size
         key
       end
-      raise 'trailing keys bytes' unless offset == data.bytesize
+      raise ParseError, 'trailing keys bytes' unless offset == data.bytesize
       issue(:duplicate_key, path + '/keys', 'duplicate mdta key') unless keys.uniq == keys
       keys
     end

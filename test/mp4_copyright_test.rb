@@ -27,7 +27,7 @@ class MP4CopyrightTest < Test::Unit::TestCase
     args += ['-movflags', 'use_metadata_tags'] if layout == :mdta
     _, err, status = Open3.capture3(*args, path)
     assert status.success?, err
-    TagLib::MP4::File.open(path, false) do |f|
+    TagLib::MP4::Internal::File.open(path, false) do |f|
       assert f.tag.metadata_capabilities[:snapshot_v1], 'native snapshot support required'
       f.tag.item_map.insert('©cpy', TagLib::MP4::Item.from_string_list(['旧著作権', '', '旧著作権']))
       f.tag.item_map.insert('cprt', TagLib::MP4::Item.from_string_list(['independent']))
@@ -45,7 +45,7 @@ class MP4CopyrightTest < Test::Unit::TestCase
   end
 
   def snapshot(path)
-    TagLib::MP4::File.open(path, false) { |f| f.tag.metadata_snapshot }
+    TagLib::MP4::Internal::File.open(path, false) { |f| f.tag.metadata_snapshot }
   end
 
   def test_copyright_update_and_removal_in_both_layouts
@@ -53,7 +53,7 @@ class MP4CopyrightTest < Test::Unit::TestCase
       path = fixture(layout)
       original = snapshot(path)
       assert_equal ['旧著作権', '', '旧著作権'], original.items.find { |r| r[0] == '©cpy' }[3]
-      TagLib::MP4::File.open(path, false) do |f|
+      TagLib::MP4::Internal::File.open(path, false) do |f|
         assert_equal '旧著作権', f.tag.property('copyright')
         assert_equal ['旧著作権', '', '旧著作権'], f.tag.property_values('copyright')
         assert_equal ['旧著作権', '', '旧著作権'], f.tag.properties['copyright']
@@ -68,7 +68,7 @@ class MP4CopyrightTest < Test::Unit::TestCase
       assert_equal original.mdta, actual.mdta
       assert_equal original.items.reject { |r| r[0] == '©cpy' }, actual.items.reject { |r| r[0] == '©cpy' }
       assert_equal original.items.find { |r| r[0] == '©cpy' }[2], actual.items.find { |r| r[0] == '©cpy' }[2]
-      TagLib::MP4::File.open(path, false) do |f|
+      TagLib::MP4::Internal::File.open(path, false) do |f|
         f.tag.remove_property('copyright')
         assert_nil f.tag.property('copyright'), 'cprt does not serve as fallback'
         assert f.save
@@ -84,7 +84,7 @@ class MP4CopyrightTest < Test::Unit::TestCase
     path = fixture(:mdta)
     original = snapshot(path)
     disk = Digest::SHA256.file(path).hexdigest
-    TagLib::MP4::File.open(path, false) do |f|
+    TagLib::MP4::Internal::File.open(path, false) do |f|
       [['a', 'b'], nil, "a\0b", "\xff".b].each do |value|
         assert_raise(ArgumentError, Encoding::UndefinedConversionError) { f.tag.set_property('copyright', value) }
         assert original.structure_equal?(f.tag.metadata_snapshot)
@@ -98,7 +98,7 @@ class MP4CopyrightTest < Test::Unit::TestCase
     original = snapshot(source)
     destination = File.join(@dir, 'destination.mp4')
     FileUtils.cp(source, destination)
-    TagLib::MP4::File.open(destination, false) do |f|
+    TagLib::MP4::Internal::File.open(destination, false) do |f|
       f.tag.remove_item('©cpy')
       f.tag.restore_metadata_snapshot(original)
       assert f.save

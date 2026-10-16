@@ -24,7 +24,7 @@ class PlusAPIDesignProbeTest < Test::Unit::TestCase
       '-f', 'lavfi', '-i', 'sine=duration=1', '-c:v', 'mpeg4', '-c:a', 'aac',
       '-metadata', 'title=original', '-metadata', 'untouched=keep', '-movflags', '+faststart+use_metadata_tags', @path)
     assert status.success?, error
-    L::File.open(@path, false) do |file|
+    L::Internal::File.open(@path, false) do |file|
       snapshot = file.metadata_snapshot.with(mdta: { 'empty-key' => [], 'binary' => [[33, 7, "\0\xff".b], [1, 1041, ''.b]] })
       file.restore_metadata_snapshot(snapshot)
       file.set_chapters(initial_chapters, style: :both)
@@ -281,7 +281,7 @@ class PlusAPIDesignProbeTest < Test::Unit::TestCase
 
   def test_replace_snapshot_may_leave_only_explicitly_cleared_destination_keys
     source = P.open(@path, &:metadata)
-    L::File.open(@path, false) do |file|
+    L::Internal::File.open(@path, false) do |file|
       file.tag.replace_mdta_items('destination-only', [{ data_type: 1, locale: 0, data: 'remove'.b }])
       assert file.save
     end
@@ -339,7 +339,7 @@ class PlusAPIDesignProbeTest < Test::Unit::TestCase
         assert_kind_of P::SourceChangedError, error.cause
       end
     end
-    L::File.open(@path, false) { |file| assert_nil file.metadata_snapshot.item('©nam') }
+    L::Internal::File.open(@path, false) { |file| assert_nil file.metadata_snapshot.item('©nam') }
   end
 
   def test_cleanup_failure_preserves_original_failure_and_temporary_path

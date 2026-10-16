@@ -29,7 +29,7 @@ class MP4AtomRepairTest < Test::Unit::TestCase
   end
 
   def seed_timing
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.set_chapters(Array.new(15) { |i| TagLib::MP4::Chapter.new((i + 1) * 50, '') }, style: :quicktime)
       assert file.save_chapters
     end
@@ -44,7 +44,7 @@ class MP4AtomRepairTest < Test::Unit::TestCase
   def test_explicit_timing_repair_preserves_samples_and_survives_regular_save
     seed_timing
     original = digest
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       before = file.chapter_snapshot
       media = file.send(:mdat_payload_signature, @path)
       id = file.chapter_timing_diagnostics.first[:track_id]
@@ -68,7 +68,7 @@ class MP4AtomRepairTest < Test::Unit::TestCase
     inject_chapter_timing(@path, movie_scale: 441_000_000, movie_duration: MOVIE_DURATION,
       track_duration: MOVIE_DURATION & 0xffffffff, edit_rows: [[MOVIE_DURATION & 0xffffffff, 0, 65_536]])
     original = digest
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       id = file.chapter_timing_diagnostics.first[:track_id]
       assert_raise(ArgumentError) { file.repair_native_chapter_timing(track_id: id, profile: :guess) }
       assert_equal :not_applicable, file.repair_native_chapter_timing(track_id: id, profile: :taglib_full_movie)[:status]
@@ -79,12 +79,12 @@ class MP4AtomRepairTest < Test::Unit::TestCase
 
   def test_time_repair_rejects_pending_tags_and_later_source_changes
     seed_timing
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       id = file.chapter_timing_diagnostics.first[:track_id]
       file.tag.title = 'pending'
       assert_raise(TagLib::MP4::ChapterReferenceError) { file.repair_native_chapter_timing(track_id: id, profile: :taglib_full_movie) }
     end
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.repair_native_chapter_timing(track_id: file.chapter_timing_diagnostics.first[:track_id], profile: :taglib_full_movie)
       File.open(@path, 'ab') { |output| output.write(atom_box('free', 'external')) }
       changed = digest
@@ -96,13 +96,13 @@ class MP4AtomRepairTest < Test::Unit::TestCase
 
   def test_unindexed_save_preserves_raw_duplicates_and_normal_tag_changes
     seed_timing
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.repair_native_chapter_timing(track_id: file.chapter_timing_diagnostics.first[:track_id], profile: :taglib_full_movie)
       assert file.save_chapters
     end
     inject_metadata(@path, keys: %w[first second], indices: [0, 0, 0])
     File.chmod(0o600, @path)
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       chapters = file.chapter_snapshot
       media = file.send(:mdat_payload_signature, @path)
       original = digest
@@ -125,7 +125,7 @@ class MP4AtomRepairTest < Test::Unit::TestCase
     [[3], [0, 1], [0, 0, 2], [1, 0]].each do |indices|
       inject_metadata(@path, keys: %w[first second], indices: indices)
       original = digest
-      TagLib::MP4::File.open(@path, false) do |file|
+      TagLib::MP4::Internal::File.open(@path, false) do |file|
         file.tag.title = 'pending title'
         error = assert_raise(TagLib::MP4::MdtaSaveError) { file.save_preserving_unindexed_mdta }
         assert_equal :prepare, error.phase
@@ -140,7 +140,7 @@ class MP4AtomRepairTest < Test::Unit::TestCase
       inject_metadata(@path, keys: %w[first second], indices: [0, 0])
       original = digest
       fixture = self
-      TagLib::MP4::File.open(@path, false) do |file|
+      TagLib::MP4::Internal::File.open(@path, false) do |file|
         original_reinsert = file.method(:reinsert_unindexed_copy)
         file.define_singleton_method(:reinsert_unindexed_copy) do |path, plan|
           original_reinsert.call(path, plan)
@@ -169,7 +169,7 @@ class MP4AtomRepairTest < Test::Unit::TestCase
     [:write_unindexed_regular_copy, :reinsert_unindexed_copy, :verify_unindexed_copy].zip([:taglib_save, :reinsert, :verify]).each do |method, phase|
       inject_metadata(@path, keys: %w[first second], indices: [0, 0])
       original = digest
-      TagLib::MP4::File.open(@path, false) do |file|
+      TagLib::MP4::Internal::File.open(@path, false) do |file|
         file.tag.title = 'pending'
         file.define_singleton_method(method) { |*_args| raise IOError, 'injected failure' }
         error = assert_raise(TagLib::MP4::MdtaSaveError) { file.save_preserving_unindexed_mdta }
@@ -203,7 +203,7 @@ class MP4AtomRepairTest < Test::Unit::TestCase
       end
       size = File.size(@path)
       moov_before, start, boundary = read_fixture_moov(@path)
-      TagLib::MP4::File.open(@path, false) do |file|
+      TagLib::MP4::Internal::File.open(@path, false) do |file|
         signature = file.send(:mdat_payload_signature, @path)
         file.repair_native_chapter_timing(track_id: file.chapter_timing_diagnostics.first[:track_id], profile: :taglib_full_movie)
         assert file.save_chapters
@@ -226,7 +226,7 @@ class MP4AtomRepairTest < Test::Unit::TestCase
         suffix = data.getbyte(0) == 1 ? 32 : 20
         movie[:data] = [0x01000000].pack('N') + [0, 0].pack('Q>2') + [scale].pack('N') + [duration].pack('Q>') + data.byteslice(suffix..)
       end
-      TagLib::MP4::File.open(@path, false) do |file|
+      TagLib::MP4::Internal::File.open(@path, false) do |file|
         file.set_chapters([TagLib::MP4::Chapter.new(0, 'chapter')], style: :quicktime)
         assert file.save_chapters
         row = file.chapter_timing_diagnostics.first
@@ -248,7 +248,7 @@ class MP4AtomRepairTest < Test::Unit::TestCase
         movie[:data] = [0x01000000].pack('N') + [0, 0].pack('Q>2') + [scale].pack('N') + [duration].pack('Q>') + data.byteslice(suffix..)
       end
       original = digest
-      TagLib::MP4::File.open(@path, false) do |file|
+      TagLib::MP4::Internal::File.open(@path, false) do |file|
         file.set_chapters([TagLib::MP4::Chapter.new(0, 'chapter')], style: :quicktime)
         error = assert_raise(TagLib::MP4::MdtaSaveError) { file.save_chapters }
         assert_equal :taglib_save, error.phase
@@ -262,7 +262,7 @@ class MP4AtomRepairTest < Test::Unit::TestCase
     [:replace, :cleanup, :reopen].each do |phase|
       inject_metadata(@path, keys: %w[first second], indices: [0, 0])
       original_digest = digest
-      file = TagLib::MP4::File.new(@path, false)
+      file = TagLib::MP4::Internal::File.new(@path, false)
       file.tag.title = 'pending'
       original_mv, original_rm = FileUtils.method(:mv), FileUtils.method(:rm_f)
       begin
@@ -292,7 +292,7 @@ class MP4AtomRepairTest < Test::Unit::TestCase
         Dir.glob("#{@path}.taglib-mdta-*").each { |path| FileUtils.rm_f(path) }
       end
       if phase == :reopen
-        TagLib::MP4::File.open(@path, false) { |read| assert_equal 'pending', read.tag.title }
+        TagLib::MP4::Internal::File.open(@path, false) { |read| assert_equal 'pending', read.tag.title }
       end
     end
   end
@@ -302,7 +302,7 @@ class MP4AtomRepairTest < Test::Unit::TestCase
     omit 'MP4_REPAIR_REAL_FILE is required' unless source
     source_digest = Digest::SHA256.file(source).hexdigest
     FileUtils.cp(source, @path)
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       media = file.send(:mdat_payload_signature, @path)
       assert_equal 3, file.remove_dangling_chapter_references.size
       assert file.save_chapters
@@ -344,7 +344,7 @@ class MP4AtomRepairTest < Test::Unit::TestCase
         end
       end
       original = digest
-      TagLib::MP4::File.open(@path, false) do |file|
+      TagLib::MP4::Internal::File.open(@path, false) do |file|
         if kind == :alias
           next unless file.tag.item_map.to_a.any? { |key, _v| key.empty? }
           file.tag.remove_item('')
@@ -378,7 +378,7 @@ class MP4AtomRepairTest < Test::Unit::TestCase
       offsets[:data] = offsets[:data].byteslice(0, 8) + offsets[:data].byteslice(8..).unpack('N*').pack('Q>*')
     end
     original = digest
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       error = assert_raise(TagLib::MP4::ChapterSnapshotError) do
         file.repair_native_chapter_timing(track_id: file.chapter_timing_diagnostics.first[:track_id], profile: :taglib_full_movie)
       end
@@ -399,7 +399,7 @@ class MP4AtomRepairTest < Test::Unit::TestCase
     before, = read_fixture_moov(@path)
     chapter_before = fixture_tracks(before).find { |t| fixture_child(fixture_child(t, 'mdia'), 'hdlr')[:data].byteslice(8, 4) == 'text' }
     old_header = fixture_child(chapter_before, 'tkhd')[:data]
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.repair_native_chapter_timing(track_id: file.chapter_timing_diagnostics.first[:track_id], profile: :taglib_full_movie)
       assert file.save_chapters
     end

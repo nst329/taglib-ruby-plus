@@ -49,7 +49,7 @@ class MP4SnapshotDesignProbeTest < Test::Unit::TestCase
   end
 
   def seed
-    TagLib::MP4::File.open(@source, false) do |f|
+    TagLib::MP4::Internal::File.open(@source, false) do |f|
       { 'cpil' => [:bool, false], 'tmpo' => [:int, -42], 'trkn' => [:int_pair, [1, 2]],
         'rtng' => [:byte, 255], 'tvsn' => [:uint, 0xffffffff], 'plID' => [:long_long, -0x8000000000000000],
         '----:probe:binary' => [:byte_vector_list, ["\0\xff".b, ''.b]] }.each do |key, (kind, value)|
@@ -61,7 +61,7 @@ class MP4SnapshotDesignProbeTest < Test::Unit::TestCase
       %w[shared new-key].each { |key| f.tag.replace_mdta_items(key, values.map { |t, l, d| { data_type: t, locale: l, data: d } }) }
       assert f.save
     end
-    TagLib::MP4::File.open(@source, false) { |f| P.capture(f.tag) }
+    TagLib::MP4::Internal::File.open(@source, false) { |f| P.capture(f.tag) }
   end
 
   def test_detached_snapshot_roundtrip_across_indices_and_repetition
@@ -69,7 +69,7 @@ class MP4SnapshotDesignProbeTest < Test::Unit::TestCase
     GC.start
     assert snapshot.frozen?
     assert_raise(FrozenError) { snapshot[:mdta].last.last << 'x' }
-    TagLib::MP4::File.open(@destination, false) do |f|
+    TagLib::MP4::Internal::File.open(@destination, false) do |f|
       f.tag.replace_mdta_items('filler', [{ data_type: 1, locale: 0, data: 'extra' }])
       f.tag.replace_mdta_items('shared', [{ data_type: 1, locale: 0, data: 'destination' }])
       index = f.tag.mdta_item('shared').key_index
@@ -95,7 +95,7 @@ class MP4SnapshotDesignProbeTest < Test::Unit::TestCase
 
   def test_late_failure_preserves_pending_state_disk_and_public_map
     snapshot = seed
-    TagLib::MP4::File.open(@destination, false) do |f|
+    TagLib::MP4::Internal::File.open(@destination, false) do |f|
       f.tag.set_property('comment', 'pending')
       before = P.capture(f.tag)
       disk = Digest::SHA256.file(@destination).hexdigest
@@ -115,7 +115,7 @@ class MP4SnapshotDesignProbeTest < Test::Unit::TestCase
   end
 
   def test_all_ruby_item_kinds_are_detached_but_unknown_is_rejected
-    TagLib::MP4::File.open(@destination, false) do |f|
+    TagLib::MP4::Internal::File.open(@destination, false) do |f|
       samples = { bool: false, int: -42, int_pair: [1, 2], byte: 255, uint: 0xffffffff,
                   long_long: -0x8000000000000000, string_list: ['a', 'a', ''], byte_vector_list: ["\0\xff".b, ''.b] }
       samples.each { |kind, payload| f.tag.item_map.insert("----:probe:#{kind}", TagLib::MP4::Item.public_send("from_#{kind}", payload)) }
@@ -127,7 +127,7 @@ class MP4SnapshotDesignProbeTest < Test::Unit::TestCase
   end
 
   def test_property_normalization_and_native_title_setter_are_distinct
-    TagLib::MP4::File.open(@source, false) do |f|
+    TagLib::MP4::Internal::File.open(@source, false) do |f|
       { 'title' => 'title', 'artist' => 'artist', 'description' => 'description', 'TVShowName' => 'show' }.each do |property, key|
         f.tag.replace_mdta_items(key, [{ data_type: 1, locale: 0, data: 'mdta' }])
         f.tag.set_property(property, 'ordinary')
@@ -143,7 +143,7 @@ class MP4SnapshotDesignProbeTest < Test::Unit::TestCase
   end
 
   def test_item_writer_width_is_not_the_ruby_integer_range
-    TagLib::MP4::File.open(@destination, false) do |f|
+    TagLib::MP4::Internal::File.open(@destination, false) do |f|
       before = Digest::SHA256.file(@destination).hexdigest
       f.tag.item_map.insert('tmpo', TagLib::MP4::Item.from_int(0x10000))
       assert_equal 0x10000, f.tag.item_map['tmpo'].to_int
@@ -177,13 +177,13 @@ class MP4SnapshotDesignProbeTest < Test::Unit::TestCase
 
   def test_key_only_entry_is_invisible_to_flat_api
     first_key = nil
-    TagLib::MP4::File.open(@source, false) { |f| first_key = f.tag.mdta_items.first.key }
+    TagLib::MP4::Internal::File.open(@source, false) { |f| first_key = f.tag.mdta_items.first.key }
     bytes = rewrite_boxes(File.binread(@source)) do |ilst|
       size = ilst.unpack1('N')
       ilst.byteslice(size..)
     end
     File.binwrite(@source, bytes)
-    TagLib::MP4::File.open(@source, false) do |f|
+    TagLib::MP4::Internal::File.open(@source, false) do |f|
       assert_nil f.tag.mdta_item(first_key), 'counterexample: flat API cannot distinguish a key-only entry from absence'
       assert_empty P.capture(f.tag)[:mdta].select { |r| r[0] == first_key }
     end
@@ -197,7 +197,7 @@ class MP4SnapshotDesignProbeTest < Test::Unit::TestCase
     end
     File.binwrite(@source, bytes)
     before = Digest::SHA256.file(@source).hexdigest
-    TagLib::MP4::File.open(@source, false) do |f|
+    TagLib::MP4::Internal::File.open(@source, false) do |f|
       assert_equal :unsupported, f.tag.mdta_status if f.tag.mdta_status != :unknown
       assert_raise(TagLib::MP4::MdtaItemError) { f.tag.replace_mdta_items('new', [{ data_type: 1, locale: 0, data: 'x' }]) }
     end
@@ -206,7 +206,7 @@ class MP4SnapshotDesignProbeTest < Test::Unit::TestCase
 
   def test_single_setter_loss_and_order_sensitive_comparison
     seed
-    TagLib::MP4::File.open(@source, false) do |f|
+    TagLib::MP4::Internal::File.open(@source, false) do |f|
       expected = P.capture(f.tag)
       rows = expected[:mdta].select { |r| r[0] == 'shared' }
       require File.join(ENV.fetch('MLIST_ROOT'), 'libs/media/mp4_tag_metadata_snapshot')
@@ -265,7 +265,7 @@ class MP4SnapshotDesignProbeTest < Test::Unit::TestCase
     changed = Marshal.load(Marshal.dump(baseline))
     changed[0][-1][0][0] += Rational(1, 1000)
     assert_not_equal baseline, changed
-    TagLib::MP4::File.open(converted, false) { |f| f.tag.set_property('comment', 'save'); assert f.save }
+    TagLib::MP4::Internal::File.open(converted, false) { |f| f.tag.set_property('comment', 'save'); assert f.save }
     assert_equal baseline, subtitles(converted)
   end
 end

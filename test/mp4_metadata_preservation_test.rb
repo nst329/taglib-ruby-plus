@@ -23,7 +23,7 @@ class MP4MetadataPreservationTest < Test::Unit::TestCase
 
   def test_itunes_style_properties_can_be_written_through_item_map
     with_copy do |path|
-      file = TagLib::MP4::File.new(path, false)
+      file = TagLib::MP4::Internal::File.new(path, false)
       item_map = file.tag.item_map
 
       {
@@ -49,7 +49,7 @@ class MP4MetadataPreservationTest < Test::Unit::TestCase
       assert file.save
       file.close
 
-      file = TagLib::MP4::File.new(path, false)
+      file = TagLib::MP4::Internal::File.new(path, false)
       item_map = file.tag.item_map
       assert_equal 'Description', item_map['desc'].to_string_list.first
       assert_equal 'Long description', item_map['ldes'].to_string_list.first
@@ -67,7 +67,7 @@ class MP4MetadataPreservationTest < Test::Unit::TestCase
 
   def test_normal_save_preserves_unknown_item_artwork_and_chapters
     with_copy do |path|
-      file = TagLib::MP4::File.new(path, false)
+      file = TagLib::MP4::Internal::File.new(path, false)
       item_map = file.tag.item_map
       item_map.insert('zzzz', string_item('unknown-value'))
 
@@ -80,7 +80,7 @@ class MP4MetadataPreservationTest < Test::Unit::TestCase
       assert file.save
       file.close
 
-      file = TagLib::MP4::File.new(path, false)
+      file = TagLib::MP4::Internal::File.new(path, false)
       assert_equal 'Changed', file.tag.title
       assert_equal ['unknown-value'], file.tag.item_map['zzzz'].to_string_list
       assert_equal :both, file.chapter_style
@@ -92,12 +92,12 @@ class MP4MetadataPreservationTest < Test::Unit::TestCase
 
   def test_all_artwork_can_be_removed
     with_copy do |path|
-      file = TagLib::MP4::File.new(path, false)
+      file = TagLib::MP4::Internal::File.new(path, false)
       file.tag.remove_item('covr')
       assert file.save
       file.close
 
-      file = TagLib::MP4::File.new(path, false)
+      file = TagLib::MP4::Internal::File.new(path, false)
       assert_nil file.tag.item_map['covr']
       file.close
     end

@@ -23,7 +23,7 @@ class MP4ChapterReferenceSelectionTest < Test::Unit::TestCase
       '-f', 'lavfi', '-i', 'sine=duration=1', '-i', captions,
       '-map', '0', '-map', '1', '-map', '2', '-c:v', 'mpeg4', '-c:a', 'aac', '-c:s', 'mov_text', @path)
     assert status.success?, error
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.set_quicktime_chapters([TagLib::MP4::Chapter.new(0, 'first'), TagLib::MP4::Chapter.new(500, 'last')])
       assert file.save_chapters
       @baseline = file.chapter_sample_snapshot
@@ -52,7 +52,7 @@ class MP4ChapterReferenceSelectionTest < Test::Unit::TestCase
   end
 
   def open_file(&block)
-    TagLib::MP4::File.open(@path, false, &block)
+    TagLib::MP4::Internal::File.open(@path, false, &block)
   end
 
   def snapshot

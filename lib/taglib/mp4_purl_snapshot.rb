@@ -377,7 +377,7 @@ module TagLib::MP4
 
       snapshots = target[:contexts].map do |context|
         PurlSnapshot.isolated(name, target[:contexts], context) do |path|
-          self.class.open(path, false) { |file| file.metadata_snapshot_without_purl_pair }
+          self.class.open(path, false) { |file| file.__send__(:metadata_snapshot_without_purl_pair) }
         end
       end
       MetadataSnapshot.new(items: snapshots.flat_map(&:items), mdta: snapshots.flat_map(&:mdta),

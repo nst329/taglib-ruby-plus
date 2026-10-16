@@ -14,6 +14,11 @@ module TagLib
         grouping: 'grouping', tv_show: 'TVShowName', tv_episode: 'TVEpisode', keyword: 'keyword',
         podcast_url: 'podcastURL', year: 'year', purchase_date: 'purchaseDate', content_rating: 'contentRating'
       }.freeze
+      STRUCTURE_ERRORS = [::TagLib::MP4::MetadataSnapshotError, ::TagLib::MP4::ChapterSnapshotError,
+                          ::TagLib::MP4::ChapterReferenceError, ::TagLib::MP4::ColorMetadataError].freeze
+      private_constant :STRUCTURE_ERRORS
+      Artwork = ::TagLib::MP4::Artwork
+      ContentRating = ::TagLib::MP4::ContentRating
 
       class Error < StandardError
         attr_reader :code, :area, :phase, :committed, :output_path, :temporary_path, :issues
@@ -35,7 +40,6 @@ module TagLib
                    when Hash then value.to_h { |key, item| [call(key), call(item)] }
                    when Array then value.map { |item| call(item) }
                    when String then value.dup
-                   when Symbol, Integer, Float, TrueClass, FalseClass, NilClass then value
                    else value
                    end
           copied.freeze
@@ -102,10 +106,22 @@ module TagLib
         attr_reader :items, :mdta
 
         def self.from_legacy(snapshot)
-          new(snapshot)
+          allocate.tap { |value| value.__send__(:initialize_legacy, snapshot) }
+        end
+        private_class_method :from_legacy
+
+        # nativeを開かず、型付きitemとmdta値から復元用snapshotを構築する。
+        def initialize(items: [], mdta: {})
+          raise ArgumentError, 'items must be an Array of MetadataItem' unless items.is_a?(Array) && items.all? { |item| item.is_a?(MetadataItem) }
+          raise ArgumentError, 'mdta must be a Hash' unless mdta.is_a?(Hash)
+
+          @mdta = {}.freeze
+          rows = items.map { |item| [item.key, item.kind, item.atom_data_type, item.value] }
+          groups = normalize_mdta(mdta, keep_empty: true).each_with_index.map { |(key, values), index| [key, index + 1, values] }
+          initialize_legacy(::TagLib::MP4::MetadataSnapshot.new(items: rows, mdta: groups))
         end
 
-        def initialize(snapshot)
+        def initialize_legacy(snapshot)
           unless snapshot.is_a?(::TagLib::MP4::MetadataSnapshot)
             raise ArgumentError, 'expected TagLib::MP4::MetadataSnapshot'
           end
@@ -116,20 +132,22 @@ module TagLib
           end.freeze
           freeze
         end
+        private :initialize_legacy
 
         def to_legacy
           @legacy
         end
+        private :to_legacy
 
         def item(key)
           items.find { |item| item.key == key.to_s }
         end
 
         def properties
-          PROPERTY_NAMES.to_h do |public_name, native_name|
+          DeepCopy.call(PROPERTY_NAMES.to_h do |public_name, native_name|
             item = item(::TagLib::MP4::Tag::PROPERTY_ATOMS.fetch(native_name))
             [public_name, item ? property_values(native_name, item) : mdta_property_values(native_name)]
-          end
+          end)
         end
 
         def artworks
@@ -148,10 +166,10 @@ module TagLib
           normalized_properties = normalize_properties(properties)
           normalized_items = normalize_items(items)
           normalized_mdta = normalize_mdta(mdta)
-          normalized_properties.each { |name, value| rows = ::TagLib::MP4::MetadataUpdate.properties(name => value).apply(rows) }
+          normalized_properties.each { |name, value| rows = ::TagLib::MP4::MetadataUpdate.properties(PROPERTY_NAMES.fetch(name) => value).apply(rows) }
           rows = rows.with(items: normalized_items.values) unless normalized_items.empty?
           rows = rows.with(mdta: normalized_mdta) unless normalized_mdta.empty?
-          self.class.new(rows)
+          self.class.__send__(:from_legacy, rows)
         end
 
         # propertyまたは通常itemを削除し、対応mdtaの値も明示的にclearする。
@@ -169,11 +187,11 @@ module TagLib
             rows = rows.with(mdta: existing.to_h { |key| [key, []] }) unless existing.empty?
           end
           rows = rows.without(items: item_keys) unless item_keys.empty?
-          self.class.new(rows)
+          self.class.__send__(:from_legacy, rows)
         end
 
         def ==(other)
-          other.is_a?(self.class) && @legacy == other.to_legacy
+          other.is_a?(self.class) && @legacy == other.__send__(:to_legacy)
         end
         alias eql? ==
 
@@ -220,7 +238,7 @@ module TagLib
           end
         end
 
-        def normalize_mdta(values)
+        def normalize_mdta(values, keep_empty: false)
           values.each_with_object({}) do |(key, list), result|
             key = validate_key(key)
             raise ArgumentError, 'mdta values must be an Array' unless list.is_a?(Array)
@@ -234,7 +252,7 @@ module TagLib
                       end
               [value.data_type, value.locale, value.data]
             end
-            next if normalized.empty? && !@mdta.key?(key)
+            next if normalized.empty? && !keep_empty && !@mdta.key?(key)
             result[key] = normalized
           end
         end
@@ -283,6 +301,7 @@ module TagLib
         def to_legacy
           ::TagLib::MP4::Chapter.new(start_time: start_ms, title: title)
         end
+        private :to_legacy
       end
 
       class ChapterSnapshot
@@ -292,6 +311,7 @@ module TagLib
         def self.from_legacy(snapshot)
           new(nero: snapshot.nero, quicktime: snapshot.quicktime)
         end
+        private_class_method :from_legacy
 
         def initialize(nero: [], quicktime: [])
           @nero = normalize(nero, :nero)
@@ -306,8 +326,10 @@ module TagLib
         end
 
         def to_legacy
-          ::TagLib::MP4::ChapterSnapshot.new(nero: nero.map(&:to_legacy), quicktime: quicktime.map(&:to_legacy))
+          ::TagLib::MP4::ChapterSnapshot.new(nero: nero.map { |value| value.__send__(:to_legacy) },
+                                           quicktime: quicktime.map { |value| value.__send__(:to_legacy) })
         end
+        private :to_legacy
 
         def ==(other)
           other.is_a?(self.class) && nero == other.nero && quicktime == other.quicktime
@@ -341,10 +363,8 @@ module TagLib
           @path = ::File.realpath(path).freeze
           @digest = digest
           @closed = false
-          @metadata_baseline = read_native(&:metadata_snapshot)
-          @metadata_candidate = MetadataSnapshot.from_legacy(@metadata_baseline)
-          @chapters_baseline = nil
-          @chapters_candidate = nil
+          @metadata_baseline = @metadata_candidate = nil
+          @chapters_baseline = @chapters_candidate = nil
           @repair_plan = nil
           @repair_kind = nil
         rescue SystemCallError => error
@@ -352,24 +372,24 @@ module TagLib
         end
 
         def metadata
-          ensure_readable!
-          ensure_generation!
+          ensure_current!
+          ensure_no_repair!
+          load_metadata
           @metadata_candidate
         end
 
         # metadata全体を検証済みsnapshotとして現在の編集候補へ置き換える。
         def metadata=(value)
-          ensure_editable!
-          ensure_generation!
+          ensure_current!
           ensure_no_repair!
           raise ArgumentError, 'metadata must be TagLib::Plus::MP4::MetadataSnapshot' unless value.is_a?(MetadataSnapshot)
+          load_metadata
           @metadata_candidate = value
         end
 
         # chapterの完全読取を遅延し、候補は形式別に保持する。
         def chapters
-          ensure_editable!
-          ensure_generation!
+          ensure_current!
           ensure_no_repair!
           load_chapters
           @chapters_candidate
@@ -377,8 +397,7 @@ module TagLib
 
         # 指定形式だけを含む不変ChapterSnapshotを保存候補にする。
         def chapters=(value)
-          ensure_editable!
-          ensure_generation!
+          ensure_current!
           ensure_no_repair!
           raise ArgumentError, 'chapters must be TagLib::Plus::MP4::ChapterSnapshot' unless value.is_a?(ChapterSnapshot)
           load_chapters
@@ -387,57 +406,48 @@ module TagLib
 
         # 原本と候補の差分を保存可能性とは分けて表示する。
         def changes
-          ensure_readable!
-          ensure_generation!
-          DeepCopy.call(metadata: @metadata_baseline == @metadata_candidate.to_legacy ? [] : [{ area: :metadata }],
-                        chapters: chapter_changes,
+          ensure_current!
+          DeepCopy.call(metadata: metadata_changed? ? [{ area: :metadata }] : [],
+                        chapters: chapters_changed? ? [{ area: :chapters }] : [],
                         repair: @repair_kind,
                         changed: changed?)
         end
 
         # 保存済み原本の一領域だけを固定schemaで診断する。
         def diagnose(area)
-          ensure_readable!
-          ensure_generation!
-          result = read_native do |native|
-            case area.to_sym
-            when :metadata then native.metadata_diagnostics
-            when :chapters then native.chapter_diagnostics
-            when :chapter_references then native.chapter_reference_diagnostics
-            when :chapter_timing then native.chapter_timing_diagnostics
-            when :color then native.color_metadata_diagnostics
-            else raise ArgumentError, "unknown diagnostic area: #{area.inspect}"
+          ensure_current!
+          operations = { metadata: :metadata_diagnostics, chapters: :chapter_diagnostics,
+                         chapter_references: :chapter_reference_diagnostics,
+                         chapter_timing: :chapter_timing_diagnostics, color: :color_metadata_diagnostics }
+          raise ArgumentError, "unknown diagnostic area: #{area.inspect}" unless operations.key?(area)
+
+          read_native do |native|
+            begin
+              diagnostic_report(area, native.public_send(operations.fetch(area)))
+            rescue *STRUCTURE_ERRORS => error
+              raise if error.respond_to?(:code) && error.code == :source_changed
+
+              diagnostic_failure(area, error)
             end
           end
-          status = result.is_a?(Hash) ? result[:status] || result['status'] : (result.respond_to?(:status) ? result.status : :complete)
-          issues = result.is_a?(Hash) ? (result[:issues] || result['issues'] || []) : (result.respond_to?(:issues) ? result.issues : [])
-          DeepCopy.call(status: status || :complete,
-                        data: diagnostic_data(result),
-                        issues: issues)
-        rescue ::TagLib::MP4::ChapterReferenceError => error
-          raise Error.new(error.message, code: error.code, area: :chapter_references, phase: :read), cause: error
-        rescue ArgumentError
-          raise
-        rescue StandardError => error
-          raise Error.new(error.message, code: :diagnostic, area: area, phase: :read), cause: error
         end
 
         def chapter_samples
-          ensure_readable!
-          ensure_generation!
-          raise Error.new('chapter samples are unavailable while chapters are edited', code: :pending_changes, area: :chapters) if @chapters_candidate && @chapters_candidate != @chapters_baseline
+          ensure_current!
+          ensure_no_repair!
+          raise Error.new('chapter samples are unavailable while chapters are edited', code: :pending_changes, area: :chapters) if chapters_changed?
 
-          read_native { |native| native.chapter_sample_snapshot }
-        rescue Error
-          raise
-        rescue StandardError => error
-          raise Error.new(error.message, code: :chapter_samples, phase: :read), cause: error
+          snapshot = read_native { |native| native.chapter_sample_snapshot }
+          return nil unless snapshot
+
+          fields = %i[track_id source_track_id media_timescale media_duration samples movie edit
+                      preservation_signature ffprobe_comparison source_references signature_version]
+          DeepCopy.call(fields.to_h { |field| [field, snapshot.public_send(field)] })
         end
 
         # 診断行を再検証し、指定したchapter参照の解除だけを保留する。
         def detach_chapter_references(references:)
-          ensure_editable!
-          ensure_generation!
+          ensure_current!
           ensure_repair_slot!
           raise ArgumentError, 'references must be an Array' unless references.is_a?(Array)
           plan, removed = read_native do |native|
@@ -448,7 +458,7 @@ module TagLib
           DeepCopy.call(removed)
         rescue ::TagLib::MP4::ChapterReferenceError => error
           raise Error.new(error.message, code: error.code, area: :chapter_references, phase: :prepare), cause: error
-        rescue ArgumentError
+        rescue Error, ArgumentError
           raise
         rescue StandardError => error
           raise Error.new(error.message, code: :repair, area: :chapter_references, phase: :prepare), cause: error
@@ -456,8 +466,7 @@ module TagLib
 
         # 既知profileに一致するchapter時間修復を保存待ちにする。
         def repair_chapter_timing(track_id:, profile:)
-          ensure_editable!
-          ensure_generation!
+          ensure_current!
           ensure_repair_slot!
           raise ArgumentError, 'profile must be :taglib_full_movie' unless profile == :taglib_full_movie
           result, plan = read_native do |native|
@@ -472,7 +481,7 @@ module TagLib
           DeepCopy.call(result)
         rescue ::TagLib::MP4::ChapterReferenceError => error
           raise Error.new(error.message, code: error.code, area: :chapter_timing, phase: :prepare), cause: error
-        rescue ArgumentError
+        rescue Error, ArgumentError
           raise
         rescue StandardError => error
           raise Error.new(error.message, code: :repair, area: :chapter_timing, phase: :prepare), cause: error
@@ -480,47 +489,52 @@ module TagLib
 
         # 候補の検証・別handle再読込・media保持を終えてから一度だけ公開する。
         def save!(to: nil)
-          ensure_editable!
-          ensure_generation!
+          ensure_current!
           output = to.nil? ? @path : ::File.expand_path(to)
           replace_source = output == @path
           validate_output!(output, replace_source)
-          changed = !!changed?
+          changed = changed?
           return result(output, @digest, changed: false) if !changed && replace_source
 
-          temporary = Tempfile.new(['taglib-plus-', '.mp4'], ::File.dirname(output))
-          temporary.close
           committed = false
           phase = :write
           source_digest = @digest
+          temporary = nil
+          temporary_path = nil
           begin
-            prepare_candidate(temporary.path, changed: changed)
+            temporary = Tempfile.new(['taglib-plus-', '.mp4'], ::File.dirname(output))
+            temporary_path = temporary.path
+            temporary.close
+            load_metadata if changed
+            prepare_candidate(temporary_path, changed: changed)
             phase = :verify
-            if changed
-              verify_candidate(temporary.path)
-            elsif Digest::SHA256.file(temporary.path).hexdigest != source_digest
-              raise IOError, 'copy verification failed'
-            end
+            baseline = verify_candidate(temporary_path) if changed
+            output_digest = Digest::SHA256.file(temporary_path).hexdigest
+            raise IOError, 'copy verification failed' if !changed && output_digest != source_digest
             ensure_generation!
             phase = :publish
-            replace_source ? ::File.rename(temporary.path, output) : ::File.link(temporary.path, output)
+            publish_candidate(temporary_path, output, replace_source: replace_source)
             committed = true
-            digest_after = Digest::SHA256.file(output).hexdigest
-            adopt_baseline! if replace_source
-            result(output, digest_after, changed: changed, source_digest: source_digest)
-          rescue Error
-            raise
+            phase = :adopt
+            adopt_baseline!(baseline, output_digest) if replace_source
+            phase = :result
+            result(output, output_digest, changed: changed, source_digest: source_digest)
           rescue StandardError => error
             @unusable = true if committed
-            raise Error.new(error.message, code: :save, phase: phase, committed: committed,
-                            output_path: output, temporary_path: temporary.path), cause: error
+            raise Error.new(error.message, code: error.is_a?(Error) ? error.code : :save,
+                            area: error.is_a?(Error) ? error.area : nil,
+                            issues: error.is_a?(Error) ? error.issues : [],
+                            phase: phase, committed: committed,
+                            output_path: output, temporary_path: temporary_path), cause: error
           ensure
+            failure = $!
             begin
-              temporary.unlink if temporary.path && ::File.exist?(temporary.path)
+              cleanup_candidate(temporary) if temporary
             rescue StandardError => error
+              @unusable = true if committed
               raise Error.new("temporary cleanup failed: #{error.message}", code: :cleanup,
                               phase: :cleanup, committed: committed, output_path: output,
-                              temporary_path: temporary.path), cause: ($! || error)
+                              temporary_path: temporary_path), cause: (failure || error)
             end
           end
         end
@@ -533,7 +547,11 @@ module TagLib
         private
 
         def read_native
-          ::TagLib::MP4::File.open(@path, false) { |native| yield native }
+          ::TagLib::MP4::Internal::File.open(@path, false) { |native| yield native }
+        rescue *STRUCTURE_ERRORS => error
+          raise Error.new(error.message, code: error.code, phase: :read), cause: error
+        rescue IOError, SystemCallError => error
+          raise Error.new(error.message, code: :io, phase: :read), cause: error
         end
 
         def digest
@@ -546,13 +564,11 @@ module TagLib
           raise Error.new('source changed', code: :source_changed, phase: :prepare)
         end
 
-        def ensure_readable!
+        # 全公開操作に共通するセッション状態と原本世代の検査。
+        def ensure_current!
           raise Error.new('file is closed', code: :closed) if @closed
-        end
-
-        def ensure_editable!
-          ensure_readable!
-          raise Error.new('file is unusable after publication failure', code: :committed_failure) if @unusable
+          raise Error.new('file is unusable after publication failure', code: :committed_failure, committed: true) if @unusable
+          ensure_generation!
         end
 
         def ensure_no_repair!
@@ -563,32 +579,38 @@ module TagLib
 
         def ensure_repair_slot!
           raise Error.new('repair and snapshot edits cannot be mixed', code: :pending_changes) if changed?
-          raise Error.new('repair already planned', code: :pending_changes) if @repair_plan
         end
 
         def load_chapters
           return if @chapters_baseline
 
-          @chapters_baseline = ChapterSnapshot.from_legacy(read_native(&:chapter_snapshot))
+          @chapters_baseline = ChapterSnapshot.__send__(:from_legacy, read_native(&:chapter_snapshot))
           @chapters_candidate = @chapters_baseline
         end
 
-        def chapter_changes
-          return [] unless @chapters_candidate
-          return [] if @chapters_baseline == @chapters_candidate
+        def load_metadata
+          return if @metadata_baseline
 
-          [{ area: :chapters }]
+          @metadata_baseline = MetadataSnapshot.__send__(:from_legacy, read_native(&:metadata_snapshot))
+          @metadata_candidate = @metadata_baseline
         end
 
         def changed?
-          @repair_plan || @metadata_baseline != @metadata_candidate.to_legacy ||
-            (@chapters_candidate && @chapters_baseline != @chapters_candidate)
+          !!@repair_plan || metadata_changed? || chapters_changed?
+        end
+
+        def metadata_changed?
+          @metadata_candidate != @metadata_baseline
+        end
+
+        def chapters_changed?
+          @chapters_candidate != @chapters_baseline
         end
 
         def write_candidate(path)
-          ::TagLib::MP4::File.open(path, false) do |native|
-            native.restore_metadata_snapshot(@metadata_candidate.to_legacy)
-            native.restore_chapter_snapshot(@chapters_candidate.to_legacy) if @chapters_candidate
+          ::TagLib::MP4::Internal::File.open(path, false) do |native|
+            native.restore_metadata_snapshot(@metadata_candidate.__send__(:to_legacy))
+            native.restore_chapter_snapshot(@chapters_candidate.__send__(:to_legacy)) if @chapters_candidate
             raise IOError, 'native save failed' unless native.save
           end
         end
@@ -604,23 +626,35 @@ module TagLib
         end
 
         def verify_candidate(path)
-          ::TagLib::MP4::File.open(path, false) do |native|
-            actual = MetadataSnapshot.from_legacy(native.metadata_snapshot)
+          ::TagLib::MP4::Internal::File.open(path, false) do |native|
+            actual = MetadataSnapshot.__send__(:from_legacy, native.metadata_snapshot)
             raise IOError, 'metadata verification failed' unless actual == @metadata_candidate
             if @chapters_candidate
-              chapters = ChapterSnapshot.from_legacy(native.chapter_snapshot)
+              chapters = ChapterSnapshot.__send__(:from_legacy, native.chapter_snapshot)
               raise IOError, 'chapter verification failed' unless chapters == @chapters_candidate
             end
             source_media = native.send(:mdat_payload_signature, @path)
             output_media = native.send(:mdat_payload_signature, path)
             raise IOError, 'media verification failed' unless source_media == output_media
             if @repair_plan
-              report = ::TagLib::MP4::ChapterReferences.new(native).report
-              if @repair_kind == :chapter_references && report != @repair_plan.retained_report
-                raise IOError, 'reference verification failed'
+              checked = ::TagLib::MP4::ChapterReferences.new(native)
+              unless checked.report == @repair_plan.retained_report &&
+                     checked.preservation_signature == @repair_plan.preservation_signature
+                raise IOError, 'repair structure preservation verification failed'
               end
+              native.chapter_snapshot if @repair_kind == :chapter_timing
             end
+            { metadata: actual, chapters: @chapters_candidate ? chapters : nil }
           end
+        end
+
+        # 別出力はlinkの排他的作成を使い、競合した既存ファイルを上書きしない。
+        def publish_candidate(temporary_path, output, replace_source:)
+          replace_source ? ::File.rename(temporary_path, output) : ::File.link(temporary_path, output)
+        end
+
+        def cleanup_candidate(temporary)
+          temporary.unlink
         end
 
         def validate_output!(output, replace_source)
@@ -628,15 +662,14 @@ module TagLib
           raise Error.new('output exists', code: :output_exists, output_path: output) if ::File.exist?(output) || ::File.symlink?(output)
         end
 
-        def adopt_baseline!
-          @metadata_baseline = read_native(&:metadata_snapshot)
-          @metadata_candidate = MetadataSnapshot.from_legacy(@metadata_baseline)
+        # 公開前に独立再読込した値を採用し、公開後のnative読取を不要にする。
+        def adopt_baseline!(baseline, output_digest)
+          @metadata_baseline = @metadata_candidate = baseline.fetch(:metadata)
           if @chapters_candidate
-            @chapters_baseline = ChapterSnapshot.from_legacy(read_native(&:chapter_snapshot))
-            @chapters_candidate = @chapters_baseline
+            @chapters_baseline = @chapters_candidate = baseline.fetch(:chapters)
           end
           @repair_plan = @repair_kind = nil
-          @digest = digest
+          @digest = output_digest
         end
 
         def result(output, output_digest, changed:, source_digest: @digest)
@@ -644,11 +677,54 @@ module TagLib
                         output_digest: output_digest, verification: :independent_reopen)
         end
 
-        def diagnostic_data(result)
-          return result if result.is_a?(Hash)
-          return { structure: result.structure, capabilities: result.capabilities } if result.respond_to?(:structure)
+        # 領域固有の観測値と共通の拒否理由を分離し、旧診断オブジェクトを公開しない。
+        def diagnostic_report(area, value)
+          issues = []
+          data = case area
+                 when :metadata
+                   issues = value.issues.map { |row| diagnostic_issue(row[:code], row[:message], row[:path], row.reject { |key, _| %i[code message path].include?(key) }) }
+                   { structure: value.structure, capabilities: value.capabilities }
+                 when :chapters
+                   value.each do |style, row|
+                     next if %i[complete absent].include?(row.fetch(:status))
+                     issues << diagnostic_issue(row[:status], row[:reason], "chapters/#{style}")
+                   end
+                   { formats: value }
+                 when :chapter_references then { references: value }
+                 when :chapter_timing then { tracks: value }
+                 when :color
+                   value.fetch(:entries).each do |entry|
+                     # colrごとのstatusも集約し、読取完了を全項目対応済みと誤認させない。
+                     if entry[:handler] == 'vide' && entry[:status] == :unsupported
+                       issues << diagnostic_issue(:unsupported, entry[:unsupported_reason].to_s,
+                                                  "color/#{entry[:sample_entry_offset]}")
+                     end
+                     entry.fetch(:colr).each do |color|
+                       next if color[:status] == :complete
+                       message = color[:unsupported_reason]&.to_s || color[:issues].join(', ')
+                       issues << diagnostic_issue(color[:status], message,
+                                                  "color/#{color[:offset]}", color)
+                     end
+                   end
+                   { entries: value.fetch(:entries) }
+                 end
+          statuses = issues.map { |issue| issue[:code] }
+          status = if statuses.empty? then :complete
+                   elsif statuses.include?(:limit) then :limit
+                   elsif statuses.all? { |code| code.to_s.include?('unsupported') } then :unsupported
+                   else :malformed
+                   end
+          DeepCopy.call(status: status, data: data, issues: issues)
+        end
 
-          result
+        def diagnostic_failure(area, error)
+          status = %i[unsupported limit].include?(error.code) ? error.code : :malformed
+          DeepCopy.call(status: status, data: nil,
+                        issues: [diagnostic_issue(error.code, error.message, area.to_s)])
+        end
+
+        def diagnostic_issue(code, message, location, details = {})
+          { code: code, message: message, location: location, details: details }
         end
       end
 

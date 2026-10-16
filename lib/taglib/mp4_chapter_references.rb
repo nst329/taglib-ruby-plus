@@ -65,7 +65,7 @@ module TagLib::MP4
       @report = MetadataSnapshot.copy(@report)
       @removed = MetadataSnapshot.copy(@removed)
       @source_digest.freeze
-    rescue MdtaSaveError, SystemCallError, IOError => error
+    rescue MdtaSaveError => error
       raise ChapterReferenceError, error.message
     ensure
       @io = nil

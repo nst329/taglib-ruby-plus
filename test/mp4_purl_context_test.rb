@@ -46,19 +46,19 @@ class MP4PurlContextTest < Test::Unit::TestCase
     packets = probe.first
     original = 'https://example.test/original'
     changed = 'https://example.test/changed'
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.tag.set_mdta_item('purl', original)
       assert file.save
     end
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       assert_equal [original.b], file.metadata_snapshot.mdta_values('purl').map { |row| row[:data] }
     end
     [[:changed, changed], [:equal, changed], [:other, changed], [:combined, original], [:remove, nil]].each do |mode, value|
       before = raw_context.last
-      index = TagLib::MP4::File.open(@path, false) do |file|
+      index = TagLib::MP4::Internal::File.open(@path, false) do |file|
         file.metadata_context_diagnostics[:structure][:contexts].first[:keys].index('purl') + 1
       end
-      TagLib::MP4::File.open(@path, false) do |file|
+      TagLib::MP4::Internal::File.open(@path, false) do |file|
         if mode == :remove
           file.tag.remove_mdta_item('purl')
         elsif mode != :other
@@ -67,7 +67,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
         file.tag.set_mdta_item('title', mode.to_s) if %i[other combined].include?(mode)
         assert file.save, mode.to_s
       end
-      TagLib::MP4::File.open(@path, false) do |file|
+      TagLib::MP4::Internal::File.open(@path, false) do |file|
         assert_equal value ? [value.b] : [], Array(file.metadata_snapshot.mdta_values('purl')).map { |row| row[:data] }, mode.to_s
         assert_equal mode.to_s, file.tag.mdta_items.find { |row| row.key == 'title' }.data if %i[other combined].include?(mode)
         context = file.metadata_context_diagnostics[:structure][:contexts].first
@@ -84,7 +84,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
 
   def test_public_mdta_purl_preserves_typed_raw_when_other_key_changes
     snapshot = source_purl_snapshot(values: ['https://example.test/first', 'https://example.test/second'], locales: [1041, 7])
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.restore_metadata_snapshot(snapshot)
       assert file.save
     end
@@ -94,15 +94,15 @@ class MP4PurlContextTest < Test::Unit::TestCase
       item = fixture_child(meta, 'ilst')[:children].last
       item[:data][8, 4] = [33].pack('N')
     end
-    expected = TagLib::MP4::File.open(@path, false) { |file| file.metadata_snapshot }
+    expected = TagLib::MP4::Internal::File.open(@path, false) { |file| file.metadata_snapshot }
     before = raw_context.last
     packets, warnings = probe
     assert_match(/Skipping unhandled metadata purl of type 33/, warnings)
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.tag.set_mdta_item('title', 'other tag changed')
       assert file.save
     end
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       assert_equal expected.purl_raw_digests, file.metadata_snapshot.purl_raw_digests
       assert_equal [[33, 1041, 'https://example.test/first'.b], [1, 7, 'https://example.test/second'.b]],
         file.metadata_snapshot.mdta_values('purl').map { |row| [row[:data_type], row[:locale], row[:data]] }
@@ -119,7 +119,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
     packets = probe.first
     [:equal, :other, :changed, :remove].each do |mode|
       before = raw_context.last
-      TagLib::MP4::File.open(@path, false) do |file|
+      TagLib::MP4::Internal::File.open(@path, false) do |file|
         original_type = file.tag.item_map['purl']&.atom_data_type
         case mode
         when :equal
@@ -135,7 +135,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
         end
         assert file.save
       end
-      TagLib::MP4::File.open(@path, false) do |file|
+      TagLib::MP4::Internal::File.open(@path, false) do |file|
         if mode == :remove
           assert_nil file.metadata_snapshot.item('purl')
         elsif mode == :changed
@@ -151,12 +151,12 @@ class MP4PurlContextTest < Test::Unit::TestCase
   end
 
   def test_public_mdta_purl_failure_preserves_original_and_cleans_resources
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.tag.set_mdta_item('purl', 'https://example.test/original')
       assert file.save
     end
     before = File.binread(@path)
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.tag.set_mdta_item('purl', 'https://example.test/changed')
       file.define_singleton_method(:verify_saved_copy) do |*_args, **_options|
         raise TagLib::MP4::MdtaSaveError.new('injected verification failure', phase: :verify)
@@ -170,17 +170,17 @@ class MP4PurlContextTest < Test::Unit::TestCase
   end
 
   def test_tag_snapshot_restores_numeric_mdta_without_fourcc_rewrite
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.tag.set_mdta_item('purl', 'https://example.test/original')
       assert file.save
     end
-    snapshot = TagLib::MP4::File.open(@path, false) { |file| file.tag.metadata_snapshot }
+    snapshot = TagLib::MP4::Internal::File.open(@path, false) { |file| file.tag.metadata_snapshot }
     packets = probe.first
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.tag.restore_metadata_snapshot(snapshot)
       assert file.save
     end
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       assert snapshot.same_values?(file.tag.metadata_snapshot)
       assert_equal snapshot.purl_raw_digests, file.tag.metadata_snapshot.purl_raw_digests
     end
@@ -192,7 +192,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
     source_purl_snapshot
     FileUtils.cp(File.join(@dir, 'source.mp4'), @path)
     before = File.binread(@path)
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.tag.set_property('description', 'unrelated')
       file.define_singleton_method(:rewrite_metadata_copy) do |path, suffix, &_transform|
         super(path, suffix) do |_meta|
@@ -213,7 +213,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
     packets, warnings = probe
     assert_empty warnings
     digest = Digest::SHA256.file(@path).hexdigest
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.tag.set_property('podcastURL', 'https://example.test/feed')
       error = assert_raise(TagLib::MP4::MdtaSaveError) { file.save }
       assert_equal :prepare, error.phase
@@ -230,7 +230,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
     saved_packets, warnings = probe
     assert_equal packets, saved_packets
     assert_match(/1886745196 < 1 or >= 3/, warnings)
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       context = file.metadata_context_diagnostics[:structure][:contexts].first
       assert_equal 'mdta', context[:handler]
       purl = context[:items].find { |row| row[:raw_type] == 'purl' }
@@ -245,13 +245,13 @@ class MP4PurlContextTest < Test::Unit::TestCase
       fixture_tracks(moov).first[:children] << { type: 'tref', children: [{ type: 'chap', data: [0].pack('N') }] }
     end
     before_repair = raw_context
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.remove_chapter_references(references: file.chapter_reference_diagnostics)
       assert file.save_chapters
     end
     assert_equal before_repair, raw_context, '参照解除はmeta全体をraw保持する'
     assert_match(/1886745196/, probe.last)
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       assert_empty file.chapter_reference_diagnostics
       file.tag.set_property('description', 'existing purl retained')
       assert file.save
@@ -268,18 +268,18 @@ class MP4PurlContextTest < Test::Unit::TestCase
       meta[:children].reject! { |row| row[:type] == 'keys' }
       fixture_child(meta, 'ilst')[:children] = []
     end
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.tag.set_property('podcastURL', 'https://example.test/feed')
       assert file.save
     end
     assert_empty probe.last
-    TagLib::MP4::File.open(@path, false) { |file| assert_equal 'https://example.test/feed', file.tag.property('podcastURL') }
+    TagLib::MP4::Internal::File.open(@path, false) { |file| assert_equal 'https://example.test/feed', file.tag.property('podcastURL') }
   end
 
   def test_unindexed_save_does_not_introduce_purl
     inject_metadata(@path, keys: ['opaque'], indices: [0])
     before = File.binread(@path)
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.tag.set_property('podcastURL', 'https://example.test/feed')
       error = assert_raise(TagLib::MP4::MdtaSaveError) { file.save_preserving_unindexed_mdta }
       assert_equal :prepare, error.phase
@@ -298,7 +298,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
     before = raw_context
     packets, warnings = probe
     assert_match(/1886745196/, warnings)
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.tag.item_map.insert('desc', TagLib::MP4::Item.from_string_list(['preserve existing purl']))
       assert file.save_preserving_unindexed_mdta
     end
@@ -311,7 +311,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
   end
 
   def test_diagnostic_failure_is_explicit
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       edit_fixture(@path) do |moov|
         meta = fixture_child(fixture_child(moov, 'udta'), 'meta')
         ilst = fixture_child(meta, 'ilst')
@@ -334,7 +334,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
           atom_box('data', [1, 0].pack('N2') + 'https://example.test/feed'))).first
       end
       before = File.binread(@path)
-      TagLib::MP4::File.open(@path, false) do |file|
+      TagLib::MP4::Internal::File.open(@path, false) do |file|
         file.tag.item_map.insert('desc', TagLib::MP4::Item.from_string_list(['unrelated edit']))
         error = assert_raise(TagLib::MP4::MdtaSaveError) do
           unindexed ? file.save_preserving_unindexed_mdta : file.save
@@ -361,7 +361,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
         atom_box('data', [1, locales.fetch(index)].pack('N2') + value)
       end.join.b))
     end
-    TagLib::MP4::File.open(source, false) { |file| file.metadata_snapshot }
+    TagLib::MP4::Internal::File.open(source, false) { |file| file.metadata_snapshot }
   end
 
   def add_mdir_context
@@ -377,7 +377,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
     snapshot = source_purl_snapshot
     before_context = raw_context
     digest = Digest::SHA256.file(@path).hexdigest
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       diagnosis = file.metadata_context_diagnostics[:purl]
       assert diagnosis[:writable]
       assert_false diagnosis[:existing]
@@ -402,7 +402,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
   def test_existing_mdta_purl_key_updates_without_reordering_existing_items
     first = source_purl_snapshot(values: ['https://example.test/old', 'https://example.test/old-2'])
     updated = source_purl_snapshot(values: ['https://example.test/new', 'https://example.test/new-2'])
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.restore_metadata_snapshot(first)
       assert file.save
       before = file.metadata_context_diagnostics[:structure][:contexts].first
@@ -434,7 +434,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
       source_structure: update_source.source_structure,
       format_version: update_source.format_version
     )
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.restore_metadata_snapshot(initial)
       assert file.save
       file.restore_metadata_snapshot(update)
@@ -450,7 +450,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
 
   def test_mdta_purl_preserves_multiple_locales_and_value_order
     snapshot = source_purl_snapshot(values: ['https://example.test/default', 'https://example.test/ja'], locales: [0, 1041])
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.restore_metadata_snapshot(snapshot)
       assert file.save
       assert_equal [[1, 0, 'https://example.test/default'.b], [1, 1041, 'https://example.test/ja'.b]],
@@ -471,7 +471,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
       end
     end
     before = File.binread(@path)
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       error = assert_raise(TagLib::MP4::MetadataSnapshotError) { file.restore_metadata_snapshot(snapshot) }
       assert_equal :purl_atom_extension_unsupported, error.code
       assert_equal :restore, error.phase
@@ -484,7 +484,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
     snapshot = source_purl_snapshot.with(mdta: {
       'com.apple.quicktime.location.ISO6709' => [[1, 0, '+35.0000+139.0000/'.b]]
     })
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.restore_metadata_snapshot(snapshot)
       assert file.save
       actual = file.metadata_snapshot
@@ -502,13 +502,13 @@ class MP4PurlContextTest < Test::Unit::TestCase
     add_mdir_context
     packets, warnings = probe
     assert_empty warnings
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       assert_equal 'mdir', file.metadata_context_diagnostics[:purl][:context][:handler]
       assert file.metadata_context_diagnostics[:purl][:writable]
       file.restore_metadata_snapshot(snapshot)
       assert file.save
     end
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       restored = file.metadata_snapshot
       assert snapshot.same_values?(restored)
       assert_equal snapshot.purl_raw_digests, restored.purl_raw_digests
@@ -524,7 +524,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
       ilst[:children] << parse_boxes(snapshot.source_structure[:purl_raw].first[:raw]).first
     end
     before = File.binread(@path)
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       diagnosis = file.metadata_context_diagnostics[:purl]
       assert_false diagnosis[:writable]
       assert_equal :purl_fourcc_context, diagnosis[:code]
@@ -540,7 +540,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
     add_mdir_context
     add_mdir_context
     digest = Digest::SHA256.file(@path).hexdigest
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       assert_false file.metadata_context_diagnostics[:purl][:writable]
       error = assert_raise(TagLib::MP4::MetadataSnapshotError) { file.restore_metadata_snapshot(snapshot) }
       assert_equal :ambiguous_purl_context, error.code
@@ -552,7 +552,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
     snapshot = source_purl_snapshot
     add_mdir_context
     digest = Digest::SHA256.file(@path).hexdigest
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.restore_metadata_snapshot(snapshot)
       file.define_singleton_method(:stage_purl_pair) do |*_args|
         raise TagLib::MP4::MdtaSaveError.new('injected staging failure', phase: :taglib_save, code: :injected)
@@ -570,7 +570,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
     original = source_purl_snapshot.with(mdta: { 'gain' => [[1, 1041, '日本語'.b], [33, 0, "\xff".b]] },
       items: [['desc', :string_list, 255, ['説明']]])
     add_mdir_context
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       2.times do
         file.restore_metadata_snapshot(original)
         assert file.save
@@ -591,7 +591,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
       ilst = fixture_child(fixture_child(fixture_child(moov, 'udta'), 'meta'), 'ilst')
       ilst[:children].unshift(parse_boxes(snapshot.source_structure[:purl_raw].first[:raw]).first)
     end
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       original = file.metadata_snapshot
       file.tag.set_property('description', 'keep purl')
       assert file.save
@@ -620,7 +620,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
         end
       end
       digest = Digest::SHA256.file(path).hexdigest
-      TagLib::MP4::File.open(path, false) do |file|
+      TagLib::MP4::Internal::File.open(path, false) do |file|
         error = assert_raise(TagLib::MP4::MetadataSnapshotError) { file.restore_metadata_snapshot(snapshot) }
         assert_equal :ambiguous_purl_context, error.code
       end
@@ -632,7 +632,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
     snapshot = source_purl_snapshot
     add_mdir_context
     digest = Digest::SHA256.file(@path).hexdigest
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.restore_metadata_snapshot(snapshot)
       assert_raise(TagLib::MP4::ChapterSaveError) { file.save_chapters }
       file.define_singleton_method(:mdat_payload_signature) { |_path| :injected_mismatch }
@@ -657,7 +657,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
     _, warnings = probe
     assert_match(/overread end of atom 'colr' by 1 bytes/, warnings)
     digest = nil
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       row = file.color_metadata_diagnostics[:entries].first[:colr].first
       assert_nil row[:full_range]
       assert_equal [:short_color_payload], row[:issues]
@@ -665,7 +665,7 @@ class MP4PurlContextTest < Test::Unit::TestCase
       file.remove_chapter_references(references: file.chapter_reference_diagnostics)
       assert file.save_chapters
     end
-    TagLib::MP4::File.open(@path, false) do |file|
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
       assert_equal digest, file.color_metadata_diagnostics[:entries].first[:colr].first[:raw_digest]
     end
     assert_match(/overread end of atom 'colr' by 1 bytes/, probe.last)
