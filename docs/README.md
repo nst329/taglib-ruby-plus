@@ -1,5 +1,7 @@
 # ドキュメント一覧
 
+共通の設計方針は[I/O削減を最優先するADR](ADR/2026-10-16-設計時のI-O削減を最優先する.md)を参照してください。
+
 インストール・利用例・開発手順は[README](../README.md)、リリースごとの変更は[CHANGELOG](../CHANGELOG.md)を参照してください。Ruby APIの詳細は`docs/taglib/`のYARDコメントにあります。
 
 ## 現行Plus API
