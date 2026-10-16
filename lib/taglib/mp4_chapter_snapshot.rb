@@ -81,12 +81,12 @@ module TagLib::MP4
   class File
     # 読取完了状態と拒否理由を形式別に返す。pending変更があっても原本構造を検証する。
     def chapter_diagnostics
-      ChapterReader.new(self).report
+      ChapterReader.read(self).report
     end
 
     # 不完全な原本構造を拒否してから、両形式とpending変更を独立に退避する。
     def chapter_snapshot
-      reader = ChapterReader.new(self)
+      reader = ChapterReader.read(self)
       reader.require_complete!
       values = ChapterSnapshot::STYLES.to_h do |style|
         native = chapter_values_for(style)

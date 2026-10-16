@@ -83,8 +83,11 @@ class PlusMP4MetadataContract < Test::Unit::TestCase
     source = snapshot(@source).with(properties: { comment: '保持' }).without(properties: [:genre])
     remux
     before = preserved(@target)
-    save_snapshot(source)
+    saved = save_snapshot(source)
     actual = snapshot(@target)
+    assert_equal actual, saved[:snapshots][:metadata]
+    assert_nil saved[:snapshots][:metadata].item('purl'), '入力の通常purlを期待値のまま返さない'
+    assert_equal actual.mdta.fetch('purl'), saved[:snapshots][:metadata].mdta.fetch('purl')
     assert_equal source.items.reject { |item| item.key == 'purl' }, actual.items
     assert_equal [[1, 1041, 'https://example.test/feed'.b], [1, 7, 'https://example.test/feed'.b]],
       actual.mdta.fetch('purl').map { |value| [value.data_type, value.locale, value.data] }
@@ -155,6 +158,29 @@ class PlusMP4MetadataContract < Test::Unit::TestCase
     API.open(destination) { |file| file.metadata = expected; file.save! }
     assert_equal expected.items, snapshot(destination).items
     assert_equal before, preserved(destination)
+  end
+
+  # nativeの署名実装とは独立に、映像・音声・字幕packetのbytes保持を確認する。
+  def test_complete_metadata_and_both_chapter_formats_save_together
+    remux
+    expected = snapshot(@source).with(mdta: { 'custom.binary' => typed_values })
+    before = packet_hashes(@target)
+    API.open(@target) do |file|
+      file.metadata = expected
+      file.chapters = file.chapters.with(
+        nero: [API::Chapter.new(start_ms: 0, title: 'Nero')],
+        quicktime: [API::Chapter.new(start_ms: 0, title: 'QuickTime')])
+      file.save!
+    end
+    actual = snapshot(@target)
+    assert_equal expected.items, actual.items
+    assert_equal expected.mdta, actual.mdta
+    assert_equal before, packet_hashes(@target)
+    API.open(@target) do |file|
+      assert_equal ['Nero'], file.chapters.nero.map(&:title)
+      assert_equal ['QuickTime'], file.chapters.quicktime.map(&:title)
+      assert_equal :complete, file.diagnose(:metadata)[:status]
+    end
   end
 
   def test_invalid_chunk_offsets_are_rejected_without_changing_original
@@ -255,6 +281,20 @@ class PlusMP4MetadataContract < Test::Unit::TestCase
       '-show_entries', 'format_tags', '-of', 'json', path)
     assert_not_match(/index.*out of range|1886745196/, warnings)
     JSON.parse(output).fetch('format').fetch('tags', {})
+  end
+
+  # chapter追加で変わるstream indexではなくtrack IDごとに元の媒体packetを比較する。
+  def packet_hashes(path)
+    output, = run!(ENV.fetch('FFPROBE', '/Users/nasu/Bin/ffprobe'), '-v', 'error',
+      '-show_packets', '-show_streams', '-show_data_hash', 'sha256',
+      '-show_entries', 'stream=index,id,codec_type:packet=stream_index,data_hash',
+      '-of', 'json', path)
+    data = JSON.parse(output)
+    tracks = data.fetch('streams').select { |stream| %w[video audio subtitle].include?(stream['codec_type']) }
+      .to_h { |stream| [stream.fetch('index'), stream.fetch('id')] }
+    data.fetch('packets').select { |packet| tracks.key?(packet.fetch('stream_index')) }
+      .group_by { |packet| tracks.fetch(packet.fetch('stream_index')) }
+      .transform_values { |packets| packets.map { |packet| packet.fetch('data_hash') } }
   end
 
   # 製品のsignatureを使わず、mdat・trackの配置と字幕packetを独立に比較する。

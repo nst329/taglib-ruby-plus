@@ -152,8 +152,8 @@ module TagLib::MP4
     end
 
     # 単一context、またはmdta＋mdir各1個のみを認める。通常itemの重複は保存先の曖昧さとして拒否する。
-    def destination(path, item_types: {})
-      report = MetadataStructureReader.read(path, detailed: true, item_types: item_types)
+    def destination(path, item_types: {}, digest_items: true)
+      report = MetadataStructureReader.read(path, detailed: true, item_types: item_types, digest_items: digest_items)
       contexts = report[:structure][:contexts] || []
       errors = report[:issues].reject { |issue| %i[multiple_meta unrepresented_item].include?(issue[:code]) }
       pair = contexts.size == 2 && contexts.map { |c| c[:handler] }.sort == %w[mdir mdta]
@@ -374,6 +374,17 @@ module TagLib::MP4
         io.read(context[:end_offset] - context[:offset])
       end
     end
+
+    # nativeの値変換だけに使う、trackもmediaも持たない最小のmetadata作業領域。
+    def metadata_only(raw, directory: nil)
+      Tempfile.create(['taglib-plus-metadata-', '.mp4'], directory) do |temp|
+        temp.binmode
+        temp.write(box('ftyp', 'M4A '.b + [0].pack('N') + 'M4A '.b))
+        temp.write(box('moov', box('udta', raw)))
+        temp.close
+        yield temp.path
+      end
+    end
   end
   private_constant :PurlSnapshot
 
@@ -388,7 +399,7 @@ module TagLib::MP4
       purl_mdta = snapshot.mdta.find { |row| row[0] == 'purl' }
       return snapshot unless @metadata_source_path && (purl_item || purl_mdta)
 
-      contexts = MetadataStructureReader.read(@metadata_source_path, detailed: true)[:structure][:contexts]
+      contexts = MetadataStructureReader.read(@metadata_source_path, detailed: true, digest_items: false)[:structure][:contexts]
       MetadataSnapshot.new(items: snapshot.items, mdta: snapshot.mdta,
         source_structure: snapshot.source_structure.merge(purl_raw: PurlSnapshot.raw_items(@metadata_source_path, contexts).map do |row|
           row.merge(atom_data_type: purl_item&.fetch(2) || purl_mdta&.fetch(2)&.first&.first)
@@ -488,11 +499,11 @@ module TagLib::MP4
     def metadata_snapshot
       return @purl_mdta_snapshot if @purl_mdta_snapshot
       return @purl_pair_snapshot if @purl_pair_snapshot
-      target = PurlSnapshot.destination(name)
+      target = PurlSnapshot.destination(name, digest_items: false)
       return metadata_snapshot_without_purl_pair unless target[:paired]
 
       snapshots = target[:contexts].map do |context|
-        PurlSnapshot.isolated(name, target[:contexts], context) do |path|
+        PurlSnapshot.metadata_only(PurlSnapshot.read_meta(name, context)) do |path|
           self.class.open(path, false) { |file| file.__send__(:metadata_snapshot_without_purl_pair) }
         end
       end

@@ -29,7 +29,7 @@ module TagLib::MP4
       @items = self.class.copy(items.map do |key, kind, type, payload|
         [key, kind, type, binary_payload(kind, payload)]
       end.sort_by(&:first))
-      @mdta = self.class.copy(mdta.map { |key, index, values| [key, index, values.map { |type, locale, bytes| [type, locale, bytes.b] }] })
+      @mdta = self.class.copy(mdta.map { |key, index, values| [key, index, values.map { |type, locale, bytes| [type, locale, self.class.binary(bytes)] }] })
       @source_structure = self.class.copy(source_structure)
       freeze
     end
@@ -140,11 +140,17 @@ module TagLib::MP4
       copied = case value
                when Hash then value.to_h { |k, v| [copy(k), copy(v)] }
                when Array then value.map { |v| copy(v) }
-               when String then value.dup
+               when String then value.instance_of?(String) && value.frozen? ? value : value.dup
                when Symbol, Integer, TrueClass, FalseClass, NilClass then value
                else raise ArgumentError, "unsupported snapshot value: #{value.class}"
                end
       copied.freeze
+    end
+
+    # 可変入力は所有コピーし、凍結済みbinary bytesだけをsnapshot間で安全に共有する。
+    def self.binary(bytes)
+      return bytes if bytes.instance_of?(String) && bytes.frozen? && bytes.encoding == Encoding::BINARY
+      bytes.b.freeze
     end
 
     private
@@ -225,8 +231,8 @@ module TagLib::MP4
 
     def binary_payload(kind, payload)
       case kind
-      when :byte_vector_list then payload.map(&:b)
-      when :cover_art_list then payload.map { |format, bytes| [format, bytes.b] }
+      when :byte_vector_list then payload.map { |bytes| self.class.binary(bytes) }
+      when :cover_art_list then payload.map { |format, bytes| [format, self.class.binary(bytes)] }
       else payload
       end
     end
@@ -380,12 +386,13 @@ module TagLib::MP4
     LIMIT = 64 * 1024 * 1024
     CONTAINERS = %w[moov udta trak mdia].freeze
 
-    def self.read(path, item_types: {}, detailed: false)
-      new.read(path, item_types: item_types, detailed: detailed)
+    def self.read(path, item_types: {}, detailed: false, digest_items: true)
+      new.read(path, item_types: item_types, detailed: detailed, digest_items: digest_items)
     end
 
-    def read(path, item_types: {}, detailed: false)
+    def read(path, item_types: {}, detailed: false, digest_items: true)
       @detailed = detailed
+      @digest_items = digest_items
       @item_types = item_types
       @issues, @metas, @count = [], [], 0
       @ordinary_keys = {}
@@ -488,14 +495,16 @@ module TagLib::MP4
         numeric = type.getbyte(0) == 0
         index = type.unpack1('N')
         if @detailed
-          digest = Digest::SHA256.new
-          io.seek(payload - item_header)
-          remaining = ending - payload + item_header
-          while remaining.positive?
-            chunk = io.read([remaining, 64 * 1024].min)
-            raise ParseError, 'truncated metadata item digest' unless chunk && !chunk.empty?
-            digest.update(chunk)
-            remaining -= chunk.bytesize
+          if @digest_items
+            digest = Digest::SHA256.new
+            io.seek(payload - item_header)
+            remaining = ending - payload + item_header
+            while remaining.positive?
+              chunk = io.read([remaining, 64 * 1024].min)
+              raise ParseError, 'truncated metadata item digest' unless chunk && !chunk.empty?
+              digest.update(chunk)
+              remaining -= chunk.bytesize
+            end
           end
           context[:items] << { item_index: item_index, offset: payload - item_header, end_offset: ending,
                               raw_type: type, raw_type_hex: type.unpack1('H*'), numeric_value: index,
@@ -503,7 +512,7 @@ module TagLib::MP4
                               key_index: handler == 'mdta' && numeric ? index : nil,
                               key: handler == 'mdta' && numeric && index.between?(1, keys.size) ? keys[index - 1] : nil,
                               index_in_keys: handler == 'mdta' ? index.between?(1, keys.size) : nil,
-                              raw_digest: digest.hexdigest }
+                              raw_digest: @digest_items ? digest.hexdigest : nil }
         end
         unless handler == 'mdta' && type.getbyte(0) == 0
           inspect_ordinary(io, type, payload, ending, name)

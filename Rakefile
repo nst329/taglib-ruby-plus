@@ -12,18 +12,29 @@ end
 require 'rake/testtask'
 TEST_OUTPUT_OPTIONS = '--verbose=important-only --no-use-color --progress-style=fault-only --no-show-detail-immediately'
 
-Rake::TestTask.new(:test) do |test|
-  test.libs << 'test'
-  test.pattern = 'test/**/*_test.rb'
-  test.options = TEST_OUTPUT_OPTIONS
+# test-unitとminitestを同じプロセスへ読み込むとautorunの選択で片方が
+# 実行されないため、実行ファイルを分けてから統合タスクで順に実行する。
+ALL_RUBY_TEST_FILES = FileList['test/**/*_test.rb']
+MINITEST_FILES = ALL_RUBY_TEST_FILES.select do |path|
+  File.read(path).match?(/require\s+["']minitest\/autorun["']/)
+end
+TEST_UNIT_FILES = ALL_RUBY_TEST_FILES - MINITEST_FILES
+
+def define_ruby_test_task(name, files)
+  Rake::TestTask.new(name) do |test|
+    test.libs << 'test'
+    test.test_files = files
+    test.options = TEST_OUTPUT_OPTIONS
+  end
 end
 
+define_ruby_test_task('test:unit', TEST_UNIT_FILES)
+define_ruby_test_task('test:minitest', MINITEST_FILES)
+
 # 現行のTagLib::Plus::MP4公開APIだけを短時間で確認する入口。
-Rake::TestTask.new('test:plus_mp4') do |test|
-  test.libs << 'test'
-  test.pattern = 'test/plus_mp4_api_test.rb'
-  test.options = TEST_OUTPUT_OPTIONS
-end
+define_ruby_test_task('test:plus_mp4', FileList['test/plus_mp4*_test.rb'])
+
+task test: %i[test:unit test:minitest]
 
 task default: %i[compile test]
 

@@ -9,6 +9,13 @@ module TagLib::MP4
     MAX_VALUES = 100_000
     attr_reader :report, :values, :sample_data
 
+    # 原本世代の読取値だけを再利用し、native handleや未保存の章状態をcacheしない。
+    def self.read(file, samples: false)
+      generation = file.io_generation if file.respond_to?(:io_generation)
+      return new(file, samples: samples) unless generation
+      generation.chapter_reader(samples) { new(file, samples: samples) }
+    end
+
     def initialize(file, samples: false)
       @file, @report, @values, @samples = file, {}, {}, samples
       ::File.open(file.name, 'rb') do |io|
@@ -28,6 +35,9 @@ module TagLib::MP4
     ensure
       @report = MetadataSnapshot.copy(@report)
       @values.freeze
+      @sample_data = MetadataSnapshot.copy(@sample_data) if @sample_data
+      @file = @io = nil
+      freeze
     end
 
     # 全形式が完全または不在の場合だけsnapshot生成と復元を許す。

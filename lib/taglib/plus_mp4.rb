@@ -3,6 +3,8 @@
 require 'digest'
 require 'fileutils'
 require 'tempfile'
+require_relative 'plus_mp4_io'
+require_relative 'plus_mp4_info'
 
 module TagLib
   module Plus
@@ -39,7 +41,7 @@ module TagLib
             raise Error.new('artwork data must be a String', code: :unsupported_artwork,
                             phase: :validate, issues: [{ code: :invalid_artwork, path: 'artwork/data' }])
           end
-          @data = data.dup.force_encoding(Encoding::BINARY)
+          @data = ::TagLib::MP4::MetadataSnapshot.binary(data)
           unless @data.start_with?(SIGNATURES.fetch(@format))
             raise Error.new("artwork data does not match #{@format} format", code: :unsupported_artwork,
                             phase: :validate, issues: [{ code: :invalid_artwork, path: 'artwork/data',
@@ -84,7 +86,7 @@ module TagLib
           copied = case value
                    when Hash then value.to_h { |key, item| [call(key), call(item)] }
                    when Array then value.map { |item| call(item) }
-                   when String then value.dup
+                   when String then value.instance_of?(String) && value.frozen? ? value : value.dup
                    else value
                    end
           copied.freeze
@@ -105,7 +107,7 @@ module TagLib
           raise ArgumentError, 'data must be a String' unless data.instance_of?(::String)
 
           @data_type, @locale = data_type, locale
-          @data = data.dup.force_encoding(Encoding::BINARY).freeze
+          @data = ::TagLib::MP4::MetadataSnapshot.binary(data)
           freeze
         end
 
@@ -150,8 +152,8 @@ module TagLib
       class MetadataSnapshot
         attr_reader :items, :mdta
 
-        def self.from_legacy(snapshot)
-          allocate.tap { |value| value.__send__(:initialize_legacy, snapshot) }
+        def self.from_legacy(snapshot, previous: nil)
+          allocate.tap { |value| value.__send__(:initialize_legacy, snapshot, previous: previous) }
         end
         private_class_method :from_legacy
 
@@ -167,12 +169,17 @@ module TagLib
           initialize_legacy(::TagLib::MP4::MetadataSnapshot.new(items: rows, mdta: groups))
         end
 
-        def initialize_legacy(snapshot)
+        def initialize_legacy(snapshot, previous: nil)
           unless snapshot.is_a?(::TagLib::MP4::MetadataSnapshot)
             raise ArgumentError, 'expected TagLib::MP4::MetadataSnapshot'
           end
           @legacy = snapshot
-          @items = snapshot.items.map { |key, kind, type, value| MetadataItem.new(key: key, kind: kind, atom_data_type: type, value: value) }.freeze
+          previous_items = previous ? previous.items.to_h { |item| [item.key, item] } : {}
+          @items = snapshot.items.map do |key, kind, type, value|
+            old = previous_items[key]
+            old && [old.kind, old.atom_data_type, old.value] == [kind, type, value] ? old :
+              MetadataItem.new(key: key, kind: kind, atom_data_type: type, value: value)
+          end.freeze
           @mdta = snapshot.mdta.to_h do |key, _index, values|
             [key, values.map { |type, locale, data| MdtaValue.new(data_type: type, locale: locale, data: data) }.freeze]
           end.freeze
@@ -234,7 +241,7 @@ module TagLib
           normalized_properties.each { |name, value| rows = ::TagLib::MP4::MetadataUpdate.properties(PROPERTY_NAMES.fetch(name) => value).apply(rows) }
           rows = rows.with(items: normalized_items.values) unless normalized_items.empty?
           rows = rows.with(mdta: normalized_mdta) unless normalized_mdta.empty?
-          self.class.__send__(:from_legacy, rows)
+          self.class.__send__(:from_legacy, rows, previous: self)
         end
 
         # propertyまたは通常itemを削除し、対応mdtaの値も明示的にclearする。
@@ -252,7 +259,7 @@ module TagLib
             rows = rows.with(mdta: existing.to_h { |key| [key, []] }) unless existing.empty?
           end
           rows = rows.without(items: item_keys) unless item_keys.empty?
-          self.class.__send__(:from_legacy, rows)
+          self.class.__send__(:from_legacy, rows, previous: self)
         end
 
         def ==(other)
@@ -437,9 +444,13 @@ module TagLib
       class File
         attr_reader :path
 
-        def initialize(path)
+        def initialize(path, verification: :stat)
+          raise ArgumentError, 'verification must be :stat or :sha256' unless %i[stat sha256].include?(verification)
           @path = ::File.realpath(path).freeze
-          @digest = digest
+          @verification = verification
+          @generation = Generation.new(@path, verification)
+          @digest = @generation.digest
+          @diagnostics = {}
           @closed = false
           @metadata_baseline = @metadata_candidate = nil
           @chapters_baseline = @chapters_candidate = nil
@@ -456,12 +467,21 @@ module TagLib
           @metadata_candidate
         end
 
+        # 原本の選択したheader宣言だけを返し、sample解析や外部probeを起動しない。
+        def info(sections: [:movie, :tracks])
+          ensure_current!
+          header_reader.snapshot(sections)
+        rescue ::TagLib::MP4::MdtaSaveError => error
+          raise Error.new(error.message, code: :malformed, area: :info, phase: :read), cause: error
+        rescue IOError, SystemCallError => error
+          raise Error.new(error.message, code: :io, area: :info, phase: :read), cause: error
+        end
+
         # metadata全体を検証済みsnapshotとして現在の編集候補へ置き換える。
         def metadata=(value)
           ensure_current!
           ensure_no_repair!
           raise ArgumentError, 'metadata must be TagLib::Plus::MP4::MetadataSnapshot' unless value.is_a?(MetadataSnapshot)
-          load_metadata
           validate_metadata_candidate!(value)
           @metadata_candidate = value
         end
@@ -500,7 +520,11 @@ module TagLib
                          chapter_timing: :chapter_timing_diagnostics, color: :color_metadata_diagnostics }
           raise ArgumentError, "unknown diagnostic area: #{area.inspect}" unless operations.key?(area)
 
-          read_native do |native|
+          return @diagnostics[area] if @diagnostics.key?(area)
+          if area == :chapters && (reader = @generation.cached_chapter_reader(false))
+            return @diagnostics[area] = diagnostic_report(area, reader.report)
+          end
+          @diagnostics[area] = read_native do |native|
             begin
               diagnostic_report(area, native.public_send(operations.fetch(area)))
             rescue *STRUCTURE_ERRORS => error
@@ -515,13 +539,14 @@ module TagLib
           ensure_current!
           ensure_no_repair!
           raise Error.new('chapter samples are unavailable while chapters are edited', code: :pending_changes, area: :chapters) if chapters_changed?
+          return @chapter_samples if @chapter_samples_loaded
 
           snapshot = read_native { |native| native.chapter_sample_snapshot }
-          return nil unless snapshot
-
           fields = %i[track_id source_track_id media_timescale media_duration samples movie edit
                       preservation_signature ffprobe_comparison source_references signature_version]
-          DeepCopy.call(fields.to_h { |field| [field, snapshot.public_send(field)] })
+          @chapter_samples = snapshot && DeepCopy.call(fields.to_h { |field| [field, snapshot.public_send(field)] })
+          @chapter_samples_loaded = true
+          @chapter_samples
         end
 
         # 診断行を再検証し、指定したchapter参照の解除だけを保留する。
@@ -567,37 +592,63 @@ module TagLib
         end
 
         # 候補の検証・別handle再読込・media保持を終えてから一度だけ公開する。
-        def save!(to: nil)
+        def save!(to: nil, snapshots: [])
           ensure_current!
+          unless snapshots.is_a?(Array) && snapshots.uniq == snapshots && (snapshots - %i[metadata chapters]).empty?
+            raise ArgumentError, 'snapshots must contain unique metadata/chapters symbols'
+          end
           output = to.nil? ? @path : ::File.expand_path(to)
           replace_source = output == @path
           validate_output!(output, replace_source)
           changed = changed?
-          return result(output, @digest, changed: false) if !changed && replace_source
+          if !changed && replace_source
+            actual = snapshots.empty? ? {} : read_native { |native| capture_snapshots(native, snapshots) }
+            adopt_snapshots!(actual)
+            return result(output, @digest, changed: false, snapshots: actual)
+          end
 
           committed = false
           phase = :write
           source_digest = @digest
           temporary = nil
           temporary_path = nil
+          output_generation = nil
           begin
+            @requested_snapshots = snapshots
             temporary = Tempfile.new(['taglib-plus-', '.mp4'], ::File.dirname(output))
             temporary_path = temporary.path
             temporary.close
             load_metadata if changed
+            @source_scan = nil
             prepare_candidate(temporary_path, changed: changed)
+            source_digest = @source_scan.fetch(:digest)
             phase = :verify
-            baseline = verify_candidate(temporary_path) if changed
-            output_digest = Digest::SHA256.file(temporary_path).hexdigest
+            output_generation = Generation.new(temporary_path, :stat)
+            @candidate_generation = output_generation
+            @output_scan = Stream.scan(temporary_path)
+            output_digest = @output_scan.fetch(:digest)
+            baseline = if changed
+                         verify_candidate(temporary_path)
+                       elsif snapshots.any?
+                         ::TagLib::MP4::Internal::File.open(temporary_path, false) do |native|
+                           native.io_generation = output_generation
+                           capture_snapshots(native, snapshots)
+                         end
+                       end
             raise IOError, 'copy verification failed' if !changed && output_digest != source_digest
+            output_generation.check!
             ensure_generation!
             phase = :publish
             publish_candidate(temporary_path, output, replace_source: replace_source)
             committed = true
             phase = :adopt
-            adopt_baseline!(baseline, output_digest) if replace_source
+            if replace_source && changed
+              output_generation.publish_to(@path)
+              @verified_generation = output_generation
+              adopt_baseline!(baseline, output_digest)
+            end
             phase = :result
-            result(output, output_digest, changed: changed, source_digest: source_digest)
+            result(output, output_digest, changed: changed, source_digest: source_digest, snapshots: baseline || {})
           rescue StandardError => error
             @unusable = true if committed
             raise Error.new(error.message, code: error.is_a?(Error) ? error.code : :save,
@@ -608,6 +659,12 @@ module TagLib
           ensure
             failure = $!
             begin
+              output_generation&.close unless output_generation.equal?(@generation)
+              @verified_generation = nil
+              @source_scan = @output_scan = @source_tracks = nil
+              @rendered_nero = nil
+              @requested_snapshots = nil
+              @candidate_generation = nil
               cleanup_candidate(temporary) if temporary
             rescue StandardError => error
               @unusable = true if committed
@@ -620,13 +677,24 @@ module TagLib
 
         def close
           @closed = true
+          @generation&.close
           nil
         end
 
         private
 
+        def header_reader
+          @header_reader ||= HeaderReader.new(@path, @generation)
+        end
+
         def read_native
-          ::TagLib::MP4::Internal::File.open(@path, false) { |native| yield native }
+          ensure_generation!
+          value = ::TagLib::MP4::Internal::File.open(@path, false) do |native|
+            native.io_generation = @generation
+            yield native
+          end
+          ensure_generation!
+          value
         rescue *STRUCTURE_ERRORS => error
           raise Error.new(error.message, code: error.code, phase: :read,
                           issues: error.respond_to?(:issues) ? error.issues : []), cause: error
@@ -634,14 +702,8 @@ module TagLib
           raise Error.new(error.message, code: :io, phase: :read), cause: error
         end
 
-        def digest
-          Digest::SHA256.file(@path).hexdigest
-        end
-
         def ensure_generation!
-          return if digest == @digest
-
-          raise Error.new('source changed', code: :source_changed, phase: :prepare)
+          @generation.check!
         end
 
         # 全公開操作に共通するセッション状態と原本世代の検査。
@@ -669,7 +731,7 @@ module TagLib
         end
 
         def load_metadata
-          return if @metadata_baseline
+          return if @metadata_candidate
 
           @metadata_baseline = MetadataSnapshot.__send__(:from_legacy, read_native(&:metadata_snapshot))
           @metadata_candidate = @metadata_baseline
@@ -687,42 +749,74 @@ module TagLib
           @chapters_candidate != @chapters_baseline
         end
 
+        def nero_changed?
+          chapters_changed? && @chapters_candidate.nero != @chapters_baseline.nero
+        end
+
+        def quicktime_changed?
+          chapters_changed? && @chapters_candidate.quicktime != @chapters_baseline.quicktime
+        end
+
+        # 公開前の作業候補だけを編集する。原子的公開は外側のsave!が担当する。
         def write_candidate(path)
-          if generic_metadata_restore?
-            write_generic_metadata_copy(path)
-            return
-          end
           ::TagLib::MP4::Internal::File.open(path, false) do |native|
-            native.restore_metadata_snapshot(@metadata_candidate.__send__(:to_legacy))
-            native.restore_chapter_snapshot(@chapters_candidate.__send__(:to_legacy)) if @chapters_candidate
-            raise IOError, 'native save failed' unless native.save
+            if metadata_changed? && !generic_metadata_restore?
+              native.restore_metadata_snapshot(@metadata_candidate.__send__(:to_legacy))
+              raise IOError, 'native save failed' unless native.send(:save_without_chapter_state)
+            end
+            if chapters_changed?
+              styles = @nero_in_candidate ? [:quicktime] : %i[nero quicktime]
+              native.restore_chapter_snapshot(@chapters_candidate.__send__(:to_legacy), styles: styles)
+              native.send(:apply_chapter_state_to, native)
+              raise IOError, 'native chapter save failed' unless native.send(:_save_chapters)
+            end
           end
         end
 
-        # 通常編集・raw修復・無変更コピーの候補生成だけを受け持つ。
+        # 候補全体の出力を一回に絞り、原本のSHAとmdat署名をその読取で取得する。
         def prepare_candidate(path, changed:)
-          if @repair_plan
-            @repair_plan.write_copy(@path, path)
-          else
-            ::FileUtils.cp(@path, path)
-            write_candidate(path) if changed
+          @nero_in_candidate = false
+          if quicktime_changed?
+            @source_tracks = read_native { |native| native.send(:chapter_media_signature, @path) }
           end
+          if @repair_plan
+            @repair_plan.write_copy(@path, path) do |source, destination, replacement|
+              @source_scan = Stream.scan(source, destination: destination, replacement: replacement)
+            end
+          elsif changed && generic_metadata_restore?
+            write_generic_metadata_copy(path)
+          else
+            @source_scan = Stream.scan(@path, destination: path)
+          end
+          ::File.chmod(::File.stat(@path).mode & 0o777, path)
+          needs_native = !generic_metadata_restore? || (chapters_changed? && (!@nero_in_candidate || quicktime_changed?))
+          write_candidate(path) if changed && !@repair_plan && needs_native
+          ensure_generation!
         end
 
         def verify_candidate(path)
           ::TagLib::MP4::Internal::File.open(path, false) do |native|
+            native.io_generation = @candidate_generation
             actual = MetadataSnapshot.__send__(:from_legacy, native.metadata_snapshot)
             expected = metadata_verification_snapshot
             matches = actual == expected
             matches ||= actual.__send__(:to_legacy).same_values?(expected.__send__(:to_legacy)) if expected != @metadata_candidate
             raise IOError, 'metadata verification failed' unless matches
-            if @chapters_candidate
-              chapters = ChapterSnapshot.__send__(:from_legacy, native.chapter_snapshot)
-              raise IOError, 'chapter verification failed' unless chapters == @chapters_candidate
+            raw_expected = expected.__send__(:to_legacy).purl_raw_digests
+            unless raw_expected.empty? || actual.__send__(:to_legacy).purl_raw_digests == raw_expected
+              raise IOError, 'purl raw verification failed'
             end
-            source_media = native.send(:mdat_payload_signature, @path)
-            output_media = native.send(:mdat_payload_signature, path)
-            raise IOError, 'media verification failed' unless source_media == output_media
+            if chapters_changed? || @requested_snapshots.include?(:chapters)
+              chapters = ChapterSnapshot.__send__(:from_legacy, native.chapter_snapshot)
+              raise IOError, 'chapter verification failed' if @chapters_candidate && chapters != @chapters_candidate
+            end
+            preserved = if quicktime_changed?
+                          actual_tracks = native.send(:chapter_media_signature, path)
+                          native.send(:media_tracks_preserved?, @source_tracks, actual_tracks)
+                        else
+                          @source_scan.fetch(:media) == @output_scan.fetch(:media)
+                        end
+            raise IOError, 'media verification failed' unless preserved
             if @repair_plan
               checked = ::TagLib::MP4::ChapterReferences.new(native)
               unless checked.report == @repair_plan.retained_report &&
@@ -731,7 +825,18 @@ module TagLib
               end
               native.chapter_snapshot if @repair_kind == :chapter_timing
             end
-            { metadata: actual, chapters: @chapters_candidate ? chapters : nil }
+            captured = { metadata: actual }
+            captured[:chapters] = chapters if chapters
+            captured
+          end
+        end
+
+        # 呼出側が選択した値だけを実ファイルから取得し、期待値を返却結果へ混ぜない。
+        def capture_snapshots(native, fields)
+          fields.to_h do |field|
+            value = field == :metadata ? MetadataSnapshot.__send__(:from_legacy, native.metadata_snapshot) :
+              ChapterSnapshot.__send__(:from_legacy, native.chapter_snapshot)
+            [field, value]
           end
         end
 
@@ -766,43 +871,46 @@ module TagLib
 
         # 完全snapshot復元では保存先のmdtaをnativeの部分更新へ渡さず、contextを再構成する。
         def generic_metadata_restore?
-          return false unless metadata_changed? && @metadata_candidate && @metadata_baseline
-          contexts = @metadata_baseline.__send__(:to_legacy).source_structure[:contexts] || []
-          return false unless contexts.size == 1 && %w[mdir mdta].include?(contexts.first[:handler])
-          return true if contexts.first[:handler] == 'mdta'
+          return false unless metadata_changed? && @metadata_candidate
+          contexts = metadata_destination.fetch(:contexts)
+          contexts.any? && contexts.all? { |context| %w[mdir mdta].include?(context[:handler]) }
+        end
 
-          @metadata_candidate.mdta.any?
+        # 完全置換に必要な構造だけを検査し、旧値・画像のhashやnative変換を行わない。
+        def metadata_destination
+          return @metadata_destination if @metadata_destination
+          ensure_generation!
+          helper = ::TagLib::MP4.const_get(:PurlSnapshot, false)
+          target = helper.destination(@path, digest_items: false)
+          unless target[:writable] || (target[:contexts].empty? && target[:issues].empty?)
+            raise Error.new('destination metadata structure is unsupported', code: target[:code] || :metadata_context_unsupported,
+              phase: :prepare, issues: target[:issues])
+          end
+          ensure_generation!
+          @metadata_destination = DeepCopy.call(target)
         end
 
         # mdta保存先へ通常itemとmdtaを別contextとして一括配置する。
         def write_generic_metadata_copy(path)
-          if @chapters_candidate && chapters_changed?
-            raise Error.new('metadata and chapter edits must be saved separately', code: :pending_changes,
-                            phase: :prepare)
-          end
           helper = ::TagLib::MP4.send(:const_get, :PurlSnapshot, false)
-          target = helper.destination(@path)
+          target = metadata_destination
           context = target.fetch(:contexts).find { |row| %w[mdir mdta].include?(row[:handler]) }
           raise Error.new('destination metadata context is unsupported', code: :metadata_context_unsupported,
                           phase: :prepare) unless context
-          context_raw = helper.read_meta(@path, context)
-          mdta_raw = context[:handler] == 'mdta' ? context_raw : convert_mdir_to_mdta(context_raw, helper)
+          mdta_raw = header_reader.metadata_template(context, 'mdta')
           mdir_items = metadata_items_for_mdir(@metadata_candidate)
           mdta_groups = metadata_groups_for_restore(@metadata_candidate, helper)
-          desired_mdir = if mdir_items.empty?
-                           nil
-                         else
-                           build_mdir_metadata(mdir_items, @metadata_candidate, path)
-                         end
+          staged_mdir = build_mdir_metadata(mdir_items, @metadata_candidate, path) if mdir_items.any? || nero_changed?
+          desired_mdir = staged_mdir if mdir_items.any?
           desired_mdta = if mdta_groups.empty?
                            nil
                          else
                            render_mdta_snapshot(mdta_raw, mdta_groups)
                          end
           desired_mdir ||= empty_mdir_metadata(mdta_raw) if desired_mdta.nil?
-          write_metadata_atoms(path, container_transform: lambda do |raw_udta|
-            replace_metadata_contexts(raw_udta, desired_mdir, desired_mdta, helper)
-          end)
+          replacement = header_reader.metadata_container(desired_mdir, desired_mdta,
+            replace_nero: @nero_in_candidate, nero: @rendered_nero)
+          write_metadata_atoms(path, container_replacement: replacement, capture_raw: false)
         rescue ::TagLib::MP4::MetadataSnapshotError => error
           raise Error.new(error.message, code: error.code, phase: :prepare,
                           issues: error.respond_to?(:issues) ? error.issues : []), cause: error
@@ -814,23 +922,37 @@ module TagLib
         # mdta保存先を一時的にmdirへ変換し、nativeの型変換を利用して通常itemを生成する。
         def build_mdir_metadata(items, snapshot, path)
           helper = ::TagLib::MP4.send(:const_get, :PurlSnapshot, false)
-          Tempfile.create(['taglib-plus-mdir-', '.mp4'], ::File.dirname(path)) do |temp|
-            temp.close
-            write_metadata_atoms(temp.path, metadata_transform: lambda do |raw|
-              convert_mdta_to_mdir(raw, helper)
-            end)
-            ::TagLib::MP4::Internal::File.open(temp.path, false) do |native|
+          target = metadata_destination
+          context = target.fetch(:contexts).find { |row| row[:handler] == 'mdir' } || target.fetch(:contexts).first
+          template = header_reader.metadata_template(context, 'mdir')
+          helper.metadata_only(template, directory: ::File.dirname(path)) do |staging|
+            ::TagLib::MP4::Internal::File.open(staging, false) do |native|
               source_legacy = snapshot.__send__(:to_legacy)
               legacy = ::TagLib::MP4::MetadataSnapshot.new(items: items.map { |item|
                 [item.key, item.kind, item.atom_data_type, item.value]
               }, mdta: [], source_structure: source_legacy.source_structure,
                  format_version: source_legacy.format_version)
               native.restore_metadata_snapshot(legacy)
-              raise IOError, 'native mdir staging save failed' unless native.save
+              raise IOError, 'native mdir staging save failed' unless native.send(:save_without_chapter_state)
             end
-            staged = helper.destination(temp.path)
+            if nero_changed?
+              ::TagLib::MP4::Internal::File.open(staging, false) do |native|
+                native.set_chapters(@chapters_candidate.nero.map { |chapter| chapter.__send__(:to_legacy) }, style: :nero)
+                native.send(:apply_chapter_state_to, native)
+                raise IOError, 'native Nero staging save failed' unless native.send(:_save_chapters)
+              end
+              root = helper.boxes(::File.binread(staging))
+              movie = root.find { |type, _| type == 'moov' }.last
+              udta = helper.boxes(movie, 8).find { |type, _| type == 'udta' }.last
+              @rendered_nero = helper.boxes(udta, 8).find { |type, _| type == 'chpl' }&.last
+              @nero_in_candidate = true
+            end
+            staged = helper.destination(staging, digest_items: false)
             mdir = staged.fetch(:contexts).find { |row| row[:handler] == 'mdir' }
-            helper.read_meta(temp.path, mdir)
+            raw = helper.read_meta(staging, mdir)
+            purl = snapshot.__send__(:to_legacy).source_structure[:purl_raw]&.first
+            raw = helper.replace_raw(raw, purl.fetch(:raw)) if purl && items.any? { |item| item.key == 'purl' }
+            raw
           end
         rescue ::TagLib::MP4::MetadataSnapshotError
           raise
@@ -842,21 +964,27 @@ module TagLib
         # 原本を短時間だけ開き、検証済みatom計画を作業コピーへ適用する。
         def write_metadata_atoms(destination, **transforms)
           editor_class = ::TagLib::MP4.send(:const_get, :MP4AtomEditor, false)
-          ::TagLib::MP4::Internal::File.open(@path, false) do |native|
-            editor = editor_class.new(native, **transforms)
-            editor.atom_plan.write_copy(@path, destination)
+          editor = editor_class.new(header_reader, **transforms)
+          editor.atom_plan.write_copy(@path, destination) do |source, output, replacement|
+            @source_scan = Stream.scan(source, destination: output, replacement: replacement)
           end
         end
 
         # purlはlocaleを保持するためmdta側へ配置し、その他の通常itemをmdirへ残す。
         def metadata_items_for_mdir(snapshot)
-          snapshot.items.reject { |item| item.key == 'purl' }
+          restore_purl_to_mdta? ? snapshot.items.reject { |item| item.key == 'purl' } : snapshot.items
+        end
+
+        # mdir単独の復元ではraw purlをそのまま保持し、mdta経路だけ型付き値へ移す。
+        def restore_purl_to_mdta?
+          contexts = metadata_destination.fetch(:contexts)
+          @metadata_candidate.mdta.any? || contexts.any? { |context| context[:handler] == 'mdta' }
         end
 
         def metadata_groups_for_restore(snapshot, helper)
           groups = snapshot.mdta.transform_values(&:dup)
           purl = snapshot.items.find { |item| item.key == 'purl' }
-          return groups unless purl
+          return groups unless purl && restore_purl_to_mdta?
 
           if groups.key?('purl')
             raise Error.new('ordinary and mdta purl cannot be merged safely', code: :metadata_context_conflict,
@@ -878,7 +1006,7 @@ module TagLib
         # 保存構造上のpurl移動だけを反映した、独立再読込との比較用snapshotを作る。
         def generic_expected_snapshot(snapshot, helper)
           purl = snapshot.items.find { |item| item.key == 'purl' }
-          return snapshot unless purl
+          return snapshot unless purl && restore_purl_to_mdta?
           groups = metadata_groups_for_restore(snapshot, helper)
           rows = snapshot.items.reject { |item| item.key == 'purl' }.map do |item|
             [item.key, item.kind, item.atom_data_type, item.value]
@@ -902,19 +1030,6 @@ module TagLib
             [type, bytes]
           end
           helper.box('meta', raw.byteslice(8, 4) + children.map(&:last).join.b)
-        end
-
-        # mdirしかない保存先でも、候補mdtaを収めるtemplateを作る。
-        def convert_mdir_to_mdta(raw, helper)
-          children = helper.boxes(raw, 12)
-          handler = children.find { |type, _bytes| type == 'hdlr' }&.last
-          raise ArgumentError, 'metadata handler is missing' unless handler
-          handler = handler.dup
-          handler[16, 4] = 'mdta'
-          keys = helper.box('keys', [0, 0].pack('N2'))
-          ilst = helper.box('ilst', ''.b)
-          retained = children.reject { |type, _bytes| %w[hdlr keys ilst].include?(type) }.map(&:last)
-          helper.box('meta', raw.byteslice(8, 4) + [handler, keys, ilst, *retained].join.b)
         end
 
         # keysとilstを同じ候補値から再構成し、空keyはkeysだけ保持する。
@@ -944,16 +1059,6 @@ module TagLib
           convert_mdta_to_mdir(raw, ::TagLib::MP4.send(:const_get, :PurlSnapshot, false))
         end
 
-        def replace_metadata_contexts(raw_udta, mdir, mdta, helper)
-          children = helper.boxes(raw_udta, 8)
-          first_meta = children.index { |type, _bytes| type == 'meta' }
-          children.reject! { |type, _bytes| type == 'meta' }
-          replacement = [mdir, mdta].compact
-          position = first_meta || children.length
-          children.insert(position, *replacement.map { |bytes| ['meta', bytes] })
-          helper.box('udta', children.map(&:last).join.b)
-        end
-
         # 保存前に構造を再解析し、native保存へ原因が潰れる前に公開Errorへ変換する。
         def validate_metadata_candidate!(value)
           helper = ::TagLib::MP4.send(:const_get, :PurlSnapshot, false)
@@ -965,7 +1070,8 @@ module TagLib
                                        message: 'snapshot does not contain raw purl bytes' }])
           end
           helper.validate_raw!(legacy)
-          read_native { |native| ::TagLib::MP4::ChapterReferences.new(native, ignore_metadata: true) }
+          metadata_destination
+          ::TagLib::MP4::ChapterReferences.new(header_reader, ignore_metadata: true, capture_raw: false)
         rescue ::TagLib::MP4::MetadataSnapshotError => error
           raise Error.new(error.message, code: error.code, phase: :prepare,
                           issues: error.respond_to?(:issues) ? error.issues : []), cause: error
@@ -994,17 +1100,32 @@ module TagLib
 
         # 公開前に独立再読込した値を採用し、公開後のnative読取を不要にする。
         def adopt_baseline!(baseline, output_digest)
-          @metadata_baseline = @metadata_candidate = baseline.fetch(:metadata)
-          if @chapters_candidate
-            @chapters_baseline = @chapters_candidate = baseline.fetch(:chapters)
-          end
+          adopt_snapshots!(baseline)
+          @chapters_baseline = @chapters_candidate = nil unless baseline.key?(:chapters)
           @repair_plan = @repair_kind = nil
+          previous = @generation
+          @generation = @verified_generation
+          previous.close
           @digest = output_digest
+          # 厳密モードの新世代は検証済み出力SHAを採用し、再走査を避ける。
+          @generation.__send__(:adopt_digest, output_digest) if @verification == :sha256
+          @diagnostics.clear
+          @header_reader = nil
+          @metadata_destination = nil
+          @chapter_samples = nil
+          @chapter_samples_loaded = false
         end
 
-        def result(output, output_digest, changed:, source_digest: @digest)
+        # 実ファイルから取得した領域だけをgetterのcacheへ採用する。
+        def adopt_snapshots!(baseline)
+          @metadata_baseline = @metadata_candidate = baseline[:metadata] if baseline.key?(:metadata)
+          @chapters_baseline = @chapters_candidate = baseline[:chapters] if baseline.key?(:chapters)
+        end
+
+        def result(output, output_digest, changed:, source_digest: @digest, snapshots: {})
           DeepCopy.call(output_path: output, changed: changed, source_digest: source_digest,
-                        output_digest: output_digest, verification: :independent_reopen)
+                        output_digest: output_digest, snapshots: snapshots,
+                        verification: (!changed && output == @path ? @verification : :independent_reopen))
         end
 
         # 領域固有の観測値と共通の拒否理由を分離し、旧診断オブジェクトを公開しない。
@@ -1058,8 +1179,9 @@ module TagLib
         end
       end
 
-      def self.open(path)
-        file = File.new(path)
+      # 通常はstat世代検査、厳密モードだけ各操作で内容SHAを照合する。
+      def self.open(path, verification: :stat)
+        file = File.new(path, verification: verification)
         return file unless block_given?
 
         begin

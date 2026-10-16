@@ -10,7 +10,7 @@ module TagLib::MP4
     # 例: capture(file).samples.first => {sample_index: 0, start_ticks: 0, duration_ticks: 50, ...}
     # private constructorへ完全読取済みのデータだけを渡す。
     def self.capture(file)
-      reader = ChapterReader.new(file, samples: true)
+      reader = ChapterReader.read(file, samples: true)
       reader.require_complete!
       reader.sample_data && new(reader.sample_data)
     end

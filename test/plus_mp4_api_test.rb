@@ -223,7 +223,7 @@ class PlusMP4APITest < Test::Unit::TestCase
       assert_same failure, error.cause
       assert_equal ['公開済み'], API.open(output) { |copy| copy.metadata.properties[:title] }
       assert_equal original, File.binread(@source) if save_as
-      [-> { file.metadata }, -> { file.chapters }, -> { file.changes },
+      [-> { file.metadata }, -> { file.chapters }, -> { file.changes }, -> { file.info },
        -> { file.diagnose(:metadata) }, -> { file.chapter_samples },
        -> { file.metadata = API::MetadataSnapshot.new }, -> { file.chapters = API::ChapterSnapshot.new },
        -> { file.detach_chapter_references(references: []) },
@@ -346,8 +346,8 @@ class PlusMP4APITest < Test::Unit::TestCase
   end
 
   should 'classify structural refusals without hiding programming or IO errors' do
-    API.open(@source) do |file|
-      [:unsupported, :malformed, :limit].each do |code|
+    [:unsupported, :malformed, :limit].each do |code|
+      API.open(@source) do |file|
         file.define_singleton_method(:read_native) do |&block|
           native = Object.new
           native.define_singleton_method(:color_metadata_diagnostics) do
@@ -360,6 +360,8 @@ class PlusMP4APITest < Test::Unit::TestCase
         assert_nil report[:data]
         assert_equal({ code: code, message: 'bad colr', location: 'color', details: {} }, report[:issues].first)
       end
+    end
+    API.open(@source) do |file|
       file.define_singleton_method(:read_native) { |&_| raise NoMethodError, 'programming fault' }
       assert_raise(NoMethodError) { file.diagnose(:metadata) }
       file.define_singleton_method(:read_native) { |&_| raise IOError, 'read fault' }

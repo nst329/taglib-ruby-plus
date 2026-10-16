@@ -5,11 +5,15 @@
 
 ## 方針
 
+世代確認・cache・保存のI/O予算とdigest返却契約は[MP4公開APIのI/O設計](mp4-public-io-design.md)を参照する。通常はstat世代確認、内容照合が必要な場合は `MP4.open(path, verification: :sha256)` を明示する。
+
 独自APIの入口を`TagLib::Plus::MP4.open`にまとめ、利用者は編集用Fileと不変のmetadata/chapter値を扱う。保存は`save!`だけにする。Update、SavePlan、RepairUpdate、Reportの公開クラスは設けない。
 
 互換性は前提としない。元のtaglib-ruby由来のラッパーは別の低水準層として残し、独自APIを`TagLib::Plus::MP4`に分離する。旧fork追加メソッドは通常のFile/Tagではprivateにし、`TagLib::MP4::Internal::File`だけがwriter用に利用する。内部の値クラス・エラー・native変換も公開契約に含めず、互換aliasは設けない。元から存在する`save`/`tag`/`title`等の低水準操作は維持する。対象は現在のMP4独自機能で、他形式へ一般化しない。
 
 前案のDocument → Update → SavePlanは、更新の受渡しと検証を明確にできた一方、通常操作にも内部transactionの概念を要求した。これらは内部責務として維持し、公開の利用モデルを「読む・編集する・保存する」にする。
+
+[header情報と保存snapshotの再利用](mp4-header-info-design.md)に、選択式info、未読baselineへの置換予定、検証済み出力snapshotの追加契約を記録する。
 
 ## 基本の使い方
 
@@ -42,10 +46,11 @@ end
 | --- | --- |
 | `MP4.open(path) { ... }` | Fileを所有し、ブロック終了時にclose。ブロック値を返す |
 | `MP4.open(path)` | Fileを返す。利用者がcloseする |
+| `file.info(sections: [:movie, :tracks])` | 原本の選択したheader宣言を不変snapshotで返す。sample・native・外部probeを起動しない |
 | `file.metadata` / `metadata=` | 現在の編集候補を読む／metadata全体の復元候補を代入する |
 | `file.chapters` / `chapters=` | 形式別の現在の編集候補を読む／全形式の復元候補を代入する |
 | `file.changes` | 元世代と現在候補の差分・修復対象を不変Hashで返す |
-| `file.save!(to: nil)` | 検証後に原本置換。to指定時は既存出力を上書きせず別出力を作る |
+| `file.save!(to: nil, snapshots: [])` | 検証後に原本置換。to指定時は既存出力を上書きせず別出力を作る |
 | `file.diagnose(area)` | 原本の指定領域一つを、不変Hashで診断する |
 | `file.chapter_samples` | 原本の全chapter sampleの観測値。不在はnil |
 | `file.detach_chapter_references(references:)` | 診断で明示したchap関係だけの解除を保存待ちにする |
@@ -62,7 +67,7 @@ Fileは一つの原本世代と、そこから作った編集候補を所有す�
 
 `diagnose`と`chapter_samples`は保存済み原本の観測だけを扱う。章編集が保留中のchapter_samplesは、候補のsampleと誤認させないよう拒否する。metadata編集だけなら原本sampleを観測できる。診断結果へpending候補の情報を混ぜない。
 
-原本の外部変更を検出したら、cache済み候補の返却も含めて操作を拒否する。mtime/sizeだけで世代同一性を証明しない。再openしてやり直し、暗黙reload・自動merge・自動再試行はしない。
+原本の外部変更を検出したら、cache済み候補の返却も含めて操作を拒否する。通常はpathと所有handleのdev/ino/size/mtime/ctimeを照合し、内容SHAによる保証と区別する。厳密モードは内容SHA照合を追加する。再openしてやり直し、暗黙reload・自動merge・自動再試行はしない。
 
 原本へのsave成功後は、保存前に独立再読込・検証した出力値とdigestを新baselineとして採用し、保留編集を空にする。Fileはnative handleを長期保持せず、公開後のnative再openを行わない。公開前に独立再読込したsnapshotとdigestだけを採用する。これにより同じFileで次の編集ができる。返却値や原本への書込成功後に問題が起きた場合はcommitted=trueを通知し、そのFileはclose以外の読取・編集・診断・保存すべてを拒否し、再openを求める。別出力への保存後に失敗した場合も同じとする。
 
@@ -70,7 +75,7 @@ Fileは一つの原本世代と、そこから作った編集候補を所有す�
 
 ## metadata値と編集
 
-`MetadataSnapshot.new(items: [...], mdta: {...})`でnativeなしに構築できる。MetadataSnapshotは`items`、`mdta`、`properties`、`artworks`を持つ不変値とする。通常itemは名前付きMetadataItem、mdtaはMdtaValue、画像は`MP4::Artwork`、ratingは`MP4::ContentRating`で表現する。位置依存の行配列は公開しない。値はnativeなしで構築・比較でき、ネストしたString/Array/Hashまで所有コピー・freezeする。
+`MetadataSnapshot.new(items: [...], mdta: {...})`でnativeなしに構築できる。MetadataSnapshotは`items`、`mdta`、`properties`、`artworks`を持つ不変値とする。通常itemは名前付きMetadataItem、mdtaはMdtaValue、画像は`MP4::Artwork`、ratingは`MP4::ContentRating`で表現する。位置依存の行配列は公開しない。値はnativeなしで構築・比較でき、可変入力を所有コピーし、ネストしたArray/Hashまでfreezeする。凍結済みStringは共有でき、大きいartworkのbytesと未変更itemはwith/withoutで再利用する。
 
 ```ruby
 metadata = file.metadata
@@ -128,13 +133,13 @@ file.save!
 
 ## 変更確認と保存
 
-changesは値の差分と、正規化でclearするmdta・解除する参照など実効的な対象を返す。binary/画像はサイズ・digestへ縮約する。実行可能な計画ではなく、writerの可否や保存成功の証明でもない。
+changesは取得済みbaselineとの値の差分と、正規化でclearするmdta・解除する参照など実効的な対象を返す。binary/画像はサイズ・digestへ縮約する。未読baselineへの完全代入は値一致が不明なため置換予定とし、無変更判定だけのために旧値を読まない。実行可能な計画ではなく、writerの可否や保存成功の証明でもない。
 
-save!は内部で入力全体とwriter可否を検証し、候補作成 → 別handle再読込 → 値・構造・media保持照合 → 原本/digest再確認 → 原子的公開を行う。writerの経路は利用者に選ばせず、特殊metadata保持や限定atom編集を内部で扱う。safeを既定optionにするのではなく、unsafe/force/skip_verify自体を提供しない。
+save!は内部で入力全体とwriter可否を検証し、候補作成 → 別handle再読込 → 値・構造・media保持照合 → モードに応じた原本世代再確認 → 原子的公開を行う。writerの経路は利用者に選ばせず、特殊metadata保持や限定atom編集を内部で扱う。safeを既定optionにするのではなく、unsafe/force/skip_verify自体を提供しない。
 
-原本への変更なしsaveは置換しない。別出力の変更なしsaveは単純コピーとし全bytesのdigest一致を要求する。別出力は原本自身、既存出力、同一inode、symlinkを拒否し、公開直前の競合でも上書きしない。exists?→renameだけで保証したことにしない。
+原本への変更なしsaveは置換しない。別出力の変更なしsaveはコピー時の原本全bytes署名と、出力の独立再読取の署名一致を要求する。通常モードの同一path無変更saveは全体hashを行わず、未計算のdigestはnilを返す。verificationはこの場合statまたはsha256、それ以外の出力保存はindependent_reopen。別出力は原本自身、既存出力、同一inode、symlinkを拒否し、公開直前の競合でも上書きしない。exists?→renameだけで保証したことにしない。
 
-戻り値は不変Hashの`{ output_path:, changed:, source_digest:, output_digest:, verification: }`。SaveResultクラスは作らない。原本保存でwriterが残した空キー等は、検証済みの実出力値を新baselineにする。値比較は厳密な==を基本とし、明示的にclearしたキーだけ空残存を許可する。公開snapshotの一致だけで全保持の成功とはしない。
+戻り値は不変Hashの`{ output_path:, changed:, source_digest:, output_digest:, verification:, snapshots: }`。SaveResultクラスは作らない。snapshotsは保存候補から独立再読込した値だけを含み、変更保存のmetadataを常に返す。chapterは変更時または明示選択時だけ読む。期待値で未読領域を埋めない。原本保存でwriterが残した空キー等は、検証済みの実出力値を新baselineにする。値比較は厳密な==を基本とし、明示的にclearしたキーだけ空残存を許可する。公開snapshotの一致だけで全保持の成功とはしない。
 
 失敗時に原本未変更なら編集候補を保持し、障害解消後にsave!を再試行できる。cleanup失敗は一時pathと元の失敗をcauseに残す。公開済みの失敗ではcommitted=trueとして自動再試行しない。外部writerとの完全排他・電源断耐性・ACL等の完全保持まで新しく保証するものではない。
 

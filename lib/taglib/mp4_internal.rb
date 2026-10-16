@@ -31,6 +31,8 @@ module TagLib::MP4
 
     # native資源の所有・既存writerを再利用する内部専用File。
     class File < ::TagLib::MP4::File
+      attr_accessor :io_generation
+
       def tag
         super&.extend(TagAccess)
       end

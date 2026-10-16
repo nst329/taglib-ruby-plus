@@ -6,17 +6,36 @@ module TagLib::MP4
     attr_reader :result
 
     # 例: timing_track: 4。metadata_transformはraw meta bytesだけを受け取る内部処理。
-    def initialize(file, timing_track: nil, metadata_transform: nil, metadata_transforms: nil, container_transform: nil)
+    def initialize(file, timing_track: nil, metadata_transform: nil, metadata_transforms: nil, container_transform: nil,
+                   container_replacement: nil, capture_raw: true)
       @timing_track, @metadata_transform, @metadata_transforms, @container_transform = timing_track, metadata_transform, metadata_transforms, container_transform
+      @container_replacement, @capture_raw = container_replacement, capture_raw
       @atom_replacements = {}
-      super(file, timing: !timing_track.nil?, ignore_metadata: !metadata_transform.nil? || !metadata_transforms.nil? || !container_transform.nil?)
+      super(file, timing: !timing_track.nil?, capture_raw: capture_raw,
+        ignore_metadata: !metadata_transform.nil? || !metadata_transforms.nil? || !container_transform.nil? || !container_replacement.nil?)
     end
 
     # 元境界と期待signatureだけを持つ不変計画を返す。
     def atom_plan
       return nil if @atom_replacements.empty?
+      edited = if @capture_raw
+                 replacement
+               else
+                 # 置換する旧metadataを読まず、保持するleafだけを計画生成中に読む。
+                 ::File.open(@file.name, 'rb') do |io|
+                   @io = io
+                   begin
+                     @generation&.check!
+                     value = replacement
+                     @generation&.check!
+                     value
+                   ensure
+                     @io = nil
+                   end
+                 end
+               end
       ChapterReferenceRepair.new(moov_start: @moov[:offset], moov_end: @moov[:end_offset],
-        replacement: replacement, source_digest: source_digest, removed: [], retained_report: report,
+        replacement: edited, source_digest: source_digest, removed: [], retained_report: report,
         preservation_signature: preservation_signature)
     end
 
@@ -24,12 +43,12 @@ module TagLib::MP4
 
     def prepare_atom_edits
       fail!('repair dangling references before other atom edits', :pending_changes) unless @report.none? { |r| r[:status] == :missing }
-      if @container_transform
+      if @container_transform || @container_replacement
         udta = @moov[:children].find do |atom|
           atom[:type] == 'udta' && atom[:children].any? { |child| child[:type] == 'meta' }
         end
         fail!('metadata container is missing', :unsupported) unless udta
-        @atom_replacements[udta[:offset]] = @container_transform.call(bytes(udta))
+        @atom_replacements[udta[:offset]] = @container_replacement || @container_transform.call(bytes(udta))
       elsif @metadata_transform || @metadata_transforms
         metas = []
         walk(@moov[:children]) { |atom| metas << atom if atom[:type] == 'meta' }

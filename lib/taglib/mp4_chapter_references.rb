@@ -29,13 +29,15 @@ module TagLib::MP4
     }.freeze
     attr_reader :report, :removed, :source_digest, :preservation_signature, :timing_report
 
-    def initialize(file, timing: false, ignore_metadata: false, removal: nil)
+    def initialize(file, timing: false, ignore_metadata: false, removal: nil, capture_raw: true)
       @removal = removal
       @selected_keys = normalize_selection(removal) unless removal.nil? || removal == :missing
       @ignore_metadata = ignore_metadata
       @file = file
+      @generation = file.io_generation if file.respond_to?(:io_generation)
       ::File.open(file.name, 'rb') do |io|
-        initial_digest = Digest::SHA256.file(file.name).hexdigest
+        @generation&.check!
+        initial_digest = Digest::SHA256.file(file.name).hexdigest unless @generation
         @io = io
         @atoms = file.send(:parse_mp4_atoms, io, 0, io.stat.size)
         @moov = one(@atoms, 'moov')
@@ -44,7 +46,7 @@ module TagLib::MP4
         hint_validator = HintValidator.new(file: file, io: io)
         validate_structure(@atoms, :root, hint_validator)
         @mdat_ranges = @atoms.select { |a| a[:type] == 'mdat' }.map { |a| [a[:payload_offset], a[:end_offset]] }
-        @raw = bytes(@moov)
+        @raw = bytes(@moov) if capture_raw
         @edits = {}
         @offset_tables = {}
         # [source_track_id, 元tref_index] => 保存後tref_index。例: [2, 1] => 0。
@@ -59,8 +61,12 @@ module TagLib::MP4
         @preservation_signature = MetadataSnapshot.copy(preservation(@atoms))
         @removed = @report.select { |r| selected_reference?(r) }
         io.rewind
-        @source_digest = Digest::SHA256.file(io).hexdigest
-        fail!('source changed during reference analysis', :source_changed) unless @source_digest == initial_digest
+        if @generation
+          @generation.check!
+        else
+          @source_digest = Digest::SHA256.file(io).hexdigest
+          fail!('source changed during reference analysis', :source_changed) unless @source_digest == initial_digest
+        end
       end
       @report = MetadataSnapshot.copy(@report)
       @removed = MetadataSnapshot.copy(@removed)
@@ -171,7 +177,10 @@ module TagLib::MP4
         supported = STRUCTURES[parent]
         fail!("unsupported #{parent}/#{atom[:type]}", :unsupported) if supported && !supported.include?(atom[:type])
         if atom[:type] == 'meta'
-          fail!('unsupported meta version', :unsupported) unless payload(atom).byteslice(0, 4) == "\0".b * 4
+          # version/flagsの確認に、置換予定の画像や旧metadata本文を読み込まない。
+          valid_version = atom[:end_offset] - atom[:payload_offset] >= 4 &&
+            @file.send(:read_mp4_bytes, @io, atom[:payload_offset], 4) == "\0".b * 4
+          fail!('unsupported meta version', :unsupported) unless valid_version
           children = @file.send(:parse_mp4_atoms, @io, atom[:payload_offset] + 4, atom[:end_offset])
           fail!('unsupported meta structure', :unsupported) unless children.all? { |a| %w[hdlr keys ilst free].include?(a[:type]) }
         end
@@ -210,6 +219,8 @@ module TagLib::MP4
 
     # 大きなmdatも全読込せず、保持対象payloadのサイズとhashを取得する。
     def payload_signature(atom)
+      # Plusはコピー時のmdat署名と出力の独立署名で媒体保持を検証する。
+      return [atom[:end_offset] - atom[:payload_offset]] if @generation && atom[:type] == 'mdat'
       digest = Digest::SHA256.new
       @io.seek(atom[:payload_offset])
       size = atom[:end_offset] - atom[:payload_offset]
@@ -398,7 +409,7 @@ module TagLib::MP4
              elsif atom[:children].any?
                atom[:children].map { |a| render(a, delta) }.join.b
              else
-               return @raw.byteslice(atom[:offset] - @moov[:offset], length(atom))
+               return @raw ? @raw.byteslice(atom[:offset] - @moov[:offset], length(atom)) : bytes(atom)
              end
       box(atom, data)
     end
@@ -447,7 +458,8 @@ module TagLib::MP4
     end
 
     # 原本のmoov以外を逐次コピーし、生成済みmoovだけを一時出力へ適用する。
-    def write_copy(source, destination)
+    def write_copy(source, destination, &copy)
+      return copy.call(source, destination, [@moov_start, @moov_end, @replacement]) if copy
       ::File.open(source, 'rb') do |input|
         ::File.open(destination, 'wb') do |output|
           IO.copy_stream(input, output, @moov_start)

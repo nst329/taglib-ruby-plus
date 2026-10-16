@@ -8,6 +8,15 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.24
+
+### Added
+- MP4公開APIのheader情報snapshot、保存後snapshot再利用、I/O削減を追加。
+- arm64向けバイナリgemのGitHub Actions公開対象を更新。
+
+### Fixed
+- test-unitとminitestの実行を分離し、全体テストで片方が未実行になる問題を解消。
+
 ## 2.3.2.23
 
 ### Fixed

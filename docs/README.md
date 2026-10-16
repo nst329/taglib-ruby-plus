@@ -6,6 +6,10 @@
 
 ## 現行Plus API
 
+[header情報と保存snapshotの再利用](mp4-header-info-design.md): 選択式info、時間軸・日時・track IDの契約、旧metadataを値変換しない完全置換、save!の実出力snapshot。[テストと大容量計測](Memos/2026-10-16-headerと保存snapshotの再利用検証.md)で確認。
+
+[公開APIのI/O設計](mp4-public-io-design.md): stat/厳密モードの保証、世代別cache、一回の候補出力、独立検証とdigest返却契約。[性能計測](Memos/2026-10-16-MP4公開APIのI-O性能検証.md)に変更前後のbytesと走査回数を記録。
+
 [Plus独自API全体の再設計](taglib-ruby-plus-api-redesign.md): 専用名前空間の編集用File・不変値・save!へ絞った初版実装。[前案のテスト用adapterによる設計検証](Memos/2026-10-16-Plus独自API設計のテスト検証.md)は履歴として残す。
 
 テストの責務と実行範囲は[test/README](../test/README.md)にまとめている。現行Plus APIの受入テストと、前案の設計probeを分けて扱う。判断理由は[テスト責務のADR](ADR/2026-10-16-テスト責務の現行APIと設計probe分離.md)に記録している。
