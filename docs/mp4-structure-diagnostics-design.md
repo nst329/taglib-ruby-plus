@@ -1,6 +1,6 @@
 # MP4構造破損の読み取り専用診断
 
-状態: 提案（設計のみ、未実装） / 2026-10-17
+状態: 実装済み（初期範囲） / 2026-10-17
 
 ## 目的と前提
 
@@ -90,7 +90,7 @@ stz2、fragmented (`moof/mvex`)、暗号化、外部drefは初期版では該当
 2. 信頼できる親境界の内側で既知containerを走査する。壊れた子の次位置を計算できなければ、その親の残りをblockedとする。親の終端が確実なら親の次の兄弟へ進める。`moov`などの文字列を媒体bytesから探索して再同期しない。
 3. track headerとtable headerを取得する。countから必要bytesをchecked arithmeticで算出し、残りpayloadと予算を確認してから走査する。欠落・重複を記録し、依存しないtrack/tableは継続する。
 4. stco/co64を固定サイズblockで逐次走査し、全trackを集計する。複数表の存在自体もissueとし、各表を別atom位置で報告する。表の選択や修復はしない。
-5. 検証済みstscとsample sizeからchunkの終端を算出する。固定stszをsample数分の配列へ展開せず、可変stszはblock読取する。sample payloadは読まない。sttsはrunの件数合計を照合し、sample単位へ展開しない。
+5. 検証済みstscとsample sizeからchunkの終端を算出する。固定stszをsample数分の配列へ展開せず、可変stszはblock読取する。sample payloadは読まない。sttsはrunの件数合計を照合し、sample単位へ展開しない。chunk番号は昇順に処理し、正しい単調増加のstsc mappingでは現在行のindexを一度だけ進める。これにより探索は`O(chunks + stsc_rows)`となる。不正・非単調mappingは適用イベントを前処理して従来の結果を再現し、chunkごとの全行走査を避ける。
 6. 世代を再確認して不変reportを返す。原本が変化していたら部分reportを成功として返さず、既存source_changed契約で失敗する。
 
 新readerの内部観測結果は保存・修復用の「検証済みindex」と分離する。既存parserを寛容に変えたり、部分indexをGenerationの既存atom_indexへ入れたりしない。境界演算など小さな共通処理のみ共有し、writerの厳格な拒否を維持する。
@@ -109,7 +109,7 @@ metadata・chapters・colorなど他の領域も、構造破損が前提条件�
 
 不正entryは全件保存せず、tableごとにcount・first・last・maxを保持する。上限到達時のcount/maxは走査済み範囲のみで、complete=false、scanned_count、打切り理由を必須にする。issue件数上限で捨てた診断は件数とcoverageに集約し、正常と見せない。
 
-通常経路の読込対象はatom header（原則8/16 bytesずつ）、track識別の必要部分、stco/co64、stsc、stsz、stts、必要なstsd/dref headerだけ。媒体サイズに比例する読込・コピー・digestは追加しない。moovの全bytesコピーも不要。表の読込はおおむね`ceil(table bytes / 64 KiB)`回＋header。mdat範囲は一度収集して再利用し、CPU側は範囲探索で対応する。
+通常経路の読込対象はatom header（原則8/16 bytesずつ）、track識別の必要部分、stco/co64、stsc、stsz、stts、必要なstsd/dref headerだけ。媒体サイズに比例する読込・コピー・digestは追加しない。moovの全bytesコピーも不要。表の読込はおおむね`ceil(table bytes / 64 KiB)`回＋header。mdat範囲は一度収集して再利用し、CPU側は範囲探索で対応する。stscのchunk対応は全行逆走査を繰り返さず、通常経路で`O(chunks + stsc_rows)`とする。
 
 同一File世代内で新診断の不変結果を再利用し、保存・reload時は既存世代管理に合わせて無効化する。既存chapter診断からの詳細集計と新領域で同じ結果を再利用する。正常chapter診断には全構造診断を追加しない。異常時のstrict検査済みprefix再読込は初期版では許容し、その範囲を計測する。巨大tableの永続配列cacheは作らない。
 

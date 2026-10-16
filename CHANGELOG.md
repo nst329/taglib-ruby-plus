@@ -8,6 +8,12 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.26
+
+### Fixed
+- `diagnose(:structure)`のstsc chunk mapping探索を線形化し、大量chunk・大量stsc行のMP4診断を高速化した。
+- 不正mappingでも従来の診断結果を維持し、公開schemaと読み取り専用方針を変更しない。
+
 ## 2.3.2.25
 
 ### Added

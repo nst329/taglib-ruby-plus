@@ -224,6 +224,7 @@ module TagLib
           offsets = bytes.byteslice(8, available * width).unpack(width == 4 ? 'N*' : 'Q>*')
           sizes = sample_sizes(stbl)
           mapping = chunk_mapping(stbl)
+          mapping_cursor = chunk_mapping_cursor(mapping)
           sample_index = 0
           max_end = nil
           offsets.each_with_index do |offset, index|
@@ -236,7 +237,7 @@ module TagLib
               base[:first_invalid] ||= entry
               base[:last_invalid] = entry
             end
-            count = samples_per_chunk(mapping, index + 1)
+            count = samples_per_chunk(mapping, index + 1, mapping_cursor)
             if count && sizes
               extent = sizes[sample_index, count]
               if extent && extent.length == count
@@ -331,10 +332,43 @@ module TagLib
           @chunk_mapping_cache[atom[:offset]] = data.byteslice(8, count * 12).unpack('N*').each_slice(3).to_a
         end
 
-        def samples_per_chunk(mapping, chunk_number)
+        # The diagnostic walks chunk offsets in ascending chunk order. For a
+        # valid stsc table, keep the current row and advance it only when the
+        # next row becomes applicable. This makes the normal path O(chunks +
+        # stsc_rows) instead of scanning the table from the end for every
+        # chunk. A malformed/non-monotonic mapping uses precomputed
+        # applicability events to preserve the old lookup result without
+        # re-scanning every row for every chunk.
+        def chunk_mapping_cursor(mapping)
           return nil unless mapping && !mapping.empty?
-          row = mapping.reverse.find { |entry| entry[0] <= chunk_number }
-          row && row[1]
+          monotonic = mapping.each_cons(2).all? { |previous, current| current[0] >= previous[0] }
+          return { index: 0, events: nil, selected_index: nil } if monotonic
+
+          events = mapping.each_with_index.sort_by { |entry, index| [entry[0], index] }
+          { index: 0, events: events, selected_index: nil }
+        end
+
+        def samples_per_chunk(mapping, chunk_number, cursor = nil)
+          return nil unless mapping && !mapping.empty?
+          cursor ||= chunk_mapping_cursor(mapping)
+          return nil unless cursor
+
+          if cursor[:events]
+            while cursor[:index] < cursor[:events].length && cursor[:events][cursor[:index]][0][0] <= chunk_number
+              cursor[:selected_index] = [cursor[:selected_index], cursor[:events][cursor[:index]][1]].compact.max
+              cursor[:index] += 1
+            end
+            row = cursor[:selected_index] && mapping[cursor[:selected_index]]
+            return row && row[1]
+          end
+
+          index = cursor[:index]
+          while index + 1 < mapping.length && mapping[index + 1][0] <= chunk_number
+            index += 1
+          end
+          cursor[:index] = index
+          row = mapping[index]
+          row && row[0] <= chunk_number ? row[1] : nil
         end
 
         def read_track_id(track)
