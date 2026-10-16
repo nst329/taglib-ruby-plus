@@ -70,6 +70,18 @@ Gem::Specification.new do |s|
     'README.md'
   ]
   s.files = [
+    'test/README.md',
+    'docs/ADR/2026-10-16-テスト責務の現行APIと設計probe分離.md',
+    'docs/ADR/2026-10-16-テストログの成功抑制と失敗詳細化.md',
+    'docs/ADR/2026-10-16-Plus保存フローの共通化.md',
+    'lib/taglib/plus_mp4.rb',
+    'test/plus_mp4_api_test.rb',
+    'docs/ADR/2026-10-16-Plus独自APIを編集セッションへ簡素化.md',
+    'test/support/plus_api_design_probe.rb',
+    'test/plus_api_design_probe_test.rb',
+    'docs/Memos/2026-10-16-Plus独自API設計のテスト検証.md',
+    'docs/taglib-ruby-plus-api-redesign.md',
+    'docs/ADR/2026-10-16-Plus独自APIをDocumentと保存計画へ集約.md',
     'lib/taglib/mp4_hint_validation.rb',
     'docs/mp4-rtp-hint-reference-repair-design.md',
     'docs/ADR/2026-10-16-RTP-hintを検証してchapter参照解除を許可.md',

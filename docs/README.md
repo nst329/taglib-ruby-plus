@@ -4,6 +4,10 @@
 
 ## 次期設計案
 
+[Plus独自API全体の再設計](taglib-ruby-plus-api-redesign.md): 専用名前空間の編集用File・不変値・save!へ絞った初版実装。[前案のテスト用adapterによる設計検証](Memos/2026-10-16-Plus独自API設計のテスト検証.md)は履歴として残す。
+
+テストの責務と実行範囲は[test/README](../test/README.md)にまとめている。現行Plus APIの受入テストと、前案の設計probeを分けて扱う。判断理由は[テスト責務のADR](ADR/2026-10-16-テスト責務の現行APIと設計probe分離.md)に記録している。
+
 [MP4 snapshotのRuby API再設計](mp4-snapshot-redesign.md): 原版APIを維持し、fork追加APIを整理する案。未実装であり、以下の現行API契約とは区別してください。
 
 ## 機能別の設計・契約
