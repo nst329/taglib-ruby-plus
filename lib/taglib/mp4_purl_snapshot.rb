@@ -126,6 +126,8 @@ module TagLib::MP4
           code: :purl_raw_mismatch, phase: :restore)
       end
       rows
+    rescue MetadataSnapshotError
+      raise
     rescue ArgumentError, TypeError, NoMethodError => error
       raise MetadataSnapshotError.new(error.message, code: :purl_raw_mismatch, phase: :restore)
     end

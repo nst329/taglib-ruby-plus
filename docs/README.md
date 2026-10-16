@@ -12,6 +12,8 @@
 
 [公開境界・保存失敗・診断schemaのADR](ADR/2026-10-16-Plus公開境界と保存失敗状態と診断schemaの確定.md)に現行契約を記録しています。
 
+[metadata完全復元](mp4-metadata-complete-restore-design.md)と[完全復元のADR](ADR/2026-10-16-metadata完全復元は全値とcontextを一括置換する.md)に、mdir/mdtaの一括置換、artwork、purl raw不足の拒否契約を記録しています。
+
 ## 機能別の内部設計・過去の契約
 
 | 目的 | 文書 |

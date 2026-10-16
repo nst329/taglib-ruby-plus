@@ -17,7 +17,52 @@ module TagLib
       STRUCTURE_ERRORS = [::TagLib::MP4::MetadataSnapshotError, ::TagLib::MP4::ChapterSnapshotError,
                           ::TagLib::MP4::ChapterReferenceError, ::TagLib::MP4::ColorMetadataError].freeze
       private_constant :STRUCTURE_ERRORS
-      Artwork = ::TagLib::MP4::Artwork
+      # 公開APIではcover artのwire整数を扱わせず、形式名を固定する。
+      class Artwork
+        FORMATS = { jpeg: 13, png: 14, bmp: 27 }.freeze
+        BY_NATIVE_FORMAT = FORMATS.invert.freeze
+        SIGNATURES = {
+          jpeg: "\xFF\xD8\xFF".b,
+          png: "\x89PNG\r\n\x1A\n".b,
+          bmp: 'BM'.b
+        }.freeze
+        attr_reader :format, :data
+
+        def initialize(format:, data:)
+          @format = format.to_sym if format.respond_to?(:to_sym)
+          unless FORMATS.key?(@format)
+            raise Error.new("unsupported artwork format: #{format.inspect}", code: :unsupported_artwork,
+                            phase: :validate, issues: [{ code: :unsupported_artwork, path: 'artwork/format',
+                                                         format: format.inspect }])
+          end
+          unless data.instance_of?(::String)
+            raise Error.new('artwork data must be a String', code: :unsupported_artwork,
+                            phase: :validate, issues: [{ code: :invalid_artwork, path: 'artwork/data' }])
+          end
+          @data = data.dup.force_encoding(Encoding::BINARY)
+          unless @data.start_with?(SIGNATURES.fetch(@format))
+            raise Error.new("artwork data does not match #{@format} format", code: :unsupported_artwork,
+                            phase: :validate, issues: [{ code: :invalid_artwork, path: 'artwork/data',
+                                                         format: @format }])
+          end
+          @data.freeze
+          freeze
+        end
+
+        def native_format
+          FORMATS.fetch(format)
+        end
+        private :native_format
+
+        def ==(other)
+          other.is_a?(self.class) && [format, data] == [other.format, other.data]
+        end
+        alias eql? ==
+
+        def hash
+          [format, data].hash
+        end
+      end
       ContentRating = ::TagLib::MP4::ContentRating
 
       class Error < StandardError
@@ -111,12 +156,13 @@ module TagLib
         private_class_method :from_legacy
 
         # nativeを開かず、型付きitemとmdta値から復元用snapshotを構築する。
-        def initialize(items: [], mdta: {})
+        def initialize(items: [], mdta: {}, artworks: nil)
           raise ArgumentError, 'items must be an Array of MetadataItem' unless items.is_a?(Array) && items.all? { |item| item.is_a?(MetadataItem) }
           raise ArgumentError, 'mdta must be a Hash' unless mdta.is_a?(Hash)
 
           @mdta = {}.freeze
           rows = items.map { |item| [item.key, item.kind, item.atom_data_type, item.value] }
+          rows += artwork_rows(artworks, items.map(&:key)) unless artworks.nil?
           groups = normalize_mdta(mdta, keep_empty: true).each_with_index.map { |(key, values), index| [key, index + 1, values] }
           initialize_legacy(::TagLib::MP4::MetadataSnapshot.new(items: rows, mdta: groups))
         end
@@ -154,15 +200,34 @@ module TagLib
           item = item('covr')
           return [].freeze unless item
 
-          item.value.map { |format, data| ::TagLib::MP4::Artwork.new(format: format, data: data) }.freeze
+          item.value.map do |format, data|
+            public_format = Artwork::BY_NATIVE_FORMAT[format]
+            unless public_format
+              raise Error.new("unsupported artwork format: #{format.inspect}", code: :unsupported_artwork,
+                              phase: :validate, issues: [{ path: 'metadata/items/covr', code: :unsupported_artwork,
+                                                           format: format }])
+            end
+            begin
+              Artwork.new(format: public_format, data: data)
+            rescue ArgumentError => error
+              raise Error.new(error.message, code: :unsupported_artwork, phase: :validate,
+                              issues: [{ path: 'metadata/items/covr', code: :invalid_artwork,
+                                         message: error.message }]), cause: error
+            end
+          end.freeze
         end
 
         # 指定した領域だけを全入力検証して置換し、元snapshotは変更しない。
-        def with(properties: {}, items: {}, mdta: {})
+        def with(properties: {}, items: {}, mdta: {}, artworks: nil)
           validate_hash!(properties, 'properties')
           validate_hash!(items, 'items')
           validate_hash!(mdta, 'mdta')
           rows = @legacy
+          unless artworks.nil?
+            images = artwork_rows(artworks, items.keys.map(&:to_s))
+            rows = rows.without(items: ['covr'])
+            rows = rows.with(items: images) unless images.empty?
+          end
           normalized_properties = normalize_properties(properties)
           normalized_items = normalize_items(items)
           normalized_mdta = normalize_mdta(mdta)
@@ -200,6 +265,19 @@ module TagLib
         end
 
         private
+
+        # constructorと部分編集で同じ画像検証・covr表現を使う。
+        def artwork_rows(artworks, item_keys)
+          raise ArgumentError, 'artworks must be an Array' unless artworks.is_a?(Array)
+          raise ArgumentError, 'items and artworks cannot both contain covr' if item_keys.include?('covr')
+          unless artworks.all? { |art| art.is_a?(Artwork) }
+            raise ArgumentError, 'artworks must contain Artwork values'
+          end
+          return [] if artworks.empty?
+
+          [['covr', :cover_art_list, 255,
+            artworks.map { |art| [art.__send__(:native_format), art.data] }]]
+        end
 
         def property_values(native_name, item)
           values = item.value
@@ -384,6 +462,7 @@ module TagLib
           ensure_no_repair!
           raise ArgumentError, 'metadata must be TagLib::Plus::MP4::MetadataSnapshot' unless value.is_a?(MetadataSnapshot)
           load_metadata
+          validate_metadata_candidate!(value)
           @metadata_candidate = value
         end
 
@@ -549,7 +628,8 @@ module TagLib
         def read_native
           ::TagLib::MP4::Internal::File.open(@path, false) { |native| yield native }
         rescue *STRUCTURE_ERRORS => error
-          raise Error.new(error.message, code: error.code, phase: :read), cause: error
+          raise Error.new(error.message, code: error.code, phase: :read,
+                          issues: error.respond_to?(:issues) ? error.issues : []), cause: error
         rescue IOError, SystemCallError => error
           raise Error.new(error.message, code: :io, phase: :read), cause: error
         end
@@ -608,6 +688,10 @@ module TagLib
         end
 
         def write_candidate(path)
+          if generic_metadata_restore?
+            write_generic_metadata_copy(path)
+            return
+          end
           ::TagLib::MP4::Internal::File.open(path, false) do |native|
             native.restore_metadata_snapshot(@metadata_candidate.__send__(:to_legacy))
             native.restore_chapter_snapshot(@chapters_candidate.__send__(:to_legacy)) if @chapters_candidate
@@ -654,9 +738,14 @@ module TagLib
         # mdta contextではApple系通常itemが数値keyへ移るため、保存先の既存keyを
         # 保持した期待値を組み立てて検証する。対応表にないitemは正規化しない。
         def metadata_verification_snapshot
+          if generic_metadata_restore?
+            helper = ::TagLib::MP4.send(:const_get, :PurlSnapshot, false)
+            return generic_expected_snapshot(@metadata_candidate, helper)
+          end
+          return @metadata_candidate unless @metadata_baseline
+
           candidate = @metadata_candidate.__send__(:to_legacy)
-          baseline = @metadata_baseline&.__send__(:to_legacy)
-          return @metadata_candidate unless baseline
+          baseline = @metadata_baseline.__send__(:to_legacy)
 
           helper = ::TagLib::MP4.send(:const_get, :PurlSnapshot, false)
           entries = helper.mdta_migration_items(candidate)
@@ -673,6 +762,220 @@ module TagLib
                        helper.expected_native_mdta_snapshot(staged, entries)
                      end
           MetadataSnapshot.__send__(:from_legacy, expected)
+        end
+
+        # 完全snapshot復元では保存先のmdtaをnativeの部分更新へ渡さず、contextを再構成する。
+        def generic_metadata_restore?
+          return false unless metadata_changed? && @metadata_candidate && @metadata_baseline
+          contexts = @metadata_baseline.__send__(:to_legacy).source_structure[:contexts] || []
+          return false unless contexts.size == 1 && %w[mdir mdta].include?(contexts.first[:handler])
+          return true if contexts.first[:handler] == 'mdta'
+
+          @metadata_candidate.mdta.any?
+        end
+
+        # mdta保存先へ通常itemとmdtaを別contextとして一括配置する。
+        def write_generic_metadata_copy(path)
+          if @chapters_candidate && chapters_changed?
+            raise Error.new('metadata and chapter edits must be saved separately', code: :pending_changes,
+                            phase: :prepare)
+          end
+          helper = ::TagLib::MP4.send(:const_get, :PurlSnapshot, false)
+          target = helper.destination(@path)
+          context = target.fetch(:contexts).find { |row| %w[mdir mdta].include?(row[:handler]) }
+          raise Error.new('destination metadata context is unsupported', code: :metadata_context_unsupported,
+                          phase: :prepare) unless context
+          context_raw = helper.read_meta(@path, context)
+          mdta_raw = context[:handler] == 'mdta' ? context_raw : convert_mdir_to_mdta(context_raw, helper)
+          mdir_items = metadata_items_for_mdir(@metadata_candidate)
+          mdta_groups = metadata_groups_for_restore(@metadata_candidate, helper)
+          desired_mdir = if mdir_items.empty?
+                           nil
+                         else
+                           build_mdir_metadata(mdir_items, @metadata_candidate, path)
+                         end
+          desired_mdta = if mdta_groups.empty?
+                           nil
+                         else
+                           render_mdta_snapshot(mdta_raw, mdta_groups)
+                         end
+          desired_mdir ||= empty_mdir_metadata(mdta_raw) if desired_mdta.nil?
+          write_metadata_atoms(path, container_transform: lambda do |raw_udta|
+            replace_metadata_contexts(raw_udta, desired_mdir, desired_mdta, helper)
+          end)
+        rescue ::TagLib::MP4::MetadataSnapshotError => error
+          raise Error.new(error.message, code: error.code, phase: :prepare,
+                          issues: error.respond_to?(:issues) ? error.issues : []), cause: error
+        rescue ::TagLib::MP4::ChapterReferenceError => error
+          raise Error.new(error.message, code: error.code, phase: :prepare,
+                          issues: [{ code: error.code, path: 'movie', message: error.message }]), cause: error
+        end
+
+        # mdta保存先を一時的にmdirへ変換し、nativeの型変換を利用して通常itemを生成する。
+        def build_mdir_metadata(items, snapshot, path)
+          helper = ::TagLib::MP4.send(:const_get, :PurlSnapshot, false)
+          Tempfile.create(['taglib-plus-mdir-', '.mp4'], ::File.dirname(path)) do |temp|
+            temp.close
+            write_metadata_atoms(temp.path, metadata_transform: lambda do |raw|
+              convert_mdta_to_mdir(raw, helper)
+            end)
+            ::TagLib::MP4::Internal::File.open(temp.path, false) do |native|
+              source_legacy = snapshot.__send__(:to_legacy)
+              legacy = ::TagLib::MP4::MetadataSnapshot.new(items: items.map { |item|
+                [item.key, item.kind, item.atom_data_type, item.value]
+              }, mdta: [], source_structure: source_legacy.source_structure,
+                 format_version: source_legacy.format_version)
+              native.restore_metadata_snapshot(legacy)
+              raise IOError, 'native mdir staging save failed' unless native.save
+            end
+            staged = helper.destination(temp.path)
+            mdir = staged.fetch(:contexts).find { |row| row[:handler] == 'mdir' }
+            helper.read_meta(temp.path, mdir)
+          end
+        rescue ::TagLib::MP4::MetadataSnapshotError
+          raise
+        rescue StandardError => error
+          raise Error.new("cannot build mdir metadata: #{error.class}: #{error.message}", code: :metadata_context_unsupported,
+                          phase: :prepare), cause: error
+        end
+
+        # 原本を短時間だけ開き、検証済みatom計画を作業コピーへ適用する。
+        def write_metadata_atoms(destination, **transforms)
+          editor_class = ::TagLib::MP4.send(:const_get, :MP4AtomEditor, false)
+          ::TagLib::MP4::Internal::File.open(@path, false) do |native|
+            editor = editor_class.new(native, **transforms)
+            editor.atom_plan.write_copy(@path, destination)
+          end
+        end
+
+        # purlはlocaleを保持するためmdta側へ配置し、その他の通常itemをmdirへ残す。
+        def metadata_items_for_mdir(snapshot)
+          snapshot.items.reject { |item| item.key == 'purl' }
+        end
+
+        def metadata_groups_for_restore(snapshot, helper)
+          groups = snapshot.mdta.transform_values(&:dup)
+          purl = snapshot.items.find { |item| item.key == 'purl' }
+          return groups unless purl
+
+          if groups.key?('purl')
+            raise Error.new('ordinary and mdta purl cannot be merged safely', code: :metadata_context_conflict,
+                            phase: :prepare,
+                            issues: [{ code: :metadata_context_conflict, path: 'metadata/purl',
+                                       message: 'snapshot contains both ordinary and mdta purl' }])
+          end
+
+          raw = snapshot.__send__(:to_legacy).source_structure[:purl_raw]&.first&.fetch(:raw)
+          raise Error.new('purl raw bytes are required for mdta restoration', code: :purl_raw_missing,
+                          phase: :prepare,
+                          issues: [{ code: :purl_raw_missing, path: 'metadata/items/purl',
+                                     message: 'snapshot does not contain raw purl bytes' }]) unless raw
+          values = helper.value_rows(raw).map { |type, locale, data| MdtaValue.new(data_type: type, locale: locale, data: data) }
+          groups['purl'] = values
+          groups
+        end
+
+        # 保存構造上のpurl移動だけを反映した、独立再読込との比較用snapshotを作る。
+        def generic_expected_snapshot(snapshot, helper)
+          purl = snapshot.items.find { |item| item.key == 'purl' }
+          return snapshot unless purl
+          groups = metadata_groups_for_restore(snapshot, helper)
+          rows = snapshot.items.reject { |item| item.key == 'purl' }.map do |item|
+            [item.key, item.kind, item.atom_data_type, item.value]
+          end
+          mdta = groups.map.with_index { |(key, values), index| [key, index + 1, values.map { |v| [v.data_type, v.locale, v.data] }] }
+          legacy = ::TagLib::MP4::MetadataSnapshot.new(items: rows, mdta: mdta,
+            source_structure: snapshot.__send__(:to_legacy).source_structure)
+          MetadataSnapshot.__send__(:from_legacy, legacy)
+        end
+
+        # mdtaの既存atomをnative staging用の空mdir contextへ変換する。
+        def convert_mdta_to_mdir(raw, helper)
+          children = helper.boxes(raw, 12).reject { |type, _bytes| type == 'keys' }
+          children = children.map do |type, bytes|
+            if type == 'hdlr'
+              bytes = bytes.dup
+              bytes[16, 4] = 'mdir'
+            elsif type == 'ilst'
+              bytes = helper.box('ilst', ''.b)
+            end
+            [type, bytes]
+          end
+          helper.box('meta', raw.byteslice(8, 4) + children.map(&:last).join.b)
+        end
+
+        # mdirしかない保存先でも、候補mdtaを収めるtemplateを作る。
+        def convert_mdir_to_mdta(raw, helper)
+          children = helper.boxes(raw, 12)
+          handler = children.find { |type, _bytes| type == 'hdlr' }&.last
+          raise ArgumentError, 'metadata handler is missing' unless handler
+          handler = handler.dup
+          handler[16, 4] = 'mdta'
+          keys = helper.box('keys', [0, 0].pack('N2'))
+          ilst = helper.box('ilst', ''.b)
+          retained = children.reject { |type, _bytes| %w[hdlr keys ilst].include?(type) }.map(&:last)
+          helper.box('meta', raw.byteslice(8, 4) + [handler, keys, ilst, *retained].join.b)
+        end
+
+        # keysとilstを同じ候補値から再構成し、空keyはkeysだけ保持する。
+        def render_mdta_snapshot(raw, groups)
+          helper = ::TagLib::MP4.send(:const_get, :PurlSnapshot, false)
+          children = helper.boxes(raw, 12)
+          groups = groups.map.with_index { |(key, values), index| [key, index + 1, values.map { |v| [v.data_type, v.locale, v.data] }] }
+          keys = groups.map(&:first)
+          keys_bytes = keys.map { |key| helper.box('mdta', key.encode(Encoding::UTF_8).b) }.join.b
+          keys_atom = helper.box('keys', [0, keys.length].pack('N2') + keys_bytes)
+          ilst = groups.each_with_index.filter_map do |(_key, _index, values), index|
+            next if values.empty?
+            data = values.map { |type, locale, bytes| helper.box('data', [type, locale].pack('N2') + bytes.b) }.join.b
+            helper.box([index + 1].pack('N'), data)
+          end.join.b
+          ilst_atom = helper.box('ilst', ilst)
+          payload = children.map do |type, bytes|
+            type == 'keys' ? keys_atom : type == 'ilst' ? ilst_atom : bytes
+          end.join.b
+          helper.box('meta', raw.byteslice(8, 4) + payload)
+        rescue StandardError => error
+          raise Error.new("cannot render mdta metadata: #{error.message}", code: :metadata_context_unsupported,
+                          phase: :prepare), cause: error
+        end
+
+        def empty_mdir_metadata(raw)
+          convert_mdta_to_mdir(raw, ::TagLib::MP4.send(:const_get, :PurlSnapshot, false))
+        end
+
+        def replace_metadata_contexts(raw_udta, mdir, mdta, helper)
+          children = helper.boxes(raw_udta, 8)
+          first_meta = children.index { |type, _bytes| type == 'meta' }
+          children.reject! { |type, _bytes| type == 'meta' }
+          replacement = [mdir, mdta].compact
+          position = first_meta || children.length
+          children.insert(position, *replacement.map { |bytes| ['meta', bytes] })
+          helper.box('udta', children.map(&:last).join.b)
+        end
+
+        # 保存前に構造を再解析し、native保存へ原因が潰れる前に公開Errorへ変換する。
+        def validate_metadata_candidate!(value)
+          helper = ::TagLib::MP4.send(:const_get, :PurlSnapshot, false)
+          legacy = value.__send__(:to_legacy)
+          if legacy.items.assoc('purl') && (legacy.source_structure[:purl_raw] || []).empty?
+            raise Error.new('purl raw bytes are required for restoration', code: :purl_raw_missing,
+                            phase: :prepare,
+                            issues: [{ code: :purl_raw_missing, path: 'metadata/items/purl',
+                                       message: 'snapshot does not contain raw purl bytes' }])
+          end
+          helper.validate_raw!(legacy)
+          read_native { |native| ::TagLib::MP4::ChapterReferences.new(native, ignore_metadata: true) }
+        rescue ::TagLib::MP4::MetadataSnapshotError => error
+          raise Error.new(error.message, code: error.code, phase: :prepare,
+                          issues: error.respond_to?(:issues) ? error.issues : []), cause: error
+        rescue Error => error
+          raise Error.new(error.message, code: error.code, area: error.area, phase: error.phase,
+                          committed: error.committed,
+                          issues: error.issues.empty? ? [{ code: error.code, path: 'movie', message: error.message }] : error.issues), cause: error
+        rescue ::TagLib::MP4::ChapterReferenceError => error
+          raise Error.new(error.message, code: error.code, phase: :prepare,
+                          issues: [{ code: error.code, path: 'movie', message: error.message }]), cause: error
         end
 
         # 別出力はlinkの排他的作成を使い、競合した既存ファイルを上書きしない。

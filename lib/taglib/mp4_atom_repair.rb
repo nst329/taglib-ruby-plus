@@ -6,10 +6,10 @@ module TagLib::MP4
     attr_reader :result
 
     # 例: timing_track: 4。metadata_transformはraw meta bytesだけを受け取る内部処理。
-    def initialize(file, timing_track: nil, metadata_transform: nil, metadata_transforms: nil)
-      @timing_track, @metadata_transform, @metadata_transforms = timing_track, metadata_transform, metadata_transforms
+    def initialize(file, timing_track: nil, metadata_transform: nil, metadata_transforms: nil, container_transform: nil)
+      @timing_track, @metadata_transform, @metadata_transforms, @container_transform = timing_track, metadata_transform, metadata_transforms, container_transform
       @atom_replacements = {}
-      super(file, timing: !timing_track.nil?, ignore_metadata: !metadata_transform.nil? || !metadata_transforms.nil?)
+      super(file, timing: !timing_track.nil?, ignore_metadata: !metadata_transform.nil? || !metadata_transforms.nil? || !container_transform.nil?)
     end
 
     # 元境界と期待signatureだけを持つ不変計画を返す。
@@ -24,7 +24,13 @@ module TagLib::MP4
 
     def prepare_atom_edits
       fail!('repair dangling references before other atom edits', :pending_changes) unless @report.none? { |r| r[:status] == :missing }
-      if @metadata_transform || @metadata_transforms
+      if @container_transform
+        udta = @moov[:children].find do |atom|
+          atom[:type] == 'udta' && atom[:children].any? { |child| child[:type] == 'meta' }
+        end
+        fail!('metadata container is missing', :unsupported) unless udta
+        @atom_replacements[udta[:offset]] = @container_transform.call(bytes(udta))
+      elsif @metadata_transform || @metadata_transforms
         metas = []
         walk(@moov[:children]) { |atom| metas << atom if atom[:type] == 'meta' }
         expected = @metadata_transforms ? @metadata_transforms.keys.sort : [metas.first&.fetch(:offset)]

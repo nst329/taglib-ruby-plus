@@ -103,6 +103,15 @@ class PlusMP4APITest < Test::Unit::TestCase
     assert snapshot.frozen?
   end
 
+  should 'expose cover art through public symbols and preserve duplicate order' do
+    data = File.binread('test/data/globe_east_90.jpg')
+    image = API::Artwork.new(format: :jpeg, data: data)
+    snapshot = API::MetadataSnapshot.new(artworks: [image, image])
+    assert_equal [:jpeg, :jpeg], snapshot.artworks.map(&:format)
+    assert_equal [data, data], snapshot.artworks.map(&:data)
+    assert_raise(ArgumentError) { API::MetadataSnapshot.new(artworks: [image], items: [API::MetadataItem.new(key: 'covr', kind: :cover_art_list, atom_data_type: 0, value: [])]) }
+  end
+
   should 'replace only the requested chapter format and preserve the other format' do
     TagLib::MP4::Internal::File.open(@source, false) do |native|
       native.set_chapters([TagLib::MP4::Chapter.new(0, '旧Nero')], style: :nero)
@@ -453,7 +462,7 @@ class PlusMP4APITest < Test::Unit::TestCase
     end
   end
 
-  should 'restore a common Apple mdta property from a mdir snapshot after muxing' do
+  should 'restore ordinary values and mdta values without semantic conversion after muxing' do
     base = File.join(@dir, 'base.m4a')
     target = File.join(@dir, 'muxed.m4a')
     FileUtils.cp('test/data/mp4.m4a', base)
@@ -480,7 +489,7 @@ class PlusMP4APITest < Test::Unit::TestCase
       actual = file.metadata
       assert_equal ['Title'], actual.properties[:title]
       assert_equal ['source artist'], actual.properties[:artist]
-      assert_equal ['source artist'.b], actual.mdta.fetch('artist').map(&:data)
+      assert_empty actual.mdta.fetch('artist', [])
       assert_equal ['https://example.test/feed'.b], actual.mdta.fetch('purl').map(&:data)
     end
   end
