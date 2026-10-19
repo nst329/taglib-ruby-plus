@@ -8,6 +8,12 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.28
+
+### Added
+- MP4 `sample_boundaries`で、ffmpeg生成AACの限定roll sample group（sgpd/sbgp）を検証し、decode preroll宣言として返すようにした。
+- group構造・割当の検証、対応外形式／破損／上限の分類、group payloadのI/O・entry計測を追加した。
+
 ## 2.3.2.27
 
 ### Added

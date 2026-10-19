@@ -1,6 +1,6 @@
 # 読み取り専用sample境界API
 
-状態: 実装済み・未リリース。MListNew A3向けの物理構造証拠を取得する。
+状態: 実装済み。MListNew A3向けの物理構造証拠を取得する。
 判断理由は[ADR](ADR/2026-10-19-sample境界を圧縮tableから読み取る.md)。
 
 ## 公開契約
@@ -48,6 +48,7 @@ IDはMP4 tkhdのIDでありffprobeのstream indexではない。引数は正のI
 | first, last | `{index:, offset:, size:, dts:, pts:, duration:}`。indexは0始まり、offsetはabsolute bytes、sizeはbytes。他はraw media ticks |
 | last_is_max_raw_presentation_end | CTTSなし／全0と正durationに基づき、lastのraw PTS+durationが最大であること。nonzero CTTS時はfalse |
 | edits | nilまたはelst順の`segment_duration`, `media_time`, `rate_integer`, `rate_fraction`。durationはmovie ticks、media_timeはmedia ticks、rateは16.16の二分表現 |
+| sample_groups | groupがない場合は省略。対象mp4a trackのstbl直下で、sgpd/sbgpを各1個だけ検証できた場合に`{status: :complete, groups: [{grouping_type: "roll", sgpd_version: 1, sbgp_version: 0, descriptions: [{index: 1, roll_distance: -1}], runs: [{first_index: 0, sample_count:, group_description_index: 1}], semantics: :decode_preroll, raw_timing_effect: :none}]}`を返す。groupが存在しても対応外なら`status: :unsupported`とする |
 
 DTSはsttsを0から累積し、対応範囲のPTSはDTSと同じ。nonzero CTTS時のfirst/last PTSはnilとし、推定値を返さない。非対応構造がある場合も位置・raw時刻が入ることはあるが、製品の適用判定へ流用せずstatusを確認する。
 
@@ -62,12 +63,13 @@ DTSはsttsを0から累積し、対応範囲のPTSはDTSと同じ。nonzero CTTS
 - stsdは単一mp4a audio version 0を初期対応とする。entry拡張はesds/btrtだけを許可し、境界を検証する。drefは単一自己完結url entry、descriptionの参照index整合を要求する。
 - elst v0/v1、editなし／単一・非負media_time・rate=1。primingと末尾切詰めの宣言を保持する。
 - CTTSはv0/v1で全行countを検証し、全0だけcomplete。
+- AAC roll groupは、sgpd version 1／flags 0／grouping_type `roll`／default_length 2／entry_count 1／signed roll_distance -1と、sbgp version 0／flags 0／同grouping_type／entry_count 1／全sampleをindex 1へ割り当てる組合せだけを検証する。意味はdecode prerollの宣言に限定し、raw DTS/PTS/duration、edit、offset、skip/discardを変更しない。先行sampleの存在や復号成功は検証しない。
 
-複数description（途中変更を含む）、他codec/handler、audio entry v1/v2、外部参照、複数／empty／dwell／rate変更edit、nonzero CTTS、fragment、暗号化構造、sample group（rollを含む）、subs/sdtp/stsh/padb/stdp/cslg、未知sample table・track extension等はunsupported。既知container/entryの許可リスト外を推測しない。atom境界・重複必須box・table切断は破損。atom数50,000・深さ16の既存parser上限はlimitとする。
+複数description（途中変更を含む）、他codec/handler、audio entry v1/v2、外部参照、複数／empty／dwell／rate変更edit、nonzero CTTS、fragment、暗号化構造、roll以外のgroup、rollのversion／distance／description／run／割当が初期範囲外の形式、片側だけ／重複／追加group、subs/sdtp/stsh/padb/stdp/cslg、未知sample table・track extension等はunsupported。明確なgroup payload切断、payload長不一致、description参照範囲外、全sample数を超える割当はmalformedとして例外にする。既知container/entryの許可リスト外を推測しない。atom境界・重複必須box・table切断は破損。atom数50,000・深さ16の既存parser上限はlimitとする。
 
 ## I/Oとメモリ予算
 
-対象tableはdref/stsd/elst/stts/ctts/stsc/stszまたはstz2/stcoまたはco64。payload長の合計をmax_table_bytes、処理する宣言entry数合計をmax_table_entriesで制限する。固定stszはsample数によらず1 entry、可変sizeはsample数、stz2はnibble数で数える。entry上限で停止したtableはheaderだけ読み得る。counts.table_entriesは走査用に受理したentry数、table_bytesは実際に要求したtable payload bytes（切断読取では成功bytesを意味しない）。bytes_read/read_callsは境界parser・必要header・tableを含む、この要求のRuby IO.read要求量／回数。OSの物理I/O、seek、stat、以前のinfo取得、Generationの検査用読取は含まない。
+対象tableはdref/stsd/elst/stts/ctts/stsc/stszまたはstz2/stcoまたはco64と、対応形式を検証するsgpd/sbgp。group payload bytesもmax_table_bytesへ、description/runの宣言数もmax_table_entriesへ計上する（sample数分のrunや配列は作らない）。payload長の合計をmax_table_bytes、処理する宣言entry数合計をmax_table_entriesで制限する。固定stszはsample数によらず1 entry、可変sizeはsample数、stz2はnibble数で数える。entry上限で停止したtableはheaderだけ読み得る。counts.table_entriesは走査用に受理したentry数、table_bytesは実際に要求したtable payload bytes（切断読取では成功bytesを意味しない）。bytes_read/read_callsは境界parser・必要header・tableを含む、この要求のRuby IO.read要求量／回数。OSの物理I/O、seek、stat、以前のinfo取得、Generationの検査用読取は含まない。
 
 tableのprefixを一度読み、予算・長さ・件数を検証して残りを一度読む。media本文はseekで飛ばす。全sampleのRuby配列は生成せず、圧縮raw tableを予算内で保持して集約する。chunk区間は重複確認のためchunk数分だけ保持する。計算量は可変size entries + timing/mapping entries + chunks log(chunks) + chunks log(mdat数)。メモリはtable byte予算・entry予算・既存atom数上限で制約される。allocatorのRSS上限をbytes予算と同一とは扱わない。
 
@@ -77,4 +79,4 @@ tableのprefixを一度読み、予算・長さ・件数を検証して残りを
 
 現時点ではMListNew側を変更していない。採用時には利用可能gem版を確認し、この確定schemaへadapterを接続する。completeだけを採用し、unsupported/limitは理由を記録して従来経路。例外は停止する。first/lastのoffset/sizeを限定ffprobe packetと照合し、edit原点・timescaleを揃えてDTS/PTS/duration/side dataを検証する。全packet oracleを製品へ流用しない。
 
-ffmpeg生成AACにはsgpd/sbgpが付く実例があり、初期範囲ではunsupportedになる。これを無視して有効化しない。groupの意味を検証する追加仕様・実装、または入力条件の限定が別途必要。
+ffmpeg生成AACにはこの限定形式のsgpd/sbgpが付く実例がある。completeでもroll recovery自体は未検証で、coverageの`sample_groups`／`roll_mapping`は構造・割当の検証、`roll_recovery`は`:not_checked`を示す。MListNewはcompleteだけを採用し、raw時刻とedit適用後のffprobe値を混同せず照合する。

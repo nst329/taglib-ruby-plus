@@ -15,6 +15,7 @@ module TagLib
           @table_bytes = @entries = @bytes_read = @read_calls = 0
           @digest = Digest::SHA256.new
           @coverage, @issues, @data = [], [], {}
+          @sample_group_allowed_offsets = []
         end
 
         def report(track_id)
@@ -160,11 +161,6 @@ module TagLib
           if root.any? { |a| %w[moof mfra].include?(a[:type]) } || moov[:children].any? { |a| a[:type] == 'mvex' }
             stop!(:unsupported, :fragmented, 'fragmented MP4 sample tables are not supported')
           end
-          walk(root.reject { |a| a[:type] == 'moov' } + moov[:children].reject { |a| a[:type] == 'trak' } + [track]) do |a|
-            if UNSUPPORTED_BOXES.include?(a[:type])
-              @issues << { code: :unsupported_structure, message: "unsupported #{a[:type]}", atom_offset: a[:offset] }
-            end
-          end
           media = timing(descend(track, 'mdia', 'mdhd'))
           movie = timing(child(moov, 'mvhd'))
           @data.merge!(media_timescale: media[:timescale], media_duration: media[:duration_ticks],
@@ -197,6 +193,12 @@ module TagLib
           sizes, count, fixed, field = sizes(stbl)
           @data[:sample_count] = count
           stop!(:unsupported, :empty_track, 'track has no samples') if count.zero?
+          sample_groups(stbl, handler, count)
+          walk(root.reject { |a| a[:type] == 'moov' } + moov[:children].reject { |a| a[:type] == 'trak' } + [track]) do |a|
+            if UNSUPPORTED_BOXES.include?(a[:type]) && !@sample_group_allowed_offsets.include?(a[:offset])
+              @issues << { code: :unsupported_structure, message: "unsupported #{a[:type]}", atom_offset: a[:offset] }
+            end
+          end
           timing_table(child(stbl, 'stts'), count)
           composition(child(stbl, 'ctts', required: false), count)
           chunks(stbl, root, sizes, count, fixed, field)
@@ -207,6 +209,116 @@ module TagLib
           @coverage << { check: :composition_timing, status: @data[:composition_offsets] == :nonzero ? :unsupported : :complete }
           @coverage << { check: :media_payload, status: :not_checked }
           @coverage << { check: :codec_configuration, status: :not_checked }
+        end
+
+        def sample_groups(stbl, handler, sample_count)
+          atoms = stbl[:children].select { |a| %w[sgpd sbgp].include?(a[:type]) }
+          return @coverage.concat([{ check: :sample_groups, status: :absent },
+                                   { check: :roll_mapping, status: :absent },
+                                   { check: :roll_recovery, status: :not_applicable }]) if atoms.empty?
+
+          @data[:sample_groups] = { status: :unsupported, groups: [] }
+          unless handler == 'soun' && @data[:sample_descriptions]&.one? { |entry| entry[:fourcc] == 'mp4a' }
+            @coverage.concat([{ check: :sample_groups, status: :unsupported },
+                              { check: :roll_mapping, status: :unsupported },
+                              { check: :roll_recovery, status: :not_checked }])
+            return
+          end
+
+          sgpd_atoms = atoms.select { |a| a[:type] == 'sgpd' }
+          sbgp_atoms = atoms.select { |a| a[:type] == 'sbgp' }
+          if sgpd_atoms.size != 1 || sbgp_atoms.size != 1
+            parse_sgpd(sgpd_atoms.first) if sgpd_atoms.size == 1
+            parse_sbgp(sbgp_atoms.first, sample_count, nil) if sbgp_atoms.size == 1
+            @issues << { code: :sample_groups, message: 'only one sgpd and sbgp roll pair is supported' }
+            @coverage.concat([{ check: :sample_groups, status: :unsupported },
+                              { check: :roll_mapping, status: :unsupported },
+                              { check: :roll_recovery, status: :not_checked }])
+            return
+          end
+
+          description = parse_sgpd(sgpd_atoms.first)
+          mapping = parse_sbgp(sbgp_atoms.first, sample_count, description[:entry_count])
+          supported = description[:supported] && mapping[:supported] &&
+            description[:grouping_type] == 'roll' && mapping[:grouping_type] == 'roll'
+          unless supported
+            @issues << { code: :sample_groups, message: 'sgpd/sbgp roll group is outside the supported form' }
+            @coverage.concat([{ check: :sample_groups, status: :unsupported },
+                              { check: :roll_mapping, status: :unsupported },
+                              { check: :roll_recovery, status: :not_checked }])
+            return
+          end
+
+          @sample_group_allowed_offsets = [sgpd_atoms.first[:offset], sbgp_atoms.first[:offset]]
+          @data[:sample_groups] = {
+            status: :complete,
+            groups: [{ grouping_type: 'roll', sgpd_version: description[:version], sbgp_version: mapping[:version],
+                       descriptions: [{ index: 1, roll_distance: description[:roll_distance] }],
+                       runs: [{ first_index: 0, sample_count: mapping[:sample_count], group_description_index: 1 }],
+                       semantics: :decode_preroll, raw_timing_effect: :none }]
+          }
+          @coverage.concat([{ check: :sample_groups, status: :complete },
+                            { check: :roll_mapping, status: :complete },
+                            { check: :roll_recovery, status: :not_checked }])
+        end
+
+        def parse_sgpd(atom)
+          fail!('truncated sgpd header') if length(atom) < 8
+          initial = bytes(atom, 0, 8)
+          version = initial.getbyte(0)
+          flags = initial.byteslice(1, 3)
+          grouping_type = initial.byteslice(4, 4)
+          unless version == 1 && flags == "\0" * 3 && grouping_type == 'roll'
+            return { supported: false, version: version, grouping_type: grouping_type, entry_count: nil }
+          end
+          head = box_header(atom, 16, [1])
+          default_length, entry_count = head.byteslice(8, 8).unpack('N2')
+          raw = table(atom, entry_count, head)
+          if default_length.positive?
+            fail!('sgpd count/length mismatch') unless 16 + default_length * entry_count == length(atom)
+          else
+            offset = 16
+            entry_count.times do
+              fail!('truncated sgpd entry') if offset + 4 > raw.bytesize
+              size = raw.byteslice(offset, 4).unpack1('N')
+              fail!('invalid sgpd entry length') if size.zero? || offset + 4 + size > raw.bytesize
+              offset += 4 + size
+            end
+            fail!('sgpd count/length mismatch') unless offset == raw.bytesize
+          end
+          supported = default_length == 2 && entry_count == 1
+          roll_distance = supported ? raw.byteslice(16, 2).unpack1('s>') : nil
+          supported &&= roll_distance == -1
+          { supported: supported, version: 1, grouping_type: 'roll', entry_count: entry_count,
+            roll_distance: roll_distance }
+        end
+
+        def parse_sbgp(atom, sample_count, description_count)
+          fail!('truncated sbgp header') if length(atom) < 8
+          initial = bytes(atom, 0, 8)
+          version = initial.getbyte(0)
+          flags = initial.byteslice(1, 3)
+          grouping_type = initial.byteslice(4, 4)
+          unless version == 0 && flags == "\0" * 3 && grouping_type == 'roll'
+            return { supported: false, version: version, grouping_type: grouping_type, sample_count: 0 }
+          end
+          head = box_header(atom, 12, [0])
+          entry_count = head.byteslice(8, 4).unpack1('N')
+          raw = table(atom, entry_count, head)
+          fail!('sbgp count/length mismatch') unless 12 + entry_count * 8 == length(atom)
+          total = 0
+          first_sample_count = first_index = nil
+          entry_count.times do |index|
+            offset = 12 + index * 8
+            run_count, description_index = raw.byteslice(offset, 8).unpack('N2')
+            total += run_count
+            fail!('sbgp sample allocation exceeds sample count') if total > sample_count
+            fail!('sbgp description reference outside sgpd') if description_count && description_index > description_count
+            first_sample_count, first_index = run_count, description_index if index.zero?
+          end
+          supported = entry_count == 1 && first_sample_count == sample_count && first_index == 1
+          { supported: supported, version: 0, grouping_type: 'roll', entry_count: entry_count,
+            sample_count: first_sample_count || 0, description_index: first_index }
         end
 
         def data_references(atom)

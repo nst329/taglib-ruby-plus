@@ -12,7 +12,7 @@ MListNewの字幕・音声統合mux A3ではheader durationだけで物理的な
 
 Plus Fileへsample_boundariesを追加する。[公開仕様](../mp4-sample-boundaries-design.md)を正本とする。既存HeaderReaderを継承してatom parser・世代index・timing解釈を共有する。sample table整合検証は章やwriterを起動しない独立readerへ置く。native ABI・バージョン・保存APIは変更しない。
 
-raw media時間軸の境界とedit宣言を分け、ffmpegの時刻丸め、復号、packet照合は含めない。complete/unsupported/limitと破損/I/O/世代競合例外を区別する。対応外group等の意味を推測しない。
+raw media時間軸の境界とedit宣言を分け、ffmpegの時刻丸め、復号、packet照合は含めない。complete/unsupported/limitと破損/I/O/世代競合例外を区別する。対応外group等の意味を推測しない。AAC mp4a trackのstbl直下にsgpd/sbgpが各1個あり、sgpd v1 roll/default_length 2/entry 1/-1、sbgp v0 roll/entry 1/全sample→index 1のときだけ、decode preroll宣言としてsample_groupsへ返す。raw時刻やeditは変更せず、roll recoveryは未検証とする。
 
 ## I/O・メモリと選択肢
 
@@ -24,6 +24,6 @@ media payloadを一切読まず、共通parserで8/16 bytesのatom headerを読�
 
 ## 検証と限界
 
-[検証記録](../Memos/2026-10-19-sample境界APIの検証.md)に実測を記載する。合成fixtureで固定/可変/stz2、時刻、edit、破損・上限・障害・競合、巨大固定sample countを検証する。実ffmpeg生成AACのpriming editとpacket位置も照合するが、roll sample groupを含むためstatusはunsupportedである。group対応の追加なしにA3の一般入力対応が完成したとは扱わない。
+[検証記録](../Memos/2026-10-19-sample境界APIの検証.md)に実測を記載する。合成fixtureで固定/可変/stz2、時刻、edit、rollの正常／対応外／破損、上限・障害・競合、巨大固定sample countを検証する。実ffmpeg生成AACの44.1／48kHz・mono／stereoでroll構造、先頭／末尾packet位置、edit原点を照合する。roll recovery自体とMListNew接続は別工程とする。
 
 原本・既存未コミット変更を保持し、コミット・push・releaseは行わない。MListNew製品への接続・実作品／実ストレージの速度検証は別工程とする。

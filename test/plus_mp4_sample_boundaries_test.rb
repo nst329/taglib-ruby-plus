@@ -44,6 +44,23 @@ class MP4SampleBoundariesTest < Test::Unit::TestCase
     atom_box(type, raw)
   end
 
+  def sgpd(grouping_type: 'roll', version: 1, flags: 0, default_length: 2, entries: [-1], entry_bytes: nil,
+           entry_count: entries.length)
+    payload = if version == 1
+                [version << 24 | flags, grouping_type, default_length, entry_count].pack('Na4N2') +
+                  (entry_bytes || entries.pack('s>*'))
+              else
+                [version << 24 | flags, grouping_type, entry_count].pack('Na4N') + entries.pack('s>*')
+              end
+    box('sgpd', payload)
+  end
+
+  def sbgp(grouping_type: 'roll', version: 0, flags: 0, runs: [[7, 1]])
+    prefix = [version << 24 | flags, grouping_type].pack('Na4')
+    prefix += [0].pack('N') if version == 1
+    box('sbgp', prefix + [runs.length].pack('N') + runs.flatten.pack('N*'))
+  end
+
   def timing(scale, duration)
     [0, 0, 0, scale, duration, 0].pack('N6')
   end
@@ -236,9 +253,81 @@ class MP4SampleBoundariesTest < Test::Unit::TestCase
       extra: box('ctts', [0, 1, 0x80000000, 0xffffffff].pack('N*')))
   end
 
+  def test_roll_group_contract_and_failure_classification
+    write_fixture(extra: sgpd + sbgp)
+    result = read
+    assert_equal :complete, result[:status]
+    assert_equal({ status: :complete,
+                   groups: [{ grouping_type: 'roll', sgpd_version: 1, sbgp_version: 0,
+                               descriptions: [{ index: 1, roll_distance: -1 }],
+                               runs: [{ first_index: 0, sample_count: 7, group_description_index: 1 }],
+                               semantics: :decode_preroll, raw_timing_effect: :none }] }, result[:data][:sample_groups])
+    assert result[:data][:sample_groups].frozen?
+    assert result[:data][:sample_groups][:groups].first[:descriptions].frozen?
+    assert_equal :complete, result[:coverage].find { |c| c[:check] == :sample_groups }[:status]
+    assert_equal :complete, result[:coverage].find { |c| c[:check] == :roll_mapping }[:status]
+    baseline_digest = result[:tables_digest]
+    baseline_entries = result[:counts][:table_entries]
+    assert_equal :complete, read(max_table_bytes: result[:counts][:table_bytes])[:status]
+    limited_bytes = read(max_table_bytes: result[:counts][:table_bytes] - 1)
+    assert_equal :limit, limited_bytes[:status]
+    assert_equal :max_table_bytes, limited_bytes[:issues].last[:code]
+    grouped, grouped_reads = observe { read }
+    assert_equal :complete, grouped[:status]
+    assert grouped_reads.none? { |offset, bytes| offset >= 8 && offset < 136 && bytes.positive? }, grouped_reads.inspect
+    assert_equal grouped_reads.sum(&:last), grouped[:counts][:bytes_read]
+    puts "roll group I/O (synthetic 128B mdat): #{grouped[:counts].inspect}"
+    write_fixture
+    without_group = read
+    assert_operator result[:counts][:table_bytes], :>, without_group[:counts][:table_bytes]
+    refute_equal result[:tables_digest], without_group[:tables_digest]
+
+    write_fixture(extra: sgpd(entries: [-2]) + sbgp)
+    assert_equal :unsupported, read[:status]
+    write_fixture(extra: sgpd(version: 0) + sbgp)
+    assert_equal :unsupported, read[:status]
+    write_fixture(extra: sgpd(flags: 1) + sbgp)
+    assert_equal :unsupported, read[:status]
+    write_fixture(extra: sgpd(default_length: 3, entry_bytes: "\0\0\0") + sbgp)
+    assert_equal :unsupported, read[:status]
+    write_fixture(extra: sgpd + sbgp(runs: [[6, 1]]))
+    assert_equal :unsupported, read[:status]
+    write_fixture(extra: sgpd + sbgp(runs: [[7, 0]]))
+    assert_equal :unsupported, read[:status]
+    write_fixture(extra: sgpd + sbgp(runs: [[7, 2]]))
+    assert_equal :malformed, assert_raise(API::Error) { read }.code
+    write_fixture(extra: sgpd + sbgp(runs: [[7, 1], [0, 1]]))
+    assert_equal :unsupported, read[:status]
+    write_fixture(extra: sgpd)
+    assert_equal :unsupported, read[:status]
+    write_fixture(extra: sgpd + sgpd)
+    assert_equal :unsupported, read[:status]
+    write_fixture(extra: box('sgpd', [0x01000000, 'roll', 2, 1].pack('Na4N2')))
+    assert_equal :malformed, assert_raise(API::Error) { read }.code
+    write_fixture(extra: sgpd + box('sbgp', [0, 'roll', 1].pack('Na4N')))
+    assert_equal :malformed, assert_raise(API::Error) { read }.code
+    write_fixture(extra: sgpd + sbgp(runs: [[8, 1]]))
+    assert_equal :malformed, assert_raise(API::Error) { read }.code
+
+    write_fixture(extra: sgpd + sbgp)
+    limited = read(max_table_entries: baseline_entries - 1)
+    assert_equal :limit, limited[:status]
+    assert_equal :max_table_entries, limited[:issues].last[:code]
+    refute_equal baseline_digest, without_group[:tables_digest]
+  end
+
   def test_unsupported_structures_have_specific_reasons
-    %w[sgpd sbgp senc saiz saio stss zzzz].each do |type|
-      write_fixture(extra: box(type, [0].pack('N')))
+    unsupported = {
+      'sgpd' => sgpd(grouping_type: 'rash'),
+      'sbgp' => sbgp(grouping_type: 'rash'),
+      'senc' => box('senc', [0].pack('N')),
+      'saiz' => box('saiz', [0].pack('N')),
+      'saio' => box('saio', [0].pack('N')),
+      'stss' => box('stss', [0].pack('N')),
+      'zzzz' => box('zzzz', [0].pack('N'))
+    }
+    unsupported.each do |type, atom|
+      write_fixture(extra: atom)
       result = read
       assert_equal :unsupported, result[:status], type
       assert result[:issues].any? { |i| i[:message].include?(type) }
@@ -366,15 +455,20 @@ class MP4SampleBoundariesTest < Test::Unit::TestCase
     end
   end
 
-  def test_real_ffmpeg_priming_edit_and_group_rejection
+  def test_real_ffmpeg_priming_edit_and_roll_group
     ffmpeg, ffprobe = '/Users/nasu/Bin/ffmpeg', '/Users/nasu/Bin/ffprobe'
     omit('ffmpeg/ffprobe not installed') unless [ffmpeg, ffprobe].all? { |p| File.executable?(p) }
     _, stderr, status = Open3.capture3(ffmpeg, '-v', 'error', '-f', 'lavfi', '-i',
       'sine=frequency=440:sample_rate=44100:duration=0.317', '-c:a', 'aac', '-y', @path)
     assert status.success?, stderr
     result = API.open(@path) { |f| f.sample_boundaries(track_id: 1) }
-    assert_equal :unsupported, result[:status] # ffmpegのroll groupを無視しない。
-    assert result[:issues].any? { |i| i[:message].include?('sgpd') }
+    assert_equal :complete, result[:status]
+    group = result[:data].fetch(:sample_groups).fetch(:groups).first
+    assert_equal({ index: 1, roll_distance: -1 }, group[:descriptions].first)
+    assert_equal({ first_index: 0, sample_count: result[:data][:sample_count], group_description_index: 1 }, group[:runs].first)
+    assert_equal :decode_preroll, group[:semantics]
+    assert_equal :none, group[:raw_timing_effect]
+    assert_equal :not_checked, result[:coverage].find { |c| c[:check] == :roll_recovery }[:status]
     data = result[:data]
     assert_equal 1024, data[:edits].first[:media_time]
     stdout, stderr, status = Open3.capture3(ffprobe, '-v', 'error', '-show_packets', '-of', 'json', @path)
@@ -384,7 +478,9 @@ class MP4SampleBoundariesTest < Test::Unit::TestCase
       sample = data[key]
       assert_equal sample[:offset], Integer(packet['pos'])
       assert_equal sample[:size], Integer(packet['size'])
+      assert_equal sample[:dts] - 1024, packet['dts']
       assert_equal sample[:pts] - 1024, packet['pts']
+      assert_operator Integer(packet['duration']), :<=, sample[:duration]
     end
     assert_equal 0, data[:first][:pts]
     assert_equal(-1024, packets.first['pts'])
@@ -397,7 +493,28 @@ class MP4SampleBoundariesTest < Test::Unit::TestCase
     end
     supported = API.open(@path) { |f| f.sample_boundaries(track_id: 1) }
     assert_equal :complete, supported[:status]
+    assert_nil supported[:data][:sample_groups]
     assert_equal data[:first], supported[:data][:first]
     assert_equal data[:last], supported[:data][:last]
+  end
+
+  def test_real_ffmpeg_roll_group_matrix
+    ffmpeg = '/Users/nasu/Bin/ffmpeg'
+    omit('ffmpeg not installed') unless File.executable?(ffmpeg)
+    [[44_100, 1], [44_100, 2], [48_000, 1], [48_000, 2]].each do |rate, channels|
+      _, stderr, status = Open3.capture3(ffmpeg, '-v', 'error', '-f', 'lavfi', '-i',
+        "sine=frequency=440:sample_rate=#{rate}:duration=0.11", '-ac', channels.to_s,
+        '-c:a', 'aac', '-y', @path)
+      assert status.success?, stderr
+      result = API.open(@path) { |f| f.sample_boundaries(track_id: 1) }
+      assert_equal :complete, result[:status], [rate, channels, result[:issues]].inspect
+      assert_equal 'mp4a', result[:data][:sample_descriptions].first[:fourcc]
+      assert_equal channels, result[:data][:sample_descriptions].first[:channels]
+      group = result[:data][:sample_groups][:groups].first
+      assert_equal(-1, group[:descriptions].first[:roll_distance])
+      assert_equal result[:data][:sample_count], group[:runs].first[:sample_count]
+      assert_operator result[:data][:first][:offset], :>=, 0
+      assert_operator result[:data][:last][:offset], :>=, result[:data][:first][:offset]
+    end
   end
 end
