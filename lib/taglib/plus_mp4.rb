@@ -5,6 +5,7 @@ require 'fileutils'
 require 'tempfile'
 require_relative 'plus_mp4_io'
 require_relative 'plus_mp4_info'
+require_relative 'mp4_sample_boundaries'
 require_relative 'mp4_structure_diagnostics'
 
 module TagLib
@@ -476,6 +477,19 @@ module TagLib
           raise Error.new(error.message, code: :malformed, area: :info, phase: :read), cause: error
         rescue IOError, SystemCallError => error
           raise Error.new(error.message, code: :io, area: :info, phase: :read), cause: error
+        end
+
+        # 保存済み原本のraw media sample境界。編集候補・ffmpeg時刻を反映しない。
+        def sample_boundaries(track_id:, max_table_bytes: 8 * 1024 * 1024, max_table_entries: 1_000_000)
+          [track_id, max_table_bytes, max_table_entries].each do |value|
+            raise ArgumentError, 'track ID and table budgets must be positive Integers' unless value.is_a?(Integer) && value.positive?
+          end
+          ensure_current!
+          SampleBoundaryReader.new(@path, @generation, max_table_bytes, max_table_entries).report(track_id)
+        rescue ::TagLib::MP4::MdtaSaveError => error
+          raise Error.new(error.message, code: :malformed, area: :sample_boundaries, phase: :read), cause: error
+        rescue IOError, SystemCallError => error
+          raise Error.new(error.message, code: :io, area: :sample_boundaries, phase: :read), cause: error
         end
 
         # metadata全体を検証済みsnapshotとして現在の編集候補へ置き換える。

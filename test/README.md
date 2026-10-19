@@ -49,6 +49,8 @@ ruby test/probes/plus_mp4_metadata_contract.rb \
 
 ## I/O性能の検証
 
+[plus_mp4_sample_boundaries_test.rb](plus_mp4_sample_boundaries_test.rb)は公開sample境界APIを、独立生成したMP4のoffset・時刻・edit・table破損・非対応・予算・I/O障害・世代競合で検証する。巨大sparse mdatと1億固定sampleを使い、実File#readの位置・回数・要求bytesと割当object数も確認する。ffmpeg/ffprobeが利用可能ならpriming editを含む実生成MP4とも比較する（全packet取得はテスト専用oracle）。結果と限界は[検証記録](../docs/Memos/2026-10-19-sample境界APIの検証.md)を参照。
+
 [plus_mp4_info_test.rb](plus_mp4_info_test.rb)はnative/sample/probe不要のheader宣言、時間軸・日時・役割・名前・選択cacheを確認する。[plus_mp4_reuse_test.rb](plus_mp4_reuse_test.rb)は旧値変換と旧画像payload読取の禁止、stage直接出力、実出力snapshot、chapter解析の選択と観測共有、画像bytes共有を確認する。
 
 `test/performance/` のprobeは公開APIのみで通常読取・診断・保存を実行する。Ruby/nativeの論理I/O bytes、一時領域、走査数と時間の計測方法は[I/O性能記録](../docs/Memos/2026-10-16-MP4公開APIのI-O性能検証.md)を参照する。

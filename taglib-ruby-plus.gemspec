@@ -70,6 +70,11 @@ Gem::Specification.new do |s|
     'README.md'
   ]
   s.files = [
+    'lib/taglib/mp4_sample_boundaries.rb',
+    'test/plus_mp4_sample_boundaries_test.rb',
+    'docs/mp4-sample-boundaries-design.md',
+    'docs/ADR/2026-10-19-sample境界を圧縮tableから読み取る.md',
+    'docs/Memos/2026-10-19-sample境界APIの検証.md',
     'lib/taglib/mp4_atom_parsing.rb',
     'lib/taglib/plus_mp4_info.rb',
     'lib/taglib/mp4_structure_diagnostics.rb',

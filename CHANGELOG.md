@@ -8,6 +8,15 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.27
+
+### Added
+- MP4 sample tableを検証し、先頭／末尾sampleのabsolute offset・size・raw media時刻・edit情報を返す読み取り専用`sample_boundaries` APIを追加した。
+- stts、stsc、stsz/stz2、stco/co64の件数・範囲・mdat内整合性を検証し、非対応構造と上限到達を区別するfixture回帰を追加した。
+
+### Fixed
+- sample境界取得でmedia本文・全mdat・全sample配列を読み込まず、読込bytesとentry数を返すようにした。
+
 ## 2.3.2.26
 
 ### Fixed

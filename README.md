@@ -19,6 +19,10 @@ e.g. cover art of ID3v2 or custom fields of Ogg Vorbis comments.
 * Reading/writing MP4 iTunes properties and multiple artwork items
 * Reading audio properties (e.g. bitrate) of the above formats
 
+開発版には、読み取り専用のMP4 [`file.sample_boundaries(track_id:)`](docs/mp4-sample-boundaries-design.md)
+を追加しています。sample tableを検証し、先頭・末尾の位置とraw media時刻を返します。
+対応外構造・予算上限・破損を区別し、media本文は読みません。未リリースです。
+
 Contributions for more coverage of the library are very welcome.
 
 [![Gem version][gem-img]][gem-link]
@@ -41,9 +45,9 @@ The TagLib shared library is also required at runtime.
 パッケージマネージャー版のTagLibを使う場合も、MP4のmdta機能には上記パッチを
 適用したTagLibを別prefixへ構築して指定してください。
 
-Then install taglib-ruby-plus 2.3.2.26:
+Then install taglib-ruby-plus 2.3.2.27:
 
-    gem install taglib-ruby-plus --version 2.3.2.26
+    gem install taglib-ruby-plus --version 2.3.2.27
 
 ### macOS platform gem
 
@@ -68,9 +72,9 @@ Gemfile:
     source 'https://rubygems.org'
     source 'https://rubygems.pkg.github.com/nst329' do
       # Apple Siliconの場合
-      gem 'taglib-ruby-plus-arm64-darwin', '2.3.2.26'
+      gem 'taglib-ruby-plus-arm64-darwin', '2.3.2.27'
       # Intelの場合は上記の代わりに次を指定
-      # gem 'taglib-ruby-plus-x86_64-darwin', '2.3.2.26'
+      # gem 'taglib-ruby-plus-x86_64-darwin', '2.3.2.27'
     end
 
 platform gemがまだ公開されていない環境、または対応外platformでは、同じregistryの
@@ -91,7 +95,7 @@ which makes it hard for taglib-ruby-plus to find it. To get the library location
 Note the line with the path at the end. Provide that using the `TAGLIB_DIR`
 environment variable when installing, like this:
 
-    TAGLIB_DIR=/opt/homebrew/opt/taglib gem install taglib-ruby-plus --version 2.3.2.26
+    TAGLIB_DIR=/opt/homebrew/opt/taglib gem install taglib-ruby-plus --version 2.3.2.27
 
 If you're using bundler, like this:
 
