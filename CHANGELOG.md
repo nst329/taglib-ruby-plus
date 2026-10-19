@@ -8,6 +8,11 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.29
+
+### Fixed
+- native gem生成時に、各extension bundleが参照するTagLib C++シンボルと同梱`libtag`のexportを照合し、古いbundleの混入によるmetadata APIのSIGSEGVを生成前に拒否するようにした。
+
 ## 2.3.2.28
 
 ### Added

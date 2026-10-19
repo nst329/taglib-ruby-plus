@@ -2,8 +2,10 @@
 
 require 'english'
 require 'fileutils'
+require 'open3'
 require 'rbconfig'
 require 'shellwords'
+require 'set'
 require 'tmpdir'
 
 ROOT = File.expand_path('..', __dir__)
@@ -43,6 +45,7 @@ module NativeGem
       stage_repository(stage)
       stage_taglib(stage, taglib_dir, platform)
       stage_extensions(stage, platform)
+      validate_taglib_abi!(stage, platform)
       stage_taglib_license(stage, license_dir)
       build_gem(stage, platform, output_dir, gem_name)
     end
@@ -111,6 +114,45 @@ module NativeGem
       FileUtils.cp(candidates.fetch(0), destination)
       rewrite_extension_dependencies(destination, platform)
     end
+  end
+
+  # A stale extension can still compile or be copied successfully while
+  # referring to methods that the bundled TagLib no longer exports.  On
+  # macOS dyld resolves these flat-namespace references lazily, so the first
+  # call can become a null jump and crash Ruby.  Validate the package boundary
+  # before producing a gem instead of relying on a later metadata smoke test.
+  def validate_taglib_abi!(stage, platform)
+    library = Dir[File.join(stage, 'lib', 'taglib_plus', 'native', platform, 'libtag.2*.dylib')]
+              .reject { |path| File.symlink?(path) }
+              .first
+    abort 'Bundled TagLib library is missing for ABI validation' unless library
+
+    exported = nm_symbols('-gU', library)
+    missing = EXTENSIONS.flat_map do |extension|
+      bundle = File.join(stage, 'lib', "#{extension}.bundle")
+      next [] unless File.file?(bundle)
+
+      undefined = nm_symbols('-u', bundle).select do |symbol|
+        symbol.start_with?('__Z') && symbol.include?('TagLib')
+      end
+      undefined.reject { |symbol| exported.include?(symbol) }.map do |symbol|
+        [extension, symbol]
+      end
+    end
+    return if missing.empty?
+
+    details = missing.map { |extension, symbol| "#{extension}:#{symbol}" }.join(', ')
+    abort "Native extension/TagLib ABI mismatch: #{details}"
+  end
+
+  def nm_symbols(*arguments)
+    output, status = Open3.capture2('nm', *arguments)
+    abort "nm failed during native ABI validation: #{arguments.join(' ')}" unless status.success?
+
+    output.lines.filter_map do |line|
+      fields = line.split
+      fields.empty? ? nil : fields.last
+    end.to_set
   end
 
   def stage_taglib(stage, taglib_dir, platform)
