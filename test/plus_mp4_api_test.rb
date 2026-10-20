@@ -324,6 +324,40 @@ class PlusMP4APITest < Test::Unit::TestCase
     end
   end
 
+  should 'preserve color issue order and status precedence in cached public reports' do
+    [[[], :complete], [[:unsupported], :unsupported],
+     [%i[unsupported malformed], :malformed], [%i[malformed limit], :limit]].each do |codes, expected_status|
+      colors = [{ status: :complete, offset: 100 }] + codes.each_with_index.map do |code, index|
+        { status: code, offset: 200 + index, issues: ["reason #{index}"] }
+      end
+      entry = { handler: 'vide', status: codes.empty? ? :complete : :unsupported,
+                unsupported_reason: :unknown_sample_entry, sample_entry_offset: 50, colr: colors }
+      API.open(@source) do |file|
+        reads = 0
+        file.define_singleton_method(:read_native) do |&operation|
+          reads += 1
+          native = Object.new
+          native.define_singleton_method(:color_metadata_diagnostics) { { entries: [entry] } }
+          operation.call(native)
+        end
+        report = file.diagnose(:color)
+        assert_equal expected_status, report[:status]
+        expected_locations = codes.empty? ? [] : ['color/50'] + codes.each_index.map { |index| "color/#{200 + index}" }
+        assert_equal expected_locations, report[:issues].map { |issue| issue[:location] }
+        assert_equal(codes.empty? ? [] : [:unsupported] + codes, report[:issues].map { |issue| issue[:code] })
+        assert_equal [entry], report[:data][:entries]
+        unless codes.empty?
+          assert_equal 'unknown_sample_entry', report[:issues].first[:message]
+          assert_equal 'reason 0', report[:issues][1][:message]
+          assert_equal colors[1], report[:issues][1][:details]
+        end
+        assert report[:issues].all?(&:frozen?)
+        assert_same report, file.diagnose(:color)
+        assert_equal 1, reads
+      end
+    end
+  end
+
   should 'propagate IO failures from structure readers with their original cause' do
     [:chapters, :chapter_references, :color].each do |area|
       API.open(@source) do |file|

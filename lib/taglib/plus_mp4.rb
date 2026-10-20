@@ -21,6 +21,13 @@ module TagLib
       STRUCTURE_ERRORS = [::TagLib::MP4::MetadataSnapshotError, ::TagLib::MP4::ChapterSnapshotError,
                           ::TagLib::MP4::ChapterReferenceError, ::TagLib::MP4::ColorMetadataError].freeze
       private_constant :STRUCTURE_ERRORS
+      DIAGNOSTIC_OPERATIONS = {
+        metadata: :metadata_diagnostics, chapters: :chapter_diagnostics,
+        chapter_references: :chapter_reference_diagnostics,
+        chapter_timing: :chapter_timing_diagnostics, color: :color_metadata_diagnostics,
+        structure: nil
+      }.freeze
+      private_constant :DIAGNOSTIC_OPERATIONS
       # 公開APIではcover artのwire整数を扱わせず、形式名を固定する。
       class Artwork
         FORMATS = { jpeg: 13, png: 14, bmp: 27 }.freeze
@@ -521,20 +528,18 @@ module TagLib
         # 原本と候補の差分を保存可能性とは分けて表示する。
         def changes
           ensure_current!
-          DeepCopy.call(metadata: metadata_changed? ? [{ area: :metadata }] : [],
-                        chapters: chapters_changed? ? [{ area: :chapters }] : [],
+          metadata_changed = metadata_changed?
+          chapters_changed = chapters_changed?
+          DeepCopy.call(metadata: metadata_changed ? [{ area: :metadata }] : [],
+                        chapters: chapters_changed ? [{ area: :chapters }] : [],
                         repair: @repair_kind,
-                        changed: changed?)
+                        changed: !!@repair_plan || metadata_changed || chapters_changed)
         end
 
         # 保存済み原本の一領域だけを固定schemaで診断する。
         def diagnose(area)
           ensure_current!
-          operations = { metadata: :metadata_diagnostics, chapters: :chapter_diagnostics,
-                         chapter_references: :chapter_reference_diagnostics,
-                         chapter_timing: :chapter_timing_diagnostics, color: :color_metadata_diagnostics,
-                         structure: nil }
-          raise ArgumentError, "unknown diagnostic area: #{area.inspect}" unless operations.key?(area)
+          raise ArgumentError, "unknown diagnostic area: #{area.inspect}" unless DIAGNOSTIC_OPERATIONS.key?(area)
 
           return @diagnostics[area] if @diagnostics.key?(area)
           if area == :chapters && (reader = @generation.cached_chapter_reader(false))
@@ -545,7 +550,7 @@ module TagLib
           end
           @diagnostics[area] = read_native do |native|
             begin
-              diagnostic_report(area, native.public_send(operations.fetch(area)))
+              diagnostic_report(area, native.public_send(DIAGNOSTIC_OPERATIONS.fetch(area)))
             rescue *STRUCTURE_ERRORS => error
               raise if error.respond_to?(:code) && error.code == :source_changed
 
@@ -1163,28 +1168,37 @@ module TagLib
                  when :chapter_references then { references: value }
                  when :chapter_timing then { tracks: value }
                  when :color
-                   value.fetch(:entries).each do |entry|
-                     # colrごとのstatusも集約し、読取完了を全項目対応済みと誤認させない。
-                     if entry[:handler] == 'vide' && entry[:status] == :unsupported
-                       issues << diagnostic_issue(:unsupported, entry[:unsupported_reason].to_s,
-                                                  "color/#{entry[:sample_entry_offset]}")
-                     end
-                     entry.fetch(:colr).each do |color|
-                       next if color[:status] == :complete
-                       message = color[:unsupported_reason]&.to_s || color[:issues].join(', ')
-                       issues << diagnostic_issue(color[:status], message,
-                                                  "color/#{color[:offset]}", color)
-                     end
-                   end
-                   { entries: value.fetch(:entries) }
+                   entries = value.fetch(:entries)
+                   issues = color_diagnostic_issues(entries)
+                   { entries: entries }
                  end
+          DeepCopy.call(status: diagnostic_status(issues), data: data, issues: issues)
+        end
+
+        # sample entryとcolrそれぞれの非対応・破損理由を、元の順序で公開issueへ変換する。
+        def color_diagnostic_issues(entries)
+          entries.each_with_object([]) do |entry, issues|
+            if entry[:handler] == 'vide' && entry[:status] == :unsupported
+              issues << diagnostic_issue(:unsupported, entry[:unsupported_reason].to_s,
+                                         "color/#{entry[:sample_entry_offset]}")
+            end
+            entry.fetch(:colr).each do |color|
+              next if color[:status] == :complete
+
+              message = color[:unsupported_reason]&.to_s || color[:issues].join(', ')
+              issues << diagnostic_issue(color[:status], message, "color/#{color[:offset]}", color)
+            end
+          end
+        end
+
+        # 全体statusは読取完了ではなく、各issueの理由と優先順位から決める。
+        def diagnostic_status(issues)
           statuses = issues.map { |issue| issue[:code] }
-          status = if statuses.empty? then :complete
-                   elsif statuses.include?(:limit) then :limit
-                   elsif statuses.all? { |code| code.to_s.include?('unsupported') } then :unsupported
-                   else :malformed
-                   end
-          DeepCopy.call(status: status, data: data, issues: issues)
+          return :complete if statuses.empty?
+          return :limit if statuses.include?(:limit)
+          return :unsupported if statuses.all? { |code| code.to_s.include?('unsupported') }
+
+          :malformed
         end
 
         def diagnostic_failure(area, error)

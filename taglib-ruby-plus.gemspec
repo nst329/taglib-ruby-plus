@@ -70,6 +70,7 @@ Gem::Specification.new do |s|
     'README.md'
   ]
   s.files = [
+    'docs/ADR/2026-10-20-Plus-MP4の変更一覧と診断処理を整理する.md',
     'lib/taglib/mp4_sample_boundaries.rb',
     'test/plus_mp4_sample_boundaries_test.rb',
     'docs/mp4-sample-boundaries-design.md',
