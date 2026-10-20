@@ -120,6 +120,74 @@ class PlusMP4QuickTimeRemovalTest < Test::Unit::TestCase
     end
   end
 
+  def test_video_source_to_dedicated_quicktime_track_is_removable_and_preserves_content
+    move_chapter_reference_to_video
+    original = independent_snapshot(@path)
+    output = File.join(@dir, 'video-source-removed.m4a')
+
+    API.open(@path) do |file|
+      plan = file.plan_quicktime_chapter_removal
+      assert_equal :removable, plan.status
+      assert_equal :quicktime_broken, plan.reason
+      assert_equal ['vide'], plan.references.map { |row| row[:source_handler] }.uniq
+      file.remove_quicktime_chapters(plan: plan)
+      file.save!(to: output)
+    end
+
+    actual = independent_snapshot(output, target_track_id: original[:quicktime_track_id])
+    assert_equal original[:nero_payload_sha256], actual[:nero_payload_sha256]
+    assert_equal original[:metadata], actual[:metadata]
+    assert_equal original[:mdat_sha256], actual[:mdat_sha256]
+    assert_equal original[:non_target_tracks], actual[:non_target_tracks]
+    assert_equal [], actual[:chapter_references]
+    assert_equal %w[Nero開始 Nero本編], API.open(output) { |file| file.read_chapters(style: :nero).map(&:title) }
+    assert_nil API.open(output) { |file| file.read_chapters(style: :quicktime) }
+    assert_equal :absent, API.open(output) { |file| file.plan_quicktime_chapter_removal.status }
+  end
+
+  def test_audio_and_video_chap_references_converging_on_one_dedicated_track_are_removable
+    add_audio_reference
+    add_video_reference
+    output = File.join(@dir, 'audio-video-source-removed.m4a')
+
+    API.open(@path) do |file|
+      plan = file.plan_quicktime_chapter_removal
+      assert_equal :removable, plan.status
+      assert_equal %w[soun vide], plan.references.map { |row| row[:source_handler] }.uniq.sort
+      file.remove_quicktime_chapters(plan: plan)
+      file.save!(to: output)
+    end
+
+    API.open(output) do |file|
+      assert_equal %w[Nero開始 Nero本編], file.read_chapters(style: :nero).map(&:title)
+      assert_nil file.read_chapters(style: :quicktime)
+      assert_equal :absent, file.plan_quicktime_chapter_removal.status
+    end
+  end
+
+  def test_video_source_removal_without_nero_is_allowed
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
+      file.remove_nero_chapters
+      assert file.save_chapters
+    end
+    move_chapter_reference_to_video
+
+    output = File.join(@dir, 'video-source-without-nero.m4a')
+    API.open(@path) do |file|
+      plan = file.plan_quicktime_chapter_removal
+      assert_equal :removable, plan.status
+      assert_equal :absent, plan.nero_status
+      file.remove_quicktime_chapters(plan: plan)
+      file.save!(to: output)
+    end
+
+    API.open(output) do |file|
+      assert_nil file.read_chapters(style: :nero)
+      assert_nil file.read_chapters(style: :quicktime)
+      assert_equal :absent, file.plan_quicktime_chapter_removal.status
+    end
+  end
+
   def test_missing_reference_shared_target_unknown_structure_and_nero_error_are_blocked
     add_audio_reference([fixture_track_id(chapter_track) , 999_999])
     API.open(@path) do |file|
@@ -132,11 +200,12 @@ class PlusMP4QuickTimeRemovalTest < Test::Unit::TestCase
 
     reset_fixture
     add_audio_reference
-    add_video_reference
+    add_reference(track_id_for('vide'), [fixture_track_id(chapter_track)], type: 'subt')
     API.open(@path) do |file|
       plan = file.plan_quicktime_chapter_removal
       assert_equal :blocked, plan.status
       assert_equal :shared_reference, plan.reason
+      assert_equal :shared_reference, plan.reason_code
     end
 
     reset_fixture
@@ -161,6 +230,39 @@ class PlusMP4QuickTimeRemovalTest < Test::Unit::TestCase
       plan = file.plan_quicktime_chapter_removal
       assert_equal :blocked, plan.status
       assert_equal :nero_unreadable, plan.reason
+    end
+  end
+
+  def test_multiple_real_quicktime_targets_are_blocked
+    duplicate_chapter_track
+    target_ids = chapter_track_ids
+    add_audio_reference(target_ids)
+
+    API.open(@path) do |file|
+      plan = file.plan_quicktime_chapter_removal
+      assert_equal :blocked, plan.status
+      assert_equal :multiple_references, plan.reason_code
+      assert_raise(API::Error) { file.remove_quicktime_chapters(plan: plan) }
+    end
+  end
+
+  def test_subtitle_source_is_distinguished_from_safe_video_source
+    add_reference(track_id_for('text'), [fixture_track_id(chapter_track)])
+
+    API.open(@path) do |file|
+      plan = file.plan_quicktime_chapter_removal
+      assert_equal :blocked, plan.status
+      assert_equal :subtitle_source, plan.reason_code
+    end
+  end
+
+  def test_unknown_source_handler_is_blocked_with_a_distinct_reason_code
+    add_unknown_source_reference
+
+    API.open(@path) do |file|
+      plan = file.plan_quicktime_chapter_removal
+      assert_equal :blocked, plan.status
+      assert_equal :unsupported_source_handler, plan.reason_code
     end
   end
 
@@ -272,10 +374,56 @@ class PlusMP4QuickTimeRemovalTest < Test::Unit::TestCase
     add_reference(track_id_for('vide'), [fixture_track_id(chapter_track)])
   end
 
-  def add_reference(source_id, ids)
+  def move_chapter_reference_to_video
+    edit_fixture(@path) do |moov|
+      audio = fixture_tracks(moov).find { |track| fixture_child(fixture_child(track, 'mdia'), 'hdlr')[:data].byteslice(8, 4) == 'soun' }
+      video = fixture_tracks(moov).find { |track| fixture_child(fixture_child(track, 'mdia'), 'hdlr')[:data].byteslice(8, 4) == 'vide' }
+      chapter_trefs = audio[:children].select do |child|
+        child[:type] == 'tref' && child[:children].any? { |reference| reference[:type] == 'chap' }
+      end
+      raise 'fixture audio chapter reference missing' if chapter_trefs.empty?
+      audio[:children] -= chapter_trefs
+      video[:children].concat(Marshal.load(Marshal.dump(chapter_trefs)))
+    end
+  end
+
+  def add_reference(source_id, ids, type: 'chap')
     edit_fixture(@path) do |moov|
       source = fixture_tracks(moov).find { |track| fixture_track_id(track) == source_id }
-      source[:children] << { type: 'tref', children: [{ type: 'chap', data: ids.pack('N*') }] }
+      source[:children] << { type: 'tref', children: [{ type: type, data: ids.pack('N*') }] }
+    end
+  end
+
+  def add_unknown_source_reference
+    target = fixture_track_id(chapter_track)
+    edit_fixture(@path) do |moov|
+      source = fixture_tracks(moov).find do |track|
+        fixture_child(fixture_child(track, 'mdia'), 'hdlr')[:data].byteslice(8, 4) == 'vide'
+      end
+      handler = fixture_child(fixture_child(source, 'mdia'), 'hdlr')
+      handler[:data][8, 4] = 'zzzz'
+      source[:children] << { type: 'tref', children: [{ type: 'chap', data: [target].pack('N') }] }
+    end
+  end
+
+  def chapter_track_ids
+    moov, = read_fixture_moov(@path)
+    fixture_tracks(moov).filter_map do |track|
+      handler = fixture_child(fixture_child(track, 'mdia'), 'hdlr')[:data].byteslice(8, 4)
+      fixture_track_id(track) if handler == 'text'
+    end
+  end
+
+  def duplicate_chapter_track
+    edit_fixture(@path) do |moov|
+      source = chapter_track
+      copy = Marshal.load(Marshal.dump(source))
+      new_id = fixture_tracks(moov).map { |track| fixture_track_id(track) }.max + 1
+      header = fixture_child(copy, 'tkhd')
+      data = header.fetch(:data)
+      id_offset = data.getbyte(0) == 1 ? 20 : 12
+      data[id_offset, 4] = [new_id].pack('N')
+      moov[:children] << copy
     end
   end
 

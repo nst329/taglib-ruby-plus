@@ -448,8 +448,13 @@ module TagLib::MP4
   end
 
   # 壊れたQuickTime chapterだけを、専用text trackと一緒に除去する限定解析。
-  # 音声由来の全chap参照が同一trackを指し、他用途の参照がない場合だけ生成できる。
+  # 音声・映像由来の全chap参照が同一trackを指し、他用途の参照がない場合だけ生成できる。
   class QuickTimeChapterRemovalReferences < ChapterReferences
+    # chapのsourceとして安全性を証明できるtrack handlerだけを許可する。
+    # videoは音声外参照でも、chap以外の共有がないことを別途確認できる。
+    SAFE_SOURCE_HANDLERS = %w[soun vide].freeze
+    SUBTITLE_SOURCE_HANDLERS = %w[text sbtl subp clcp].freeze
+
     attr_reader :target_track_id
 
     def initialize(file, chapter_report:)
@@ -464,7 +469,7 @@ module TagLib::MP4
       validate_quicktime_report!
       rows = @report
       fail!('no QuickTime chapter reference', :quicktime_absent) if rows.empty?
-      fail!('QuickTime reference source is not audio', :shared_reference) unless rows.all? { |row| row[:source_handler] == 'soun' }
+      validate_source_handlers!(rows)
       fail!('QuickTime reference target is missing', :missing_reference) unless rows.all? { |row| row[:target_exists] }
       fail!('QuickTime reference target is not a dedicated text track', :shared_reference) unless rows.all? { |row| row[:status] == :chapter_candidate }
 
@@ -487,6 +492,14 @@ module TagLib::MP4
         @edits[chap[:offset]] = []
       end
       recalculate_tref_positions!
+    end
+
+    def validate_source_handlers!(rows)
+      unsupported = rows.map { |row| row[:source_handler] }.uniq.reject { |handler| SAFE_SOURCE_HANDLERS.include?(handler) }
+      return if unsupported.empty?
+
+      code = unsupported.all? { |handler| SUBTITLE_SOURCE_HANDLERS.include?(handler) } ? :subtitle_source : :unsupported_source_handler
+      fail!('QuickTime reference source is not a safe media track', code)
     end
 
     def validate_quicktime_report!

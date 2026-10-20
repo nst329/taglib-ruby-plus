@@ -1,6 +1,6 @@
 # Plus公開APIによるQuickTime chapter限定除去
 
-状態: 実装済み。2026-10-20。対象versionは2.3.2.30。
+状態: 実装済み。2026-10-20。対象versionは2.3.2.31。
 
 ## 前提と判断
 
@@ -28,14 +28,14 @@ end
 
 - Neroは完全読取または不在である。
 - QuickTimeは完全読取できない、または完全読取できても既知のchapter時間診断に不整合がある。
-- `chap`参照が音声trackから出ている。
+- `chap`参照が音声または映像trackから出ている。映像sourceは音声外参照であるだけでは拒否せず、通常字幕・他用途参照がないことを後続条件で確認する。
 - 全参照が実在する同一の専用`text` trackを指している。
-- 対象trackを指す他種`tref`、非音声からのchap参照、通常字幕として使われる共有関係がない。
+- 対象trackを指す他種`tref`、通常字幕sourceからのchap参照、未知handlerのsource、通常字幕として使われる共有関係がない。
 - atom構造、data reference、offset、件数、境界が既存の限定編集範囲に収まる。
 
-欠落参照は実在trackを推測しないため`:missing_reference`で拒否する。複数target、非音声source、共有参照、未知構造、外部data reference、上限超過、読取失敗、Nero異常も拒否する。unsupportedを理由に一律削除する判定はない。
+欠落参照は実在trackを推測しないため`:missing_reference`で拒否する。複数target、字幕source（`:subtitle_source`）、未知handler source（`:unsupported_source_handler`）、共有参照（`:shared_reference`）、未知構造、外部data reference、上限超過、読取失敗、Nero異常も拒否する。`soun`と`vide`のchap参照が同じ実在の専用text trackへ収束し、他用途参照がない場合だけ、非音声sourceを含めてremovableとする。unsupportedを理由に一律削除する判定はない。
 
-編集では対象音声の`chap`参照と専用text `trak` atomを同時に除去する。通常字幕、映像、音声、artwork、metadata、他種`tref`、残りのtrack atomは保持する。mdatは再配置せず逐次コピーするため、除去したtext trackのsample bytesも含むmedia payloadは保持される。これにより参照のないtext payloadを通常字幕へ再分類せず、既存trackのoffsetを壊すmedia再書込も避ける。
+編集では対象source（音声または映像）の全`chap`参照と専用text `trak` atomを同時に除去する。通常字幕、映像、音声、artwork、metadata、他種`tref`、残りのtrack atomは保持する。mdatは再配置せず逐次コピーするため、除去したtext trackのsample bytesも含むmedia payloadは保持される。これにより参照のないtext payloadを通常字幕へ再分類せず、既存trackのoffsetを壊すmedia再書込も避ける。
 
 計画はsource pathと開いた世代のstat tokenに結び付く。計画後の入力変更、別Fileで作った計画、計画の改変は編集登録前に`:source_changed`または`:invalid_plan`として拒否する。metadata編集、chapter編集、時間修復、別のrepair slotとの同時保留も既存の`:pending_changes`契約で拒否する。
 

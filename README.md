@@ -45,9 +45,9 @@ The TagLib shared library is also required at runtime.
 パッケージマネージャー版のTagLibを使う場合も、MP4のmdta機能には上記パッチを
 適用したTagLibを別prefixへ構築して指定してください。
 
-Then install taglib-ruby-plus 2.3.2.29:
+Then install taglib-ruby-plus 2.3.2.31:
 
-    gem install taglib-ruby-plus --version 2.3.2.29
+    gem install taglib-ruby-plus --version 2.3.2.31
 
 ### macOS platform gem
 
@@ -72,9 +72,9 @@ Gemfile:
     source 'https://rubygems.org'
     source 'https://rubygems.pkg.github.com/nst329' do
       # Apple Siliconの場合
-      gem 'taglib-ruby-plus-arm64-darwin', '2.3.2.29'
+      gem 'taglib-ruby-plus-arm64-darwin', '2.3.2.31'
       # Intelの場合は上記の代わりに次を指定
-      # gem 'taglib-ruby-plus-x86_64-darwin', '2.3.2.29'
+      # gem 'taglib-ruby-plus-x86_64-darwin', '2.3.2.31'
     end
 
 platform gemがまだ公開されていない環境、または対応外platformでは、同じregistryの
@@ -95,7 +95,7 @@ which makes it hard for taglib-ruby-plus to find it. To get the library location
 Note the line with the path at the end. Provide that using the `TAGLIB_DIR`
 environment variable when installing, like this:
 
-    TAGLIB_DIR=/opt/homebrew/opt/taglib gem install taglib-ruby-plus --version 2.3.2.29
+    TAGLIB_DIR=/opt/homebrew/opt/taglib gem install taglib-ruby-plus --version 2.3.2.31
 
 If you're using bundler, like this:
 
@@ -148,7 +148,7 @@ TagLib::Plus::MP4.open(stage_path) do |file|
 end
 ```
 
-欠落参照、共有字幕、未知構造、Nero異常、I/O失敗は削除成功へ変換されません。詳細な判定・保存前後の比較・MListNewとの責務境界は
+映像sourceでも、全chap参照が同じ専用text trackへ収束し他用途共有がなければ削除対象にできます。字幕source、欠落参照、共有字幕、未知構造、Nero異常、I/O失敗は削除成功へ変換されません。詳細な判定・保存前後の比較・MListNewとの責務境界は
 [QuickTime限定除去設計](docs/mp4-quicktime-chapter-removal-design.md)を参照してください。
 
 旧fork追加メソッドは公開APIから除外しました。内部writer・構造検証用の
