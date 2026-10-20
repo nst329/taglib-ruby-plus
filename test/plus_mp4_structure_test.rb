@@ -123,9 +123,9 @@ class PlusMP4StructureTest < Test::Unit::TestCase
     mapping = [[1, 2, 1], [4, 3, 1], [7, 1, 1]]
     cursor = diagnostics.send(:chunk_mapping_cursor, mapping)
 
-    assert_equal [2, 2, 2, 3, 3, 3, 1, 1], (1..8).map do |chunk_number|
+    assert_equal [2, 2, 2, 3, 3, 3, 1, 1], (1..8).map { |chunk_number|
       diagnostics.send(:samples_per_chunk, mapping, chunk_number, cursor)
-    end
+    }
     assert_equal mapping.length - 1, cursor[:index]
   end
 
@@ -135,17 +135,17 @@ class PlusMP4StructureTest < Test::Unit::TestCase
     delayed = [[3, 2, 1]]
     malformed = [[3, 2, 1], [1, 5, 1]]
 
-    assert_equal [4, 4, 4], (1..3).map do |chunk_number|
+    assert_equal [4, 4, 4], (1..3).map { |chunk_number|
       diagnostics.send(:samples_per_chunk, one_row, chunk_number, diagnostics.send(:chunk_mapping_cursor, one_row))
-    end
+    }
     delayed_cursor = diagnostics.send(:chunk_mapping_cursor, delayed)
-    assert_equal [nil, nil, 2, 2], (1..4).map do |chunk_number|
+    assert_equal [nil, nil, 2, 2], (1..4).map { |chunk_number|
       diagnostics.send(:samples_per_chunk, delayed, chunk_number, delayed_cursor)
-    end
+    }
     malformed_cursor = diagnostics.send(:chunk_mapping_cursor, malformed)
-    assert_equal [5, 5, 5], (1..3).map do |chunk_number|
+    assert_equal [5, 5, 5], (1..3).map { |chunk_number|
       diagnostics.send(:samples_per_chunk, malformed, chunk_number, malformed_cursor)
-    end
+    }
     assert_nil diagnostics.send(:samples_per_chunk, nil, 1)
     assert_nil diagnostics.send(:samples_per_chunk, [], 1)
   end

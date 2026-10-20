@@ -334,7 +334,7 @@ class PlusMP4APITest < Test::Unit::TestCase
                 unsupported_reason: :unknown_sample_entry, sample_entry_offset: 50, colr: colors }
       API.open(@source) do |file|
         reads = 0
-        file.define_singleton_method(:read_native) do |&operation|
+        file.define_singleton_method(:read_structure) do |&operation|
           reads += 1
           native = Object.new
           native.define_singleton_method(:color_metadata_diagnostics) { { entries: [entry] } }
@@ -361,9 +361,9 @@ class PlusMP4APITest < Test::Unit::TestCase
   should 'propagate IO failures from structure readers with their original cause' do
     [:chapters, :chapter_references, :color].each do |area|
       API.open(@source) do |file|
-        read = file.method(:read_native)
+        read = file.method(:read_structure)
         failure = IOError.new('structure read fault')
-        file.define_singleton_method(:read_native) do |&operation|
+        file.define_singleton_method(:read_structure) do |&operation|
           read.call do |native|
             native.define_singleton_method(:parse_mp4_atoms) { |*_| raise failure }
             operation.call(native)
@@ -382,7 +382,7 @@ class PlusMP4APITest < Test::Unit::TestCase
   should 'classify structural refusals without hiding programming or IO errors' do
     [:unsupported, :malformed, :limit].each do |code|
       API.open(@source) do |file|
-        file.define_singleton_method(:read_native) do |&block|
+        file.define_singleton_method(:read_structure) do |&block|
           native = Object.new
           native.define_singleton_method(:color_metadata_diagnostics) do
             raise TagLib::MP4::ColorMetadataError.new('bad colr', code: code)

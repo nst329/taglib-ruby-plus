@@ -193,4 +193,71 @@ class PlusMP4ReuseTest < Test::Unit::TestCase
       assert_same result[:snapshots][:chapters], file.chapters
     end
   end
+  should 'reuse selected chapter observations without reopening native metadata' do
+    API.open(@source) do |file|
+      nero = file.read_chapters(style: :nero)
+      quicktime = file.read_chapters(style: :quicktime)
+      file.define_singleton_method(:read_native) { raise 'cached chapter reads must not reopen native' }
+      assert_equal nero, file.read_chapters(style: :nero)
+      assert_equal quicktime, file.read_chapters(style: :quicktime)
+    end
+  end
+
+  should 'reuse actual unchanged snapshots without reopening native metadata' do
+    API.open(@source) do |file|
+      metadata = file.metadata
+      chapters = file.chapters
+      file.define_singleton_method(:read_native) { raise 'unchanged snapshots must reuse their source generation' }
+      result = file.save!(snapshots: [:metadata, :chapters])
+      assert_equal false, result[:changed]
+      assert_same metadata, result[:snapshots][:metadata]
+      assert_same chapters, result[:snapshots][:chapters]
+      File.open(@source, 'ab') { |io| io.write('changed') }
+      error = assert_raise(API::Error) { file.save!(snapshots: [:metadata, :chapters]) }
+      assert_equal :source_changed, error.code
+    end
+  end
+
+  should 'avoid reading artwork payload for chapter reference and timing diagnostics' do
+    edit_fixture(@source) do |moov|
+      ilst = fixture_child(fixture_child(fixture_child(moov, 'udta'), 'meta'), 'ilst')
+      fixture_child(ilst, 'covr')[:data] = atom_box('data', [13, 0].pack('N2') +
+        "\xFF\xD8\xFF".b + 'x'.b * (8 * 1024 * 1024))
+    end
+    original = File.instance_method(:read)
+    calls = []
+    path = File.realpath(@source)
+    File.define_method(:read) do |*args, **kwargs|
+      offset = pos
+      result = original.bind_call(self, *args, **kwargs)
+      calls << [offset, result.bytesize] if self.path == path && result.is_a?(String)
+      result
+    end
+    API.open(@source) do |file|
+      assert_equal :complete, file.diagnose(:chapter_references)[:status]
+      assert_equal :complete, file.diagnose(:chapter_timing)[:status]
+    end
+    assert_operator calls.sum(&:last), :<, 64 * 1024
+    assert_operator calls.map(&:last).max, :<, 64 * 1024
+  ensure
+    File.define_method(:read, original) if original
+  end
+
+  should 'read structural observations without opening any native file' do
+    native = TagLib::MP4::Internal::File
+    original = native.method(:open)
+    native.define_singleton_method(:open) { |*_, **_| raise 'structural reads must not load native metadata' }
+    API.open(@source) do |file|
+      %i[chapters chapter_references chapter_timing color].each do |area|
+        assert_not_nil file.diagnose(area)[:status]
+      end
+      assert_nil file.read_chapters(style: :quicktime)
+      assert_nil file.chapter_samples
+      assert_equal :absent, file.plan_quicktime_chapter_removal.status
+      assert_equal :unchanged, file.plan_limited_repairs.status
+    end
+  ensure
+    native.define_singleton_method(:open, original) if original
+  end
+
 end

@@ -70,6 +70,14 @@ Gem::Specification.new do |s|
     'README.md'
   ]
   s.files = [
+    'lib/taglib/mp4_limited_repair.rb',
+    'lib/taglib/plus_mp4_limited_repair.rb',
+    'test/plus_mp4_limited_repair_test.rb',
+    'test/probes/mp4_invalid_mdta_repair_design.rb',
+    'docs/mp4-combined-limited-repair-design.md',
+    'docs/ADR/2026-10-20-QuickTimeと不正mdtaの限定修復を一つの候補へ合成する.md',
+    'docs/ADR/2026-10-20-診断と保存検証の重複I-Oを削減する.md',
+    'docs/Memos/2026-10-20-限定修復と全体I-O見直しの検証.md',
     'docs/ADR/2026-10-20-Plus-MP4の変更一覧と診断処理を整理する.md',
     'lib/taglib/mp4_sample_boundaries.rb',
     'test/plus_mp4_sample_boundaries_test.rb',

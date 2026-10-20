@@ -88,6 +88,9 @@ jobs:
           require 'taglib_plus'
           require 'fileutils'
           require 'tmpdir'
+          TagLib::Plus::MP4.open('test/data/mp4.m4a') do |file|
+            abort 'limited repair API unavailable or changed normal input' unless file.plan_limited_repairs.status == :unchanged
+          end
           snapshot = TagLib::MP4::Internal::File.open('test/data/mp4.m4a', false) do |file|
             abort 'native snapshot API unavailable' unless file.tag.metadata_capabilities[:atomic_restore_v1]
             colors = file.color_metadata_diagnostics

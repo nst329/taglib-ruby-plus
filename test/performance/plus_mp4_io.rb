@@ -89,6 +89,17 @@ $measuring = true
 begin
   api.open(source) do |file|
     case operation
+    when 'structural_reads'
+      2.times do
+        %i[chapters chapter_references chapter_timing color].each { |area| file.diagnose(area) }
+        file.read_chapters(style: :nero)
+        file.read_chapters(style: :quicktime)
+        file.chapter_samples
+      end
+    when 'cached_snapshots'
+      file.metadata
+      file.chapters
+      2.times { file.save!(snapshots: [:metadata, :chapters]) }
     when 'info_movie' then 2.times { file.info(sections: [:movie]) }
     when 'info_tracks' then 2.times { file.info }
     when 'info_all' then 2.times { file.info(sections: [:movie, :tracks, :chapters, :artwork]) }

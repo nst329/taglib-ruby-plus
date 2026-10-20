@@ -20,16 +20,18 @@ MINITEST_FILES = ALL_RUBY_TEST_FILES.select do |path|
 end
 TEST_UNIT_FILES = ALL_RUBY_TEST_FILES - MINITEST_FILES
 
-def define_ruby_test_task(name, files)
+# runner固有のCLIだけを渡し、test-unitとminitestの引数を混在させない。
+def define_ruby_test_task(name, files, options: TEST_OUTPUT_OPTIONS)
   Rake::TestTask.new(name) do |test|
     test.libs << 'test'
     test.test_files = files
-    test.options = TEST_OUTPUT_OPTIONS
+    test.options = options
   end
 end
 
 define_ruby_test_task('test:unit', TEST_UNIT_FILES)
-define_ruby_test_task('test:minitest', MINITEST_FILES)
+minitest_options = Gem.loaded_specs.fetch('minitest').version >= Gem::Version.new('6.0') ? '--quiet' : ''
+define_ruby_test_task('test:minitest', MINITEST_FILES, options: minitest_options)
 
 # 現行のTagLib::Plus::MP4公開APIだけを短時間で確認する入口。
 define_ruby_test_task('test:plus_mp4', FileList['test/plus_mp4*_test.rb'])

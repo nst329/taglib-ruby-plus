@@ -183,7 +183,7 @@ module TagLib::MP4
       ranges = @atoms.select { |a| a[:type] == 'mdat' }.map { |a| [a[:payload_offset], a[:end_offset]] }
       chapters = sizes.each_with_index.map do |size, i|
         offset = offsets.fetch(i)
-        reject!('chapter sample is outside mdat') unless @file.send(:media_range?, offset, size, ranges)
+        reject!('chapter sample is outside mdat') unless ranges.any? { |first, last| offset >= first && offset + size <= last }
         reject!('chapter sample exceeds limit', :unsupported) if size > MAX_BYTES
         bytes = @file.send(:read_mp4_bytes, @io, offset, size)
         reject!('truncated chapter text length') if bytes.size < 2

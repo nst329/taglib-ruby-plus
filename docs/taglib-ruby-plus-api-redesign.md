@@ -55,6 +55,8 @@ end
 | `file.chapter_samples` | 原本の全chapter sampleの観測値。不在はnil |
 | `file.detach_chapter_references(references:)` | 診断で明示したchap関係だけの解除を保存待ちにする |
 | `file.repair_chapter_timing(track_id:, profile:)` | 一致する既知profileの時間修復だけを保存待ちにする |
+| `file.plan_limited_repairs(mdta_layout: nil)` | metadataとQuickTimeを独立診断し、必要な限定修復の不変計画を返す |
+| `file.apply_limited_repairs(plan:, allow:)` | 同じFileの最新計画を、必要操作すべての許可を確認して登録する。保存は別出力のみ |
 | `file.close` | 未保存編集を破棄して資源を解放。繰返しは無操作 |
 
 tag、item_map、native handle、save_chapters、save_preserving_*を新APIに公開しない。metadata/chapter形式別managerや、変更を自動保存するブロックDSLも設けない。
@@ -210,3 +212,7 @@ JSON永続化、任意のsample復元、計画シリアライズ、汎用plugin 
 前案の[設計probe](Memos/2026-10-16-Plus独自API設計のテスト検証.md)は履歴であり現行APIの受入結果には数えない。
 
 [公開境界・保存失敗・診断ADR](ADR/2026-10-16-Plus公開境界と保存失敗状態と診断schemaの確定.md)・[簡素化ADR](ADR/2026-10-16-Plus独自APIを編集セッションへ簡素化.md)・[前案ADR](ADR/2026-10-16-Plus独自APIをDocumentと保存計画へ集約.md)
+
+## 不正mdta indexとQuickTimeの併用修復
+
+[併用修復仕様](mp4-combined-limited-repair-design.md)を参照する。限定profile内の不正index item除去と専用chapter除去は同じ原本座標の一つの計画へ合成し、通常snapshot編集や他repairと混在させない。修復前に完全metadata snapshotを要求せず、対象外raw bytes、Nero、track、media、出力digestを独立検証する。正常itemのnative非対応値をraw保持できても、明示要求した完全snapshotを取得できなければ保存は拒否する。

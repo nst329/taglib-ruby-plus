@@ -8,7 +8,7 @@ rake test:minitest
 rake test
 ```
 
-Rake経由では成功時の進捗・テスト名・色を抑制し、失敗時だけ例外、backtrace、causeを出力する。MP4のnative bindingを使うため、ローカルのTagLibライブラリを`DYLD_LIBRARY_PATH`で指定する環境では、プロジェクトの標準テストと同じRubyを使う。
+Rake経由ではtest-unitの成功時の進捗・テスト名・色を抑制し、失敗時だけ例外、backtrace、causeを出力する。minitestには専用のオプションだけを渡し、6以降では--quietで進捗を抑制する。MP4のnative bindingを使うため、ローカルのTagLibライブラリを`DYLD_LIBRARY_PATH`で指定する環境では、プロジェクトの標準テストと同じRubyを使う。
 
 現行のPlus APIは[plus_mp4_api_test.rb](plus_mp4_api_test.rb)で確認する。[plus_mp4_io_test.rb](plus_mp4_io_test.rb)は通常/厳密モード、cache、コピー予算、競合・部分コピー・purl raw・同時編集の独立検証を確認する。`test:plus_mp4`は`plus_mp4*_test.rb`をすべて実行する。ここでは編集用File、不変metadata/chapter値、save/save-as、世代不一致、無変更コピー、typed mdtaの所有コピー、chapter形式の保持を検証する。公開前後の障害注入、cleanupの原因連鎖、公開競合、旧APIの非公開化、診断schema、chapter sampleの所有もここで確認する。
 
@@ -58,3 +58,19 @@ ruby test/probes/plus_mp4_metadata_contract.rb \
 全体検証は`rake test`で両runnerを実行する。個別テストを直接requireする場合も、test-unitとminitestのファイルを同じRubyプロセスへ混在させない。
 
 追加の[header・保存snapshot計測](../docs/Memos/2026-10-16-headerと保存snapshotの再利用検証.md)では、大きいartworkとmdatで原本native open、String共有、選択情報取得のbytesも記録する。
+
+## 不正mdtaとQuickTime併用の設計probe
+
+`test/probes/mp4_invalid_mdta_repair_design.rb`は未実装の併用修復設計を検討する試験で、通常テストglobから分離する。FFmpegと現行native bindingを必要とする。
+不正indexの任意位置・32bit値域・fourcc解釈、正常bytes保持、現行readerの制約、同一moov候補への両編集と独立再読込を確認する。製品保存APIや障害契約の受入試験ではない。
+
+```sh
+ruby -Ilib -Itest test/probes/mp4_invalid_mdta_repair_design.rb \
+  --verbose=important-only --no-use-color \
+  --progress-style=fault-only --no-show-detail-immediately
+```
+
+結果と未検証範囲は[併用設計](../Docs/mp4-combined-limited-repair-design.md)に記録する。
+
+`plus_mp4_limited_repair_test.rb`は製品公開APIの併用修復、各領域の独立判定、許可と要否の分離、layout、raw保持、出力digest、世代・障害契約を検証する。計画のmoov全面読込1回、候補copy1回と独立scan1回、保存後の構造解析1回も確認する。
+`plus_mp4_reuse_test.rb`は取得済みchapter・無変更snapshotの再利用、およびchapter参照／時間診断でartwork payloadを読まないことを検証する。native内部のI/OとRubyのFile#read計測は区別する。

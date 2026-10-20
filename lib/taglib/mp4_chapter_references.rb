@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'stringio'
 require_relative 'mp4_hint_validation'
 
 module TagLib::MP4
@@ -29,7 +30,7 @@ module TagLib::MP4
     }.freeze
     attr_reader :report, :removed, :source_digest, :preservation_signature, :timing_report, :track_ids
 
-    def initialize(file, timing: false, ignore_metadata: false, removal: nil, capture_raw: true)
+    def initialize(file, timing: false, ignore_metadata: false, removal: nil, capture_raw: true, capture_signature: true)
       @removal = removal
       @selected_keys = normalize_selection(removal) unless removal.nil? || removal == :missing
       @ignore_metadata = ignore_metadata
@@ -63,7 +64,7 @@ module TagLib::MP4
         hint_validator.validate_tracks(tracks: tracks, offset_tables: @offset_tables, mdat_ranges: @mdat_ranges)
         @timing_report = MetadataSnapshot.copy(collect_timing) if timing
         prepare_atom_edits
-        @preservation_signature = MetadataSnapshot.copy(preservation(@atoms))
+        @preservation_signature = MetadataSnapshot.copy(preservation(@atoms)) if capture_signature
         @removed = @report.select { |r| selected_reference?(r) }
         io.rewind
         if @generation
@@ -162,12 +163,22 @@ module TagLib::MP4
       atom[:end_offset] - atom[:offset]
     end
 
+    # 同じ解析で取得したmoovを再利用し、leafごとの再読込を避ける。
     def bytes(atom)
+      return @raw.byteslice(atom[:offset] - @moov[:offset], length(atom)) if cached_atom?(atom)
+
       @file.send(:read_mp4_bytes, @io, atom[:offset], length(atom))
     end
 
     def payload(atom)
-      @file.send(:read_mp4_bytes, @io, atom[:payload_offset], atom[:end_offset] - atom[:payload_offset])
+      size = atom[:end_offset] - atom[:payload_offset]
+      return @raw.byteslice(atom[:payload_offset] - @moov[:offset], size) if cached_atom?(atom)
+
+      @file.send(:read_mp4_bytes, @io, atom[:payload_offset], size)
+    end
+
+    def cached_atom?(atom)
+      @raw && atom[:offset] >= @moov[:offset] && atom[:end_offset] <= @moov[:end_offset]
     end
 
     def walk(atoms, &block)
@@ -226,6 +237,10 @@ module TagLib::MP4
     def payload_signature(atom)
       # Plusはコピー時のmdat署名と出力の独立署名で媒体保持を検証する。
       return [atom[:end_offset] - atom[:payload_offset]] if @generation && atom[:type] == 'mdat'
+      if cached_atom?(atom)
+        data = payload(atom)
+        return [data.bytesize, Digest::SHA256.hexdigest(data)]
+      end
       digest = Digest::SHA256.new
       @io.seek(atom[:payload_offset])
       size = atom[:end_offset] - atom[:payload_offset]
@@ -299,7 +314,12 @@ module TagLib::MP4
       description = payload(stsd)
       fail!('truncated stsd') if description.bytesize < 8
       fail!('unsupported stsd version', :unsupported) unless description.byteslice(0, 4) == "\0".b * 4
-      entries = @file.send(:parse_mp4_atoms, @io, stsd[:payload_offset] + 8, stsd[:end_offset])
+      # stsdの内側はroot indexの対象外。取得済みpayloadを同じ境界parserへ渡す。
+      entries = (@sample_entries ||= {})[stsd[:offset]] ||= if cached_atom?(stsd)
+        @file.send(:parse_mp4_atoms, StringIO.new(description), 8, description.bytesize, 1)
+      else
+        @file.send(:parse_mp4_atoms, @io, stsd[:payload_offset] + 8, stsd[:end_offset])
+      end
       fail!('stsd count mismatch') unless entries.size == description.byteslice(4, 4).unpack1('N')
       # text handlerだけで字幕をchapterと断定しない。候補判定は完全なchapter解析とは別。
       entries.size == 1 && entries.first[:type] == 'text'
@@ -589,12 +609,12 @@ module TagLib::MP4
   class File
     # 原本上の全chap参照を不変のRuby値として診断する。未保存の除去計画は反映しない。
     def chapter_reference_diagnostics
-      ChapterReferences.new(self).report
+      ChapterReferences.new(self, capture_raw: false, capture_signature: false).report
     end
 
     # 参照修復とは独立にchapter候補の時間情報を観測する。時間atomは変更しない。
     def chapter_timing_diagnostics
-      ChapterReferences.new(self, timing: true).timing_report
+      ChapterReferences.new(self, timing: true, capture_raw: false, capture_signature: false).timing_report
     end
 
     # 欠落参照だけを保存待ちにする。存在する参照先の適否には関与しない。

@@ -8,6 +8,20 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.32
+
+### Added
+- 不正mdta index（0およびkeys範囲外）と壊れたQuickTime専用chapterを独立診断し、一つの別出力保存へ合成する限定修復APIを追加した。
+- indexと通常fourccの解釈profile、必要操作の許可確認、除去対象・digest・公開状態の報告と独立保持検証を追加した。
+
+### Changed
+- 構造系の読取・診断・計画から不要なnative metadata読込を除き、同じmoov、章観測、無変更snapshot、保存後構造解析を再利用するようにした。
+- 8MiB画像付きfixtureの構造操作で、論理readを109,065,558から1,402 bytesへ削減した。
+
+### Fixed
+- cleanup失敗後の一時ファイルを明示管理し、GCによる公開出力のctime変更と世代不一致を防いだ。
+- 既存stscテストのブロック結合と、Rakeからminitestへ渡すrunner専用オプションを修正した。
+
 ## 2.3.2.31
 
 ### Added

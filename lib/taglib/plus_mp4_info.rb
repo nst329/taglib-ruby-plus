@@ -3,7 +3,7 @@
 module TagLib
   module Plus
     module MP4
-      # header宣言だけを読み、native/codec/sample/probeへ依存しない世代別reader。
+      # header観測とRuby構造診断の読取source。nativeや外部probeを開かない。
       class HeaderReader
         include ::TagLib::MP4::AtomParsing
         SECTIONS = %i[movie tracks chapters artwork].freeze
@@ -13,6 +13,27 @@ module TagLib
         def initialize(path, generation)
           @name, @io_generation = path, generation
           @cache, @views, @track_tables = {}, {}, {}
+        end
+
+        # 形式別の完全chapter読取はRuby readerへ委譲し、native metadataを開かない。
+        def chapter_diagnostics
+          ::TagLib::MP4.const_get(:ChapterReader, false).read(self).report
+        end
+
+        def chapter_reference_diagnostics
+          ::TagLib::MP4::ChapterReferences.new(self, capture_raw: false, capture_signature: false).report
+        end
+
+        def chapter_timing_diagnostics
+          ::TagLib::MP4::ChapterReferences.new(self, timing: true, capture_raw: false, capture_signature: false).timing_report
+        end
+
+        def color_metadata_diagnostics
+          ::TagLib::MP4.const_get(:ColorMetadataReader, false).new(self).read
+        end
+
+        def chapter_sample_snapshot
+          ::TagLib::MP4::ChapterSampleSnapshot.capture(self)
         end
 
         # 選択領域だけを遅延し、別の選択でも同じ不変sectionを再利用する。

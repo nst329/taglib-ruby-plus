@@ -151,6 +151,28 @@ end
 映像sourceでも、全chap参照が同じ専用text trackへ収束し他用途共有がなければ削除対象にできます。字幕source、欠落参照、共有字幕、未知構造、Nero異常、I/O失敗は削除成功へ変換されません。詳細な判定・保存前後の比較・MListNewとの責務境界は
 [QuickTime限定除去設計](docs/mp4-quicktime-chapter-removal-design.md)を参照してください。
 
+不正mdta indexの限定除去と併用する場合は、両領域を独立診断して一回の別出力保存へまとめます。
+次の例は、数値indexと既知の通常fourccが混在する生成規約が分かっている入力を対象とします。
+
+```ruby
+TagLib::Plus::MP4.open(source_path) do |file|
+  plan = file.plan_limited_repairs(mdta_layout: :mixed_known_fourcc)
+  if plan.status == :repairable
+    file.apply_limited_repairs(plan: plan, allow: [
+      :remove_invalid_mdta_indices, :remove_broken_quicktime_chapters
+    ])
+    result = file.save!(to: new_stage_path)
+  end
+end
+```
+
+`:unchanged`は修復不要、`:blocked`は安全な限定修復ができない状態です。
+許可設定は要否判定に影響せず、正常な領域は変更しません。
+不正indexは0とkeys件数を超える数値で、ilst内の位置や連続性に限定しません。
+数値専用contextには`:indexed`を指定します。layoutはitem名の解釈を決めるため、入力の規約に合わせて指定してください。
+未指定で解釈が曖昧なら削除を拒否します。詳細・保存結果・失敗状態は
+[併用修復設計](docs/mp4-combined-limited-repair-design.md)を参照してください。
+
 旧fork追加メソッドは公開APIから除外しました。内部writer・構造検証用の
 `TagLib::MP4::Internal`には互換性を保証しません。元のtaglib-ruby由来の低水準APIは
 `TagLib::MP4::File`に残します。新しい利用例・診断schema・保存失敗時の状態は

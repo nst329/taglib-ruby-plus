@@ -554,19 +554,19 @@ module TagLib
 
           ensure_current!
           ensure_no_repair!
-          read_native do |native|
-            reader = ::TagLib::MP4.send(:const_get, :ChapterReader, false).read(native)
-            result = reader.report.fetch(style)
-            unless %i[complete absent].include?(result[:status])
-              raise Error.new(result[:reason], code: result[:status], area: :chapters, phase: :read,
-                              issues: [{ code: result[:reason_code] || result[:status],
-                                         message: result[:reason], location: "chapters/#{style}",
-                                         details: { format: style } }])
-            end
-            return nil if result[:status] == :absent
-
-            public_chapters(reader.values.fetch(style))
+          reader = @generation.cached_chapter_reader(false) || read_structure do |native|
+            ::TagLib::MP4.send(:const_get, :ChapterReader, false).read(native)
           end
+          result = reader.report.fetch(style)
+          unless %i[complete absent].include?(result[:status])
+            raise Error.new(result[:reason], code: result[:status], area: :chapters, phase: :read,
+                            issues: [{ code: result[:reason_code] || result[:status],
+                                       message: result[:reason], location: "chapters/#{style}",
+                                       details: { format: style } }])
+          end
+          return nil if result[:status] == :absent
+
+          public_chapters(reader.values.fetch(style))
         end
 
         # 指定形式だけを含む不変ChapterSnapshotを保存候補にする。
@@ -582,7 +582,7 @@ module TagLib
         def plan_quicktime_chapter_removal
           ensure_current!
           ensure_repair_slot!
-          plan = read_native { |native| build_quicktime_removal_plan(native) }
+          plan = read_structure { |native| build_quicktime_removal_plan(native) }
           plan
         end
 
@@ -637,7 +637,8 @@ module TagLib
           if area == :structure
             return @diagnostics[area] = ::TagLib::Plus::MP4::StructureDiagnostics.new(@path, @generation).report
           end
-          @diagnostics[area] = read_native do |native|
+          operation = area == :metadata ? method(:read_native) : method(:read_structure)
+          @diagnostics[area] = operation.call do |native|
             begin
               diagnostic_report(area, native.public_send(DIAGNOSTIC_OPERATIONS.fetch(area)))
             rescue *STRUCTURE_ERRORS => error
@@ -654,7 +655,7 @@ module TagLib
           raise Error.new('chapter samples are unavailable while chapters are edited', code: :pending_changes, area: :chapters) if chapters_changed?
           return @chapter_samples if @chapter_samples_loaded
 
-          snapshot = read_native { |native| native.chapter_sample_snapshot }
+          snapshot = read_structure { |native| native.chapter_sample_snapshot }
           fields = %i[track_id source_track_id media_timescale media_duration samples movie edit
                       preservation_signature ffprobe_comparison source_references signature_version]
           @chapter_samples = snapshot && DeepCopy.call(fields.to_h { |field| [field, snapshot.public_send(field)] })
@@ -667,7 +668,7 @@ module TagLib
           ensure_current!
           ensure_repair_slot!
           raise ArgumentError, 'references must be an Array' unless references.is_a?(Array)
-          plan, removed = read_native do |native|
+          plan, removed = read_structure do |native|
             analysis = ::TagLib::MP4::ChapterReferences.new(native, removal: references)
             [analysis.repair_plan, analysis.removed]
           end
@@ -713,9 +714,17 @@ module TagLib
           output = to.nil? ? @path : ::File.expand_path(to)
           replace_source = output == @path
           validate_output!(output, replace_source)
+          if @repair_kind == :limited_repairs && replace_source
+            raise Error.new('limited repair requires a separate output', code: :separate_output_required, phase: :prepare)
+          end
           changed = changed?
           if !changed && replace_source
-            actual = snapshots.empty? ? {} : read_native { |native| capture_snapshots(native, snapshots) }
+            actual = {}
+            missing = snapshots.reject do |field|
+              baseline = field == :metadata ? @metadata_baseline : @chapters_baseline
+              actual[field] = baseline if baseline
+            end
+            actual.merge!(read_native { |native| capture_snapshots(native, missing) }) unless missing.empty?
             adopt_snapshots!(actual)
             return result(output, @digest, changed: false, snapshots: actual)
           end
@@ -728,10 +737,11 @@ module TagLib
           output_generation = nil
           begin
             @requested_snapshots = snapshots
-            temporary = Tempfile.new(['taglib-plus-', '.mp4'], ::File.dirname(output))
+            # cleanup失敗で残すpathをGCが後からunlinkしないよう、明示管理のFileを使う。
+            temporary = Tempfile.create(['taglib-plus-', '.mp4'], ::File.dirname(output))
             temporary_path = temporary.path
             temporary.close
-            load_metadata if changed
+            load_metadata if changed && @repair_kind != :limited_repairs
             @source_scan = nil
             prepare_candidate(temporary_path, changed: changed)
             source_digest = @source_scan.fetch(:digest)
@@ -818,6 +828,7 @@ module TagLib
             reason_code: :quicktime_absent) if quicktime[:status] == :absent
           begin
             analysis = ::TagLib::MP4::QuickTimeChapterRemovalReferences.new(native, chapter_report: reader.report)
+            cache_reference_diagnostics(analysis)
             timing_broken = quicktime[:status] == :complete && analysis.timing_report.any? { |row| row[:observations].any? }
             QuickTimeChapterRemovalPlan.new(
               **common.merge(references: analysis.removed, target_track_id: analysis.target_track_id),
@@ -835,16 +846,20 @@ module TagLib
           end
         end
 
+        # 修復計画のために解析済みの原本観測を、同一世代の診断でも共有する。
+        def cache_reference_diagnostics(analysis)
+          @diagnostics[:chapter_references] ||= diagnostic_report(:chapter_references, analysis.report)
+          @diagnostics[:chapter_timing] ||= diagnostic_report(:chapter_timing, analysis.timing_report)
+        end
+
         def header_reader
           @header_reader ||= HeaderReader.new(@path, @generation)
         end
 
-        def read_native
+        # 世代確認と例外契約を、native値読取とRuby構造読取で共用する。
+        def read_checked
           ensure_generation!
-          value = ::TagLib::MP4::Internal::File.open(@path, false) do |native|
-            native.io_generation = @generation
-            yield native
-          end
+          value = yield
           ensure_generation!
           value
         rescue *STRUCTURE_ERRORS => error
@@ -852,6 +867,20 @@ module TagLib
                           issues: error.respond_to?(:issues) ? error.issues : []), cause: error
         rescue IOError, SystemCallError => error
           raise Error.new(error.message, code: :io, phase: :read), cause: error
+        end
+
+        def read_native
+          read_checked do
+            ::TagLib::MP4::Internal::File.open(@path, false) do |native|
+              native.io_generation = @generation
+              yield native
+            end
+          end
+        end
+
+        # raw構造だけで完結する操作で、nativeによるmetadata・画像読込を避ける。
+        def read_structure
+          read_checked { yield header_reader }
         end
 
         def ensure_generation!
@@ -949,6 +978,7 @@ module TagLib
         def verify_candidate(path)
           ::TagLib::MP4::Internal::File.open(path, false) do |native|
             native.io_generation = @candidate_generation
+            return verify_limited_repair(native) if @repair_kind == :limited_repairs
             actual = MetadataSnapshot.__send__(:from_legacy, native.metadata_snapshot)
             expected = metadata_verification_snapshot
             matches = actual == expected
@@ -975,7 +1005,7 @@ module TagLib
                      checked.preservation_signature == @repair_plan.preservation_signature
                 raise IOError, 'repair structure preservation verification failed'
               end
-              verify_quicktime_removal(native) if @repair_kind == :quicktime_chapter_removal
+              verify_quicktime_removal(native, checked: checked) if @repair_kind == :quicktime_chapter_removal
               native.chapter_snapshot if @repair_kind == :chapter_timing
             end
             captured = { metadata: actual }
@@ -985,7 +1015,7 @@ module TagLib
         end
 
         # 除去後にQuickTime不在、Nero payload一致、対象track不在を独立再読込で確認する。
-        def verify_quicktime_removal(native)
+        def verify_quicktime_removal(native, checked:)
           reader = ::TagLib::MP4.send(:const_get, :ChapterReader, false).read(native)
           nero = reader.report.fetch(:nero)
           quicktime = reader.report.fetch(:quicktime)
@@ -998,7 +1028,7 @@ module TagLib
             raise IOError, 'Nero chpl payload verification failed' unless reader.nero_payload_sha256 == expected.nero_chpl_sha256
           end
           raise IOError, 'QuickTime chapter verification failed' unless quicktime[:status] == :absent
-          raise IOError, 'QuickTime track verification failed' if ::TagLib::MP4::ChapterReferences.new(native).track_ids.include?(expected.target_track_id)
+          raise IOError, 'QuickTime track verification failed' if checked.track_ids.include?(expected.target_track_id)
         end
 
         # 呼出側が選択した値だけを実ファイルから取得し、期待値を返却結果へ混ぜない。
@@ -1260,7 +1290,10 @@ module TagLib
         end
 
         def cleanup_candidate(temporary)
-          temporary.unlink
+          ::File.unlink(temporary.path)
+        rescue Errno::ENOENT
+          # 原本へのrenameが成功した場合は、一時pathが既にない。
+          nil
         end
 
         def validate_output!(output, replace_source)
@@ -1274,6 +1307,8 @@ module TagLib
           @chapters_baseline = @chapters_candidate = nil unless baseline.key?(:chapters)
           @repair_plan = @repair_kind = nil
           @quicktime_removal_plan = nil
+          @limited_repair_plan = nil
+          @issued_limited_plan = nil
           previous = @generation
           @generation = @verified_generation
           previous.close
@@ -1294,9 +1329,15 @@ module TagLib
         end
 
         def result(output, output_digest, changed:, source_digest: @digest, snapshots: {})
-          DeepCopy.call(output_path: output, changed: changed, source_digest: source_digest,
-                        output_digest: output_digest, snapshots: snapshots,
-                        verification: (!changed && output == @path ? @verification : :independent_reopen))
+          value = { output_path: output, changed: changed, source_digest: source_digest,
+                    output_digest: output_digest, snapshots: snapshots,
+                    verification: (!changed && output == @path ? @verification : :independent_reopen) }
+          if @limited_repair_plan
+            value.merge!(operations: @limited_repair_plan.required_operations,
+              removed: { metadata: @limited_repair_plan.metadata[:removed] || [],
+                         quicktime: @limited_repair_plan.quicktime }, committed: true)
+          end
+          DeepCopy.call(value)
         end
 
         # 領域固有の観測値と共通の拒否理由を分離し、旧診断オブジェクトを公開しない。
@@ -1381,3 +1422,5 @@ module TagLib
     end
   end
 end
+
+require_relative 'plus_mp4_limited_repair'
