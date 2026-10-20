@@ -35,6 +35,11 @@ module TagLib
           @io&.close unless @io&.closed?
         end
 
+        # 計画を開いた原本世代へ結び付けるためのstat tokenを返す。
+        def token
+          @identity.dup.freeze
+        end
+
         # 媒体bytesを持たず、同一世代のatom境界だけをheader・chapter解析で共有する。
         def atom_index
           return @atom_index if @atom_index

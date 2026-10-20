@@ -27,7 +27,7 @@ module TagLib::MP4
       'stbl' => %w[stsd stts ctts cslg stsc stsz stz2 stco co64 stss stps sdtp sgpd sbgp padb stdp free skip],
       'edts' => %w[elst], 'dinf' => %w[dref], 'udta' => %w[chpl meta name hnti free skip]
     }.freeze
-    attr_reader :report, :removed, :source_digest, :preservation_signature, :timing_report
+    attr_reader :report, :removed, :source_digest, :preservation_signature, :timing_report, :track_ids
 
     def initialize(file, timing: false, ignore_metadata: false, removal: nil, capture_raw: true)
       @removal = removal
@@ -39,7 +39,11 @@ module TagLib::MP4
         @generation&.check!
         initial_digest = Digest::SHA256.file(file.name).hexdigest unless @generation
         @io = io
-        @atoms = file.send(:parse_mp4_atoms, io, 0, io.stat.size)
+        @atoms = if @generation
+                   @generation.atom_index { file.send(:parse_mp4_atoms, io, 0, io.stat.size) }
+                 else
+                   file.send(:parse_mp4_atoms, io, 0, io.stat.size)
+                 end
         @moov = one(@atoms, 'moov')
         fail!('moov exceeds repair limit', :unsupported) if length(@moov) > MAX_MOOV_BYTES
         walk(@atoms) { |atom| fail!("unsupported #{atom[:type]} structure", :unsupported) if UNSUPPORTED.include?(atom[:type]) }
@@ -55,6 +59,7 @@ module TagLib::MP4
         validate_selection!
         collect_offsets
         tracks = @moov[:children].select { |atom| atom[:type] == 'trak' }.map { |track| track_info(track) }
+        @track_ids = tracks.map(&:first).freeze
         hint_validator.validate_tracks(tracks: tracks, offset_tables: @offset_tables, mdat_ranges: @mdat_ranges)
         @timing_report = MetadataSnapshot.copy(collect_timing) if timing
         prepare_atom_edits
@@ -439,6 +444,102 @@ module TagLib::MP4
       edited = render(@moov, delta)
       header_size = @moov[:payload_offset] - @moov[:offset]
       box(@moov, edited.byteslice(header_size..) + [padding].pack('N') + 'free' + "\0".b * (padding - 8)).freeze
+    end
+  end
+
+  # 壊れたQuickTime chapterだけを、専用text trackと一緒に除去する限定解析。
+  # 音声由来の全chap参照が同一trackを指し、他用途の参照がない場合だけ生成できる。
+  class QuickTimeChapterRemovalReferences < ChapterReferences
+    attr_reader :target_track_id
+
+    def initialize(file, chapter_report:)
+      @chapter_report = chapter_report
+      super(file, timing: true)
+    end
+
+    private
+
+    def prepare_atom_edits
+      super
+      validate_quicktime_report!
+      rows = @report
+      fail!('no QuickTime chapter reference', :quicktime_absent) if rows.empty?
+      fail!('QuickTime reference source is not audio', :shared_reference) unless rows.all? { |row| row[:source_handler] == 'soun' }
+      fail!('QuickTime reference target is missing', :missing_reference) unless rows.all? { |row| row[:target_exists] }
+      fail!('QuickTime reference target is not a dedicated text track', :shared_reference) unless rows.all? { |row| row[:status] == :chapter_candidate }
+
+      target_ids = rows.map { |row| row[:target_track_id] }.uniq
+      fail!('QuickTime chapter references have multiple targets', :multiple_references) unless target_ids.one?
+
+      @target_track_id = target_ids.first
+      target = @moov[:children].find { |atom| atom[:type] == 'trak' && track_info(atom).first == @target_track_id }
+      fail!('QuickTime chapter track is missing', :missing_reference) unless target
+      fail!('QuickTime chapter track is shared by another reference', :shared_reference) if other_target_references?(target)
+
+      @selected_keys = rows.to_h { |row| [reference_key(row), true] }
+      @removal = rows
+      @deleted_track_offsets = [target[:offset]]
+      @report.each do |row|
+        next unless selected_reference?(row)
+
+        tref = tref_for(row)
+        chap = child(tref, 'chap')
+        @edits[chap[:offset]] = []
+      end
+      recalculate_tref_positions!
+    end
+
+    def validate_quicktime_report!
+      nero = @chapter_report.fetch(:nero)
+      fail!('Nero chapter read is incomplete', :nero_unreadable) unless %i[complete absent].include?(nero[:status])
+      quicktime = @chapter_report.fetch(:quicktime)
+      if quicktime[:status] == :complete && !@timing_report.any? { |row| row[:observations].any? }
+        fail!('QuickTime chapter is not broken', :quicktime_complete)
+      end
+      fail!('QuickTime chapter is absent', :quicktime_absent) if quicktime[:status] == :absent
+    end
+
+    def tref_for(row)
+      track = @moov[:children].find { |atom| atom[:type] == 'trak' && track_info(atom).first == row[:source_track_id] }
+      tref = track[:children].select { |atom| atom[:type] == 'tref' }.fetch(row[:tref_index])
+      tref
+    end
+
+    def other_target_references?(target)
+      @moov[:children].select { |atom| atom[:type] == 'trak' }.any? do |track|
+        track[:children].select { |atom| atom[:type] == 'tref' }.any? do |tref|
+          tref[:children].any? do |reference|
+            next false if reference[:type] == 'chap'
+
+            data = payload(reference)
+            fail!('unknown target reference structure', :unknown_structure) unless (data.bytesize % 4).zero?
+            data.unpack('N*').include?(@target_track_id)
+          end
+        end
+      end
+    end
+
+    def recalculate_tref_positions!
+      positions = Hash.new(0)
+      @moov[:children].select { |atom| atom[:type] == 'trak' }.each do |track|
+        source_id = track_info(track).first
+        track[:children].select { |atom| atom[:type] == 'tref' }.each_with_index do |tref, tref_index|
+          key = [source_id, tref_index]
+          rows = @report.select { |row| [row[:source_track_id], row[:tref_index]] == key }
+          @tref_positions[key] = positions[source_id]
+          positions[source_id] += 1 unless rows.any? && rows.all? { |row| selected_reference?(row) }
+        end
+      end
+    end
+
+    def deleted_reference_atom?(atom)
+      return true if atom[:type] == 'trak' && @deleted_track_offsets&.include?(atom[:offset])
+
+      super
+    end
+
+    def reference_key(row)
+      %i[source_track_id tref_index reference_index target_track_id].map { |key| row.fetch(key) }
     end
   end
 

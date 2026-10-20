@@ -3,10 +3,11 @@
 module TagLib::MP4
   # 不完全読取・非対応構造・復元入力の拒否理由を保存状態と区別して伝える。
   class ChapterSnapshotError < ArgumentError
-    attr_reader :code, :phase, :style
+    attr_reader :code, :phase, :style, :reason_code
 
-    def initialize(message, code: :invalid_snapshot, phase: :capture, style: nil)
+    def initialize(message, code: :invalid_snapshot, phase: :capture, style: nil, reason_code: nil)
       @code, @phase, @style = code, phase, style
+      @reason_code = reason_code || code
       super(message)
     end
   end

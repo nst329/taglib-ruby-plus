@@ -233,6 +233,24 @@ module TagLib::MP4
     def chapters(style: nil)
     end
 
+    # 指定形式だけを完全読取する。不在はnil、異常はPlus Errorで返す。
+    # @param style [Symbol] `:nero` or `:quicktime`
+    # @return [Array<TagLib::Plus::MP4::Chapter>, nil]
+    # @raise [TagLib::Plus::MP4::Error] if the selected format is incomplete
+    def read_chapters(style:)
+    end
+
+    # 壊れたQuickTimeと安全に同定した専用text trackだけの除去計画を作る。
+    # @return [TagLib::Plus::MP4::QuickTimeChapterRemovalPlan]
+    def plan_quicktime_chapter_removal
+    end
+
+    # 既存の原子的save!境界へ除去計画を登録する。
+    # @param plan [TagLib::Plus::MP4::QuickTimeChapterRemovalPlan]
+    # @return [Array<Hash>] removed QuickTime reference rows
+    def remove_quicktime_chapters(plan:)
+    end
+
     # Return which chapter formats are present.
     # @return [Symbol] `:none`, `:nero`, `:quicktime`, or `:both`
     # @api private

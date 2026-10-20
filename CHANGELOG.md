@@ -8,6 +8,13 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.30
+
+### Added
+- Plus公開APIに形式別完全読取`read_chapters(style:)`を追加し、別形式の異常があっても正常Neroを取得できるようにした。
+- 壊れたQuickTimeだけを専用text trackと参照ごと除去する世代付き計画APIを追加した。
+- 正常Nero／QuickTime、欠落・共有・未知参照、時間不整合、Nero異常、世代競合、保存再試行を合成MP4で検証した。
+
 ## 2.3.2.29
 
 ### Fixed

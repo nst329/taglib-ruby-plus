@@ -135,6 +135,22 @@ end
 診断は`file.diagnose(:chapter_references)`、参照解除は診断行を選択して
 `file.detach_chapter_references(references: selected)`、保存は同じ`save!`を使います。
 
+壊れたQuickTime chapterだけを除去する場合は、形式別完全読取と計画判定を使います。正常Neroは独立して取得され、正常QuickTimeは削除計画になりません。
+
+```ruby
+TagLib::Plus::MP4.open(stage_path) do |file|
+  nero = file.read_chapters(style: :nero) # 不在はnil、異常はError
+  plan = file.plan_quicktime_chapter_removal
+  if plan.status == :removable
+    file.remove_quicktime_chapters(plan: plan)
+    file.save!
+  end
+end
+```
+
+欠落参照、共有字幕、未知構造、Nero異常、I/O失敗は削除成功へ変換されません。詳細な判定・保存前後の比較・MListNewとの責務境界は
+[QuickTime限定除去設計](docs/mp4-quicktime-chapter-removal-design.md)を参照してください。
+
 旧fork追加メソッドは公開APIから除外しました。内部writer・構造検証用の
 `TagLib::MP4::Internal`には互換性を保証しません。元のtaglib-ruby由来の低水準APIは
 `TagLib::MP4::File`に残します。新しい利用例・診断schema・保存失敗時の状態は

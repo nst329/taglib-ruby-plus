@@ -20,6 +20,8 @@
 
 [metadata完全復元](mp4-metadata-complete-restore-design.md)と[完全復元のADR](ADR/2026-10-16-metadata完全復元は全値とcontextを一括置換する.md)に、mdir/mdtaの一括置換、artwork、purl raw不足の拒否契約を記録しています。
 
+[壊れたQuickTime chapterの限定除去](mp4-quicktime-chapter-removal-design.md)に、形式別完全読取、世代付き計画、専用text trackの除去、Nero保持、MListNewとの保存前後契約を記録しています。[ADR](ADR/2026-10-20-QuickTime壊れchapterの限定除去.md)に採用理由があります。
+
 ## 機能別の内部設計・過去の契約
 
 | 目的 | 文書 |
@@ -75,6 +77,7 @@ nativeパッチの適用方法と構成は[patches/taglib](../patches/taglib/REA
 - [実MP4の複数tref修復](Memos/2026-10-09-実MP4複数tref修復検証-010226_001.md)
 - [metadataとchapter時間の設計前テスト](Memos/2026-10-09-metadataとchapter時間の設計前テスト.md)
 - [限定MP4修復の製品API](Memos/2026-10-09-限定MP4修復の実装検証.md)
+- [Plus QuickTime限定除去](Memos/2026-10-20-PlusQuickTime限定除去の検証.md)
 - [2.3.2.12バイナリgem](Memos/2026-10-09-2.3.2.12のバイナリgem検証.md)
 - [Ruby 4 / MP4 ItemMap SIGSEGV](Memos/2026-09-01-ruby4-mp4-item-map-segfault-investigation.md)
 

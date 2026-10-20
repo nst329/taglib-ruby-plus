@@ -7,7 +7,7 @@ module TagLib::MP4
   class ChapterReader
     MAX_BYTES = 32 * 1024 * 1024
     MAX_VALUES = 100_000
-    attr_reader :report, :values, :sample_data
+    attr_reader :report, :values, :sample_data, :nero_payload_sha256
 
     # 原本世代の読取値だけを再利用し、native handleや未保存の章状態をcacheしない。
     def self.read(file, samples: false)
@@ -18,9 +18,15 @@ module TagLib::MP4
 
     def initialize(file, samples: false)
       @file, @report, @values, @samples = file, {}, {}, samples
+      @nero_payload_sha256 = nil
+      generation = file.io_generation if file.respond_to?(:io_generation)
       ::File.open(file.name, 'rb') do |io|
         @io = io
-        @atoms = file.send(:parse_mp4_atoms, io, 0, io.stat.size)
+        @atoms = if generation
+                   generation.atom_index { file.send(:parse_mp4_atoms, io, 0, io.stat.size) }
+                 else
+                   file.send(:parse_mp4_atoms, io, 0, io.stat.size)
+                 end
         reject!('fragmented MP4 chapters are unsupported', :unsupported) if @atoms.any? { |a| a[:type] == 'moof' }
         @moov = one(@atoms, 'moov')
         if @samples
@@ -36,17 +42,28 @@ module TagLib::MP4
       @report = MetadataSnapshot.copy(@report)
       @values.freeze
       @sample_data = MetadataSnapshot.copy(@sample_data) if @sample_data
+      @nero_payload_sha256&.freeze
       @file = @io = nil
       freeze
     end
 
-    # 全形式が完全または不在の場合だけsnapshot生成と復元を許す。
-    def require_complete!
-      report.each do |style, result|
-        next if %i[complete absent].include?(result[:status])
+    # 全形式、または指定形式だけが完全／不在であることを確認する。
+    def require_complete!(style: nil)
+      if style.nil?
+        report.each do |format, result|
+          next if %i[complete absent].include?(result[:status])
 
-        raise ChapterSnapshotError.new(result[:reason], code: result[:status], style: style)
+          raise ChapterSnapshotError.new(result[:reason], code: result[:status], style: format,
+                                         reason_code: result[:reason_code])
+        end
+        return values
       end
+
+      result = report.fetch(style) { raise ArgumentError, "unknown chapter style: #{style.inspect}" }
+      return values.fetch(style) if %i[complete absent].include?(result[:status])
+
+      raise ChapterSnapshotError.new(result[:reason], code: result[:status], style: style,
+                                     reason_code: result[:reason_code])
     end
 
     private
@@ -61,11 +78,14 @@ module TagLib::MP4
 
     def failed(style, error)
       status = error.is_a?(ChapterSnapshotError) && error.code == :unsupported ? :unsupported : :malformed
-      @report[style] = { status: status, reason: error.message }
+      reason_code = error.respond_to?(:reason_code) ? error.reason_code : error.code
+      reason_code = "#{style}_#{status}".to_sym if reason_code == status
+      @report[style] = { status: status, reason: error.message,
+                         reason_code: reason_code }
     end
 
-    def reject!(reason, code = :malformed)
-      raise ChapterSnapshotError.new(reason, code: code)
+    def reject!(reason, code = :malformed, reason_code: code)
+      raise ChapterSnapshotError.new(reason, code: code, reason_code: reason_code)
     end
 
     def one(atoms, type, required: true)
@@ -97,6 +117,7 @@ module TagLib::MP4
       chpl = child(udta, 'chpl', required: false)
       return nil unless chpl
       bytes = payload(chpl)
+      @nero_payload_sha256 = Digest::SHA256.hexdigest(bytes)
       reject!('truncated chpl header') if bytes.size < 5
       version = bytes.getbyte(0)
       reject!('unsupported chpl version', :unsupported) unless [0, 1].include?(version)
@@ -132,11 +153,11 @@ module TagLib::MP4
       references = chapter_references(tracks)
       return nil if references.empty?
       targets = references.map { |row| row[:target_track_id] }.uniq
-      reject!('multiple chapter candidates', :unsupported) unless targets.size == 1
+      reject!('multiple chapter candidates', :unsupported, reason_code: :multiple_references) unless targets.size == 1
       ids = tracks.map { |t| identifier(t) }
       reject!('duplicate track identifiers', :unsupported) unless ids.uniq == ids
       matches = tracks.select { |t| identifier(t) == targets.first }
-      reject!('missing or duplicate chapter track') unless matches.size == 1
+      reject!('missing or duplicate chapter track', :malformed, reason_code: :missing_chapter_track) unless matches.size == 1
       track = matches.first
       reject!('unsupported chapter track handler', :unsupported) unless handler(track) == 'text'
       mdia = child(track, 'mdia')
@@ -204,7 +225,8 @@ module TagLib::MP4
           reject!('chapter reference outside audio track', :unsupported) unless @samples || source_handler == 'soun'
           bytes = payload(chap)
           valid_size = !bytes.empty? && (bytes.size % 4).zero? && (@samples || bytes.size == 4)
-          reject!('multiple or empty chapter track references', :unsupported) unless valid_size
+          reject!('multiple or empty chapter track references', :unsupported,
+                  reason_code: :invalid_chapter_reference) unless valid_size
           header = payload(child(track, 'tkhd'))
           source_id = identifier(track)
           bytes.unpack('N*').each_with_index.map do |target, index|
@@ -213,7 +235,7 @@ module TagLib::MP4
           end
         end
       end.tap do |references|
-        reject!('multiple chapter references', :unsupported) if !@samples && references.size > 1
+        reject!('multiple chapter references', :unsupported, reason_code: :multiple_references) if !@samples && references.size > 1
       end
     end
 
@@ -237,7 +259,8 @@ module TagLib::MP4
       dinf = child(minf, 'dinf')
       bytes = payload(child(dinf, 'dref'))
       unless bytes == [0, 1, 12].pack('N3') + 'url ' + [1].pack('N')
-        reject!('unsupported external or multiple chapter data references', :unsupported)
+      reject!('unsupported external or multiple chapter data references', :unsupported,
+              reason_code: :external_data_reference)
       end
     end
 
@@ -261,7 +284,7 @@ module TagLib::MP4
 
     def sample_times(stbl, scale, count)
       entries = table(stbl, 'stts', 8)
-      reject!('stts sample count mismatch') unless entries.sum(&:first) == count
+      reject!('stts sample count mismatch', :malformed, reason_code: :sample_count_mismatch) unless entries.sum(&:first) == count
       reject!('invalid stts entry') if @samples && entries.any? { |number, delta| number.zero? || delta.zero? }
       time = 0
       entries.flat_map do |number, delta|
