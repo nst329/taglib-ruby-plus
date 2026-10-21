@@ -651,7 +651,7 @@ module TagLib
           raise if error.respond_to?(:code) && %i[source_changed io open].include?(error.code)
           issue_dangling_reference_plan(
             status: :blocked, reason: error.code, message: error.message,
-            issues: [{ code: error.code, message: error.message, location: 'chapter_references', details: {} }]
+            issues: repair_error_issues(error, location: 'chapter_references', details: {})
           )
         end
 
@@ -968,8 +968,7 @@ module TagLib
             end
             QuickTimeChapterRemovalPlan.new(**common, status: :blocked, reason: error.code,
               reason_code: error.code, message: error.message,
-              issues: [{ code: error.code, message: error.message,
-                         location: error.message.include?('titl') ? 'moov/udta/titl' : 'chapters/quicktime', details: {} }])
+              issues: repair_error_issues(error, location: 'chapters/quicktime', details: {}))
           end
         end
 
@@ -1249,7 +1248,7 @@ module TagLib
                           issues: error.respond_to?(:issues) ? error.issues : []), cause: error
         rescue ::TagLib::MP4::ChapterReferenceError => error
           raise Error.new(error.message, code: error.code, phase: :prepare,
-                          issues: [{ code: error.code, path: 'movie', message: error.message }]), cause: error
+                          issues: repair_error_issues(error, path: 'movie')), cause: error
         end
 
         # mdta保存先を一時的にmdirへ変換し、nativeの型変換を利用して通常itemを生成する。
@@ -1411,10 +1410,10 @@ module TagLib
         rescue Error => error
           raise Error.new(error.message, code: error.code, area: error.area, phase: error.phase,
                           committed: error.committed,
-                          issues: error.issues.empty? ? [{ code: error.code, path: 'movie', message: error.message }] : error.issues), cause: error
+                          issues: repair_error_issues(error, path: 'movie')), cause: error
         rescue ::TagLib::MP4::ChapterReferenceError => error
           raise Error.new(error.message, code: error.code, phase: :prepare,
-                          issues: [{ code: error.code, path: 'movie', message: error.message }]), cause: error
+                          issues: repair_error_issues(error, path: 'movie')), cause: error
         end
 
         # 別出力はlinkを優先し、非対応時だけ同じ候補を排他的renameする。
@@ -1578,9 +1577,16 @@ module TagLib
               return DeepCopy.call(status: structure[:status], data: structure[:data], issues: issues)
             end
           end
-          location = error.message.include?('titl') ? 'moov/udta/titl' : area.to_s
           DeepCopy.call(status: status, data: nil,
-                        issues: [diagnostic_issue(error.code, error.message, location)])
+                        issues: repair_error_issues(error, location: area.to_s, details: {}))
+        end
+
+        # 原因側の診断を保持し、診断がない場合だけ呼出箇所の情報を付ける。
+        def repair_error_issues(error, **context)
+          issues = error.respond_to?(:issues) ? error.issues : []
+          return issues unless issues.empty?
+
+          [{ code: error.code, message: error.message, **context }]
         end
 
         def diagnostic_issue(code, message, location, details = {})

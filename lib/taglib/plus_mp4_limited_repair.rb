@@ -62,12 +62,16 @@ module TagLib::Plus::MP4
 
     # 構造解析が入口で失敗しても、限定修復を正常扱いせず理由付きblocked計画へ固定する。
     def blocked_limited_repair_plan(error)
-      issue = { code: error.code, message: error.message, location: 'repair', details: {} }
-      quicktime = { status: :blocked, reason_code: error.code, operation: nil, references: [], issues: [issue] }
-      metadata = { status: :blocked, reason_code: error.code, removed: [], issues: [issue] }
+      causes = repair_error_issues(error, location: 'repair', details: {})
+      issues = causes.map do |issue|
+        issue.merge(details: issue.fetch(:details, {}).merge(scope: :shared_structure,
+          affected_areas: %i[metadata quicktime], diagnosis: :incomplete))
+      end
+      quicktime = { status: :blocked, reason_code: error.code, operation: nil, references: [], issues: issues }
+      metadata = { status: :blocked, reason_code: error.code, removed: [], issues: issues }
       qt_plan = QuickTimeChapterRemovalPlan.new(
         status: :blocked, reason: error.code, reason_code: error.code,
-        message: error.message, references: [], target_track_id: nil, nero: [], nero_status: :unreadable,
+        message: error.message, issues: issues, references: [], target_track_id: nil, nero: [], nero_status: :unreadable,
         nero_chpl_sha256: nil, source_path: @path, generation_token: @generation.__send__(:token)
       )
       plan = LimitedRepairPlan.new(status: :blocked, required_operations: [], metadata: metadata,

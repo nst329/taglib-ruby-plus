@@ -6,9 +6,10 @@ require_relative 'mp4_hint_validation'
 module TagLib::MP4
   # 参照診断・修復計画の拒否理由。保存失敗は既存のMdtaSaveErrorで報告する。
   class ChapterReferenceError < ArgumentError
-    attr_reader :code
+    attr_reader :code, :issues
 
-    def initialize(message, code: :malformed)
+    def initialize(message, code: :malformed, issues: [])
+      @issues = MetadataSnapshot.copy(issues)
       @code = code
       super(message)
     end
@@ -194,7 +195,7 @@ module TagLib::MP4
     def validate_structure(atoms, parent, hint_validator)
       atoms.each do |atom|
         supported = STRUCTURES[parent]
-        titl_candidate = atom[:type] == 'titl' && parent == 'udta'
+        titl_candidate = atom[:type] == 'titl' # 配置とpayloadはvalidate_title_boxes!で一括検証する。
         fail!("unsupported #{parent}/#{atom[:type]}", :unsupported) if supported && !supported.include?(atom[:type]) && !titl_candidate
         if atom[:type] == 'meta'
           # version/flagsの確認に、置換予定の画像や旧metadata本文を読み込まない。
@@ -209,26 +210,55 @@ module TagLib::MP4
       end
     end
 
-    # 位置に依存しない3GPP Title boxだけをopaque payloadとして通過させる。
+    # movie/trackのuser data内のTitleを個別検証し、順序・重複を含めてraw保持する。
     def validate_title_boxes!
-      titles = []
-      walk(@atoms) { |atom| titles << atom if atom[:type] == 'titl' }
-      return if titles.empty?
+      @title_contexts = []
+      collect_title_contexts(@atoms)
+      @title_contexts.each do |context|
+        atom = context.fetch(:atom)
+        @title_payloads[atom[:offset]] = validated_title_payload(context)
+      end
+    end
 
-      movie_udta = @moov[:children].select { |atom| atom[:type] == 'udta' }
-      allowed = movie_udta.flat_map { |udta| udta[:children].select { |atom| atom[:type] == 'titl' } }
-      fail!('unsupported titl location', :unsupported) unless titles == allowed
-      fail!('multiple moov/udta/titl atoms', :unsupported) unless allowed.one?
-
-      atom = allowed.first
-      fail!('unsupported titl header width', :unsupported) unless atom[:payload_offset] - atom[:offset] == 8
+    # 単一Titleの保持条件を検証し、失敗には原本上の位置を付与する。
+    def validated_title_payload(context)
+      atom = context.fetch(:atom)
+      unless [%w[moov udta], %w[moov trak udta]].include?(context.fetch(:ancestors))
+        fail!('unsupported titl location: expected movie or track user data', :unsupported)
+      end
       raw_atom = bytes(atom)
       declared_size = raw_atom.unpack1('N')
-      fail!('unsupported titl size form', :unsupported) if declared_size.zero? || declared_size == 1
-      fail!('malformed titl atom boundary', :malformed) unless declared_size == atom[:end_offset] - atom[:offset]
-      raw = raw_atom.byteslice(8..)
+      fail!('unsupported titl zero size form', :unsupported) if declared_size.zero?
+      header = atom[:payload_offset] - atom[:offset]
+      declared_size = raw_atom.byteslice(8, 8).unpack1('Q>') if declared_size == 1
+      fail!('malformed titl atom boundary') unless declared_size == length(atom)
+      raw = raw_atom.byteslice(header..)
       validate_title_payload!(raw)
-      @title_payloads[atom[:offset]] = raw
+      raw
+    rescue ChapterReferenceError => error
+      fail_title!(context, error.message, error.code)
+    end
+
+    # 同種兄弟の番号付きpathを保持し、複数track・重複Titleの拒否箇所を特定する。
+    def collect_title_contexts(atoms, ancestors = [], path = '')
+      counts = Hash.new(0)
+      atoms.each do |atom|
+        type = atom[:type]
+        counts[type] += 1
+        current = "#{path}/#{type}[#{counts[type]}]"
+        if type == 'titl'
+          @title_contexts << { atom: atom, ancestors: ancestors, path: current }
+        end
+        collect_title_contexts(atom[:children], ancestors + [type], current) if atom[:children].any?
+      end
+    end
+
+    # 共通解析失敗でも、公開診断まで実座標と具体的な拒否理由を失わない。
+    def fail_title!(context, message, code = :unsupported)
+      atom = context.fetch(:atom)
+      issue = { code: code, message: message, location: context.fetch(:path),
+                details: { atom_path: context.fetch(:path), offset: atom[:offset], size: length(atom) } }
+      raise ChapterReferenceError.new(message, code: code, issues: [issue])
     end
 
     # 対応するversion・言語・文字列表現だけを検証し、元bytesの再構成は行わない。
@@ -251,7 +281,7 @@ module TagLib::MP4
     def validate_title_utf16!(text)
       fail!('malformed titl UTF-16 payload', :malformed) unless text.bytesize.even? && text.end_with?("\0\0".b)
       body = text.byteslice(0, text.bytesize - 2).force_encoding(Encoding::UTF_16BE)
-      fail!('malformed titl UTF-16 payload', :malformed) unless body.valid_encoding? && !body.byteslice(2..).to_s.include?("\0\0".b)
+      fail!('malformed titl UTF-16 payload', :malformed) unless body.valid_encoding? && !body.byteslice(2..).unpack('n*').include?(0)
     end
 
     def validate_title_utf8!(text)
@@ -271,6 +301,8 @@ module TagLib::MP4
 
     def preservation_value(atom)
       return @edits.fetch(atom[:offset]) if @edits.key?(atom[:offset])
+      # Titleはpayloadだけでなくheader形式も含めて独立再読込時に保持を検証する。
+      return [length(atom), Digest::SHA256.hexdigest(bytes(atom))] if atom[:type] == 'titl'
       return payload(atom).unpack('N*') if atom[:type] == 'chap'
       return offset_signature(@offset_tables.fetch(atom[:offset])) if @offset_tables.key?(atom[:offset])
       return preservation(atom[:children]) if atom[:children].any?
@@ -563,6 +595,11 @@ module TagLib::MP4
       target = @moov[:children].find { |atom| atom[:type] == 'trak' && track_info(atom).first == @target_track_id }
       fail!('QuickTime chapter track is missing', :missing_reference) unless target
       fail!('QuickTime chapter track is shared by another reference', :shared_reference) if other_target_references?(target)
+      title = @title_contexts.find do |context|
+        atom = context.fetch(:atom)
+        atom[:offset] >= target[:offset] && atom[:end_offset] <= target[:end_offset]
+      end
+      fail_title!(title, 'cannot preserve titl inside removed QuickTime chapter track') if title
 
       @selected_keys = rows.to_h { |row| [reference_key(row), true] }
       @removal = rows

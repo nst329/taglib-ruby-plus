@@ -171,3 +171,12 @@ strictモードの世代確認SHAは既存仕様どおり別走査になり得�
 cleanup失敗後のGCによる一時link削除が公開出力のctimeを変える問題を、GC finalizerのない明示管理Fileで解消した。公開後cleanup失敗は既存のcommitted=trueと一時pathを保持し、GC後もそのpathが勝手に削除されないことを検証する。
 
 実行結果、I/O比較値、未検証範囲は[検証メモ](Memos/2026-10-20-限定修復と全体I-O見直しの検証.md)、全体の判断理由は[重複I/O削減ADR](ADR/2026-10-20-診断と保存検証の重複I-Oを削減する.md)を参照する。
+
+
+## 非対象titlの保持と共通構造失敗
+
+movieとtrackのudta内のtitlは、個数・track ID・同一payloadの重複で制限せず、各atomの境界・FullBox・言語・文字列表現を検証する。配置・順序・headerを含むraw bytesを保持し、保存時の独立再読込でもraw署名を比較する。削除対象のchapter track内にある場合は保持不能としてblocked。通常metadata setterの保持保証には拡張しない。
+
+全体構造の解析に失敗した場合はmetadata/quicktimeを両方blockedとし、同一issuesのdetailsにscope=shared_structure、affected_areas、diagnosis=incompleteを残す。未診断領域をnot_neededにしない。titl由来の拒否では実際の番号付きatom path・絶対offset・header込みsizeを伝播し、固定のmoov/udta/titlへ置換しない。
+
+対応条件・対象実ファイルの調査結果・制限は[主資料のtrack内titl対応](mp4-chapter-plan-safety-design.md#track内titlの保持対応2026-10-21)、理由は[ADR](../Docs/ADR/2026-10-21-track内の複数titlをraw保持する.md)を参照する。

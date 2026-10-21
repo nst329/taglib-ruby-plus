@@ -8,6 +8,19 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.37
+
+### Added
+- `moov/udta/titl`と`moov/trak/udta/titl`の複数atomを、検証済みraw bytesのまま限定修復で保持できるようにした。
+- `titl`の実際のatom path、offset、size、拒否理由を診断へ保持し、共通構造解析の失敗をmetadataとQuickTimeの両方へ伝播するようにした。
+
+### Changed
+- `titl`の検証・保持署名と限定修復の診断補完を整理し、既存のI/O・世代検証・原子的保存契約を維持した。
+- MListNewは修正版を利用するため、taglib-ruby-plus依存を2.3.2.37へ更新する必要がある。
+
+### Fixed
+- 正常なtrack内`titl`を固定の`moov/udta/titl`配置制限でunsupported扱いしていた問題を修正した。
+
 ## 2.3.2.36
 
 ### Fixed

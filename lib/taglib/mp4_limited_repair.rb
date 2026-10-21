@@ -44,15 +44,22 @@ module TagLib::MP4
         raise if error.code == :source_changed
         status = %i[quicktime_complete quicktime_absent].include?(error.code) ? :not_needed : :blocked
         @quicktime_report = { status: status, reason_code: error.code,
-          target_track_id: nil, track_ids: @track_ids, issues: status == :blocked ? [{ code: error.code, message: error.message }] : [] }
+          target_track_id: nil, track_ids: @track_ids, issues: status == :blocked ? repair_failure_issues(error) : [] }
       end
       begin
         prepare_metadata_edits
       rescue ChapterReferenceError => error
         raise if error.code == :source_changed
         @metadata_report = { status: :blocked, reason_code: error.code,
-          issues: [{ code: error.code, message: error.message }] }
+          issues: repair_failure_issues(error) }
       end
+    end
+
+    # 解析済みの具体的な診断を優先し、情報のない拒否だけを補完する。
+    def repair_failure_issues(error)
+      return error.issues unless error.issues.empty?
+
+      [{ code: error.code, message: error.message }]
     end
 
     # 原本raw bytes上で不正indexだけを除き、保持対象はnativeへ変換しない。

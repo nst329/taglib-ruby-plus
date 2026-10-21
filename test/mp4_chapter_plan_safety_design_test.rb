@@ -168,34 +168,199 @@ class MP4ChapterPlanSafetyDesignTest < Test::Unit::TestCase
     assert_equal original, Digest::SHA256.file(@path).hexdigest
   end
 
-  def test_titl_outside_movie_udta_and_malformed_payload_remain_blocked
+  def test_titl_outside_user_data_and_malformed_payload_remain_blocked
     title = [0, (5 << 10) | (14 << 5) | 7].pack('Nn') + "タイトル\0".b
     edit_fixture(@path) do |moov|
       track = fixture_tracks(moov).first
-      track[:children] << { type: 'udta', children: [{ type: 'titl', data: title }] }
+      track[:children] << { type: 'titl', data: title }
     end
     API.open(@path) do |file|
       report = file.diagnose(:chapter_references)
       assert_equal :unsupported, report[:status]
       assert_include report[:issues].first[:message], 'titl location'
-      assert_equal 'moov/udta/titl', report[:issues].first[:location]
+      assert_equal '/moov[1]/trak[1]/titl[1]', report[:issues].first[:location]
     end
 
     edit_fixture(@path) do |moov|
       udta = fixture_child(moov, 'udta')
-      fixture_tracks(moov).each { |track| track[:children].reject! { |child| child[:type] == 'udta' } }
+      fixture_tracks(moov).each { |track| track[:children].reject! { |child| child[:type] == 'titl' } }
       udta[:children] << { type: 'titl', data: [0, (5 << 10) | (14 << 5) | 7].pack('Nn') + 'unterminated'.b }
     end
     API.open(@path) do |file|
       report = file.diagnose(:chapter_references)
       assert_equal :malformed, report[:status]
       assert_include report[:issues].first[:message], 'titl UTF-8'
-      assert_equal 'moov/udta/titl', report[:issues].first[:location]
+      assert_equal '/moov[1]/udta[1]/titl[1]', report[:issues].first[:location]
     end
+  end
+
+  # 実例と同じ第3trackの重複Titleを、movie・他trackのTitleと一緒に保持する。
+  def test_duplicate_track_titles_survive_public_combined_repair
+    inject_references
+    inject_metadata(@path, keys: ['a'], indices: [0, 1, 2])
+    title = [0, 0x55c4].pack('Nn') + "日本語（SpeechAnalyzer）\0".b
+    edit_fixture(@path) do |moov|
+      fixture_tracks(moov).each_with_index do |track, index|
+        track[:children] << { type: 'udta', children: Array.new(index == 2 ? 2 : 1) {
+          { type: 'titl', data: title, extended: index == 0 }
+        } }
+      end
+      fixture_child(moov, 'udta')[:children] << { type: 'titl', data: title }
+    end
+    original = File.binread(@path)
+    titles = title_inventory(@path)
+    expected_meta = meta_for_title_test(@path)
+    fixture_child(expected_meta, 'ilst')[:children].select! { |item| item[:type] == [1].pack('N') || item[:type] == "\xa9nam".b }
+    API.open(@path) do |file|
+      plan = file.plan_limited_repairs(mdta_layout: :mixed_known_fourcc)
+      assert_equal :repairable, plan.status
+      assert_equal %i[remove_invalid_mdta_indices remove_dangling_chapter_references], plan.required_operations
+      file.apply_limited_repairs(plan: plan, allow: plan.required_operations)
+      result = file.save!(to: @output, snapshots: [:chapters])
+      assert_equal true, result[:committed]
+    end
+    assert_equal original, File.binread(@path)
+    assert_equal titles, title_inventory(@output)
+    assert_equal render_boxes([expected_meta]), render_boxes([meta_for_title_test(@output)])
+    roots = [@path, @output].map { |path| parse_boxes(File.binread(path)) }
+    assert_equal roots[0].select { |atom| atom[:type] == 'mdat' }, roots[1].select { |atom| atom[:type] == 'mdat' }
+    API.open(@output) do |file|
+      assert_equal :unchanged, file.plan_limited_repairs(mdta_layout: :mixed_known_fourcc).status
+      assert_equal ['開始', '本編'], file.read_chapters(style: :nero).map(&:title)
+    end
+  end
+
+  def test_bad_title_reports_actual_coordinates_and_shared_failure
+    title = [0, 0x55c4].pack('Nn') + 'unterminated'.b
+    edit_fixture(@path) do |moov|
+      fixture_tracks(moov)[2][:children] << { type: 'udta', children: [{ type: 'titl', data: title }] }
+    end
+    original = File.binread(@path)
+    API.open(@path) do |file|
+      plan = file.plan_limited_repairs
+      assert_equal :blocked, plan.status
+      assert_equal :blocked, plan.metadata[:status]
+      assert_equal :blocked, plan.quicktime[:status]
+      issue = plan.metadata[:issues].first
+      assert_equal issue, plan.quicktime[:issues].first
+      assert_equal '/moov[1]/trak[3]/udta[1]/titl[1]', issue[:location]
+      assert_equal :shared_structure, issue[:details][:scope]
+      assert_equal :incomplete, issue[:details][:diagnosis]
+      assert_equal %i[metadata quicktime], issue[:details][:affected_areas]
+      assert_equal atom_box('titl', title), original.byteslice(issue[:details][:offset], issue[:details][:size])
+      assert_raise(API::Error) { file.apply_limited_repairs(plan: plan, allow: []) }
+      assert_false file.changes[:changed]
+    end
+    assert_equal original, File.binread(@path)
+    assert_false File.exist?(@output)
+  end
+
+  def test_title_payload_profiles_and_rejections
+    prefix = [0, 0x55c4].pack('Nn')
+    cases = {
+      utf8: [prefix + "日本語\0".b, :unchanged],
+      utf16: [prefix + "\xfe\xff".b + "日本語".encode('UTF-16BE').b + "\0\0".b, :unchanged],
+      utf16_aligned: [prefix + "\xfe\xff\x01\x00\x00\x41\0\0".b, :unchanged],
+      flags: [[1, 0x55c4].pack('Nn') + "x\0".b, :unsupported],
+      language: [[0, 0].pack('Nn') + "x\0".b, :unsupported],
+      truncated: ["\0".b, :malformed],
+      utf8_invalid: [prefix + "\xff\0".b, :malformed],
+      utf8_embedded_null: [prefix + "a\0b\0".b, :malformed],
+      utf16_unterminated: [prefix + "\xfe\xff\x00\x41".b, :malformed],
+      utf16_surrogate: [prefix + "\xfe\xff\xd8\x00\0\0".b, :malformed]
+    }
+    cases.each do |name, (payload, expected)|
+      edit_fixture(@path) do |moov|
+        track = fixture_tracks(moov)[2]
+        track[:children].reject! { |node| node[:type] == 'udta' }
+        track[:children] << { type: 'udta', children: [{ type: 'titl', data: payload }] }
+      end
+      API.open(@path) do |file|
+        plan = file.plan_limited_repairs
+        if expected == :unchanged
+          assert_equal :unchanged, plan.status, name.to_s
+        else
+          assert_equal :blocked, plan.status, name.to_s
+          assert_equal expected, plan.metadata[:reason_code], name.to_s
+          assert_equal '/moov[1]/trak[3]/udta[1]/titl[1]', plan.metadata[:issues].first[:location]
+        end
+      end
+    end
+  end
+
+  def test_zero_size_title_is_blocked_with_actual_coordinates
+    title = [0, 0x55c4].pack('Nn') + "zero-size-title\0".b
+    edit_fixture(@path) do |moov|
+      fixture_tracks(moov)[2][:children] << { type: 'udta', children: [{ type: 'titl', data: title }] }
+    end
+    data = File.binread(@path)
+    offset = data.index(atom_box('titl', title))
+    data[offset, 4] = [0].pack('N')
+    File.binwrite(@path, data)
+    API.open(@path) do |file|
+      plan = file.plan_limited_repairs
+      assert_equal :blocked, plan.status
+      issue = plan.metadata[:issues].first
+      assert_include issue[:message], 'zero size'
+      assert_equal '/moov[1]/trak[3]/udta[1]/titl[1]', issue[:location]
+      assert_equal offset, issue[:details][:offset]
+      assert_equal title.bytesize + 8, issue[:details][:size]
+    end
+    assert_equal data, File.binread(@path)
+  end
+
+  def test_title_in_removed_chapter_track_blocks_deletion_with_coordinates
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
+      file.set_chapters([TagLib::MP4::Chapter.new(0, 'QT')], style: :quicktime)
+      assert file.save_chapters
+    end
+    edit_fixture(@path) do |moov|
+      target = fixture_tracks(moov).find { |track| fixture_child(fixture_child(track, 'mdia'), 'hdlr')[:data].byteslice(8, 4) == 'text' }
+      target[:children] << { type: 'udta', children: [{ type: 'titl', data: [0, 0x55c4].pack('Nn') + "keep\0".b }] }
+      fixture_child(fixture_child(target, 'mdia'), 'mdhd')[:data][16, 4] = [99].pack('N')
+    end
+    original = File.binread(@path)
+    API.open(@path) do |file|
+      plan = file.plan_limited_repairs
+      assert_equal :blocked, plan.status
+      assert_equal :not_needed, plan.metadata[:status]
+      issue = plan.quicktime[:issues].first
+      assert_include issue[:message], 'cannot preserve titl inside removed'
+      assert_match(%r{/moov\[1\]/trak\[\d+\]/udta\[1\]/titl\[1\]}, issue[:location])
+      assert_equal 'titl', original.byteslice(issue[:details][:offset] + 4, 4)
+      assert_raise(API::Error) { file.apply_limited_repairs(plan: plan, allow: [:remove_broken_quicktime_chapters]) }
+    end
+    assert_equal original, File.binread(@path)
+    assert_false File.exist?(@output)
+  end
+
+  # 独立parserで配置・個数・順序とheader込みのraw bytesを比較する。
+  def title_inventory(path)
+    rows = []
+    visit = lambda do |nodes, parent|
+      counts = Hash.new(0)
+      nodes.each do |node|
+        counts[node[:type]] += 1
+        current = "#{parent}/#{node[:type]}[#{counts[node[:type]]}]"
+        rows << [current, render_boxes([node])] if node[:type] == 'titl'
+        visit.call(node[:children], current) if node[:children]
+      end
+    end
+    visit.call([read_fixture_moov(path).first], '')
+    rows
+  end
+
+  def meta_for_title_test(path)
+    fixture_child(fixture_child(read_fixture_moov(path).first, 'udta'), 'meta')
   end
 
   def test_failed_verification_keeps_original_and_cleans_partial_output
     inject_references
+    edit_fixture(@path) do |moov|
+      fixture_tracks(moov)[2][:children] << { type: 'udta', children: [
+        { type: 'titl', data: [0, 0x55c4].pack('Nn') + "keep on failure\0".b }
+      ] }
+    end
     original = Digest::SHA256.file(@path).hexdigest
     inventory = Dir.children(@dir).sort
     API.open(@path) do |file|

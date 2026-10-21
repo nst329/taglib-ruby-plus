@@ -34,14 +34,14 @@
 
 参照: [3GPP TS 26.244 V2.0.0 表8.1](https://www.3gpp.org/ftp/TSG_SA/TSG_SA/TSGS_23/Docs/PDF/SP-040065.pdf)。これは実作品形式の証拠ではなく、対応profileの根拠である。
 
-初期対応を以下に限定する。
+現在の保持条件は以下とする（2026-10-21のtrack配置対応で更新）。
 
-1. `moov/udta/titl`のみ。track内udta、他階層、複数titlは当初未対応として拒否する。配置の拡大は別途fixtureと規格確認を伴う。
-2. 通常8-byte headerの明示sizeで親境界内に収まるleaf。size=0、拡張headerは初期profile外とする。
+1. `moov/udta/titl`と`moov/trak/udta/titl`。movie・複数track・複数udta内の複数titlを各個に検証する。同一言語の重複も非対象データとして元順序で保持し、規格への意味的な正規化は行わない。他階層は拒否する。
+2. 通常8-byteまたは拡張16-byte headerの明示sizeで親境界内に収まるleaf。size=0は親末尾依存の表現として引き続き未対応。
 3. full boxの4 bytesがすべて0。languageのpad bit=0、各5 bitが1..26。非対応version/flagsや言語表現はunsupportedとする。
 4. UTF-8は妥当な符号列で、最後の1 byteだけがNUL。UTF-16はFE FF BOMを持つBE表現、偶数長、妥当なsurrogate、末尾の2 bytesだけが終端。空文字列も終端があれば許可する。LE BOMは当初profile外とする。
-5. 宣言済みversion=0で本文が短い、終端欠落、文字列破損ならmalformed。未対応配置・version・重複・不明な末尾データはunsupported。いずれも編集はblocked。
-6. 検証は意味の再シリアライズをしない。全payloadと元headerを保持し、保存後は独立handleで配置・順序・個数・payload長/hashを比較する。Nero/chplとmetadata/artworkも従来どおり保持する。
+5. 宣言済みversion=0で本文が短い、終端欠落、文字列破損ならmalformed。未対応配置・versionはunsupported。不明な文字列末尾データはmalformed。いずれも編集はblocked。
+6. 検証は意味の再シリアライズをしない。全payloadと元headerを保持し、保存後は独立handleで配置・順序・個数・header込みraw長/hashを比較する。Nero/chplとmetadata/artworkも従来どおり保持する。
 
 `STRUCTURES`への無条件追加は行わず、titl専用の条件付き検証経路を設ける。許可条件を診断・時間診断・参照解除・専用track除去・限定修復で共有する。通常のnative metadata/chapter setterがtitlを保持するとの保証には拡張しない。正常QuickTimeはtitl対応後も限定除去の`:complete`であり、壊れたchapterとして削除しない。KBI-060は時間異常がなければ、この結果になる可能性がある。
 
@@ -67,9 +67,9 @@
 
 ```ruby
 # 追加するissue形式の例。offsetは原本の絶対byte位置。
-{ code: :unsupported, message: 'unsupported udta/titl',
-  location: 'moov/udta/titl',
-  details: { offset: 1234, size: 40, profile: :unsupported } }
+{ code: :unsupported, message: 'unsupported titl location: expected movie or track user data',
+  location: '/moov[1]/trak[3]/titl[1]',
+  details: { atom_path: '/moov[1]/trak[3]/titl[1]', offset: 1234, size: 40 } }
 
 { code: :missing_reference, message: 'chapter reference target is missing',
   location: 'moov/trak/tref/chap',
@@ -181,3 +181,24 @@ Plus保存は既存の逐次コピーとmedia hashを使い、出力の独立走
 実行結果: Ruby構文チェック成功。追加10 tests / 99 assertions、失敗・エラー・省略0。既存関連テストと合わせて72 tests / 869 assertions、失敗・エラー・省略0。[責務整理とtitl再読込削減ADR](ADR/2026-10-21-chapter計画の責務整理とtitl再読込削減.md)にリファクタリングの判断を記録した。
 
 未検証: UTF-16 titl、新計画の世代変更後拒否、今回fixtureでのmoov先頭配置と移動、未知backend、実作品。共有専用target・実在text chapterへの字幕source拒否は既存テスト側の確認範囲である。
+
+
+## track内titlの保持対応（2026-10-21）
+
+ALDN-046の実原本を読み取り専用で調査した。`/moov[1]/trak[3]/udta[1]/titl[1]`（offset 5,110,176）と`titl[2]`（offset 5,110,220）があり、各size=44、通常header=8、payload=36 bytes。payloadのhexは両方とも次のとおり。
+
+```text
+0000000055c4e697a5e69cace8aa9eefbc88537065656368416e616c797a6572efbc8900
+```
+
+version/flags=0、language=`und`、UTF-8「日本語（SpeechAnalyzer）」と終端NUL。atom境界・文字列表現の破損は認めなかった。trackのudta配置は[ETSI TS 126 244 V16.0.0 §8.2、表8.1](https://www.etsi.org/deliver/etsi_ts/126200_126299/126244/16.00.00_60/ts_126244v160000p.pdf)に認められる。一方、同一言語の重複は同節の言語ごとの個数制約には適合しない。ファイル全体を規格準拠と断定せず、「位置依存情報のない検証済みTitleを非対象データとして保持できる」と判断した。重複の統合・削除は修復対象に含めない。
+
+修復で削除する専用chapter trackにtitlがある場合は、移動・削除なしに保持できないためblocked。全体構造の解析が失敗した場合は両領域をblockedとし、同じissuesに`details.scope=shared_structure`、`affected_areas=[metadata, quicktime]`、`diagnosis=incomplete`を付ける。検証済みtitlの拒否では実際の番号付きatom path、絶対offset、header込みsizeを伝播する。atom indexの生成自体に失敗した場合、確定していない座標は捏造しない。
+
+同じ配置の合成fixtureでmetadataの不正index除去と欠落参照解除を合成し、公開APIの計画・適用・別出力保存・独立再読込を確認。movie/複数track/同一track内重複・拡張headerのraw保持、Nero、非対象metadata、mdatを比較した。UTF-8とBOM付きUTF-16BE、非対応version/flags/言語、不正終端・surrogate、size=0、対象track削除拒否、保存検証失敗時の原本保持を検証した。UTF-16内のNUL判定はbyte境界でなく16-bit符号単位で行い、隣り合う文字をまたぐ00 00の誤検出を解消した。
+
+実原本の公開計画は変更後`unchanged`（metadata_complete / quicktime_absent）となり、今回の限定修復で除去する項目はなかった。`save!(to:)`で一時領域への無変更別出力と独立再読込を実行し、原本・出力SHA-256はともに`16ee7ee3a4c3b706823e486458aea15d3dc8bf22256123de4db111b4fe475c96`、titlの配置・個数・raw bytesも一致した。実原本に修復が発生したとの結果には扱わない。MListNewのblocked尊重・保存手順は変更不要で、gemの更新が必要。
+
+判断とI/Oの評価は[ADR](../Docs/ADR/2026-10-21-track内の複数titlをraw保持する.md)、詳細な検証結果は[検証記録](Memos/2026-10-21-track内titlの調査と検証.md)を参照する。過去節にある未検証条件のうち、今回の対象ファイル・UTF-16BEの合成fixtureはここに記した範囲で検証済み。他OS/backendは未検証。
+
+保持対応後の整理では、単一titl検証と一覧cache登録を分離し、contextを走査順のArrayで保持する。具体的なissuesを優先する診断補完も層ごとのprivate helperへ集約した。対応profile、公開診断、blocked条件、I/Oと保存契約は変更しない。
