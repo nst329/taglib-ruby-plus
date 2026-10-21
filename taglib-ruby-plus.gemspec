@@ -406,6 +406,17 @@ Gem::Specification.new do |s|
     'docs/native-gem-design.md'
   ]
 
+  # gemには実行・ビルドに必要なファイルだけを収録する。設計資料とテストは
+  # リポジトリで管理するが、利用者へ配布する成果物には含めない。
+  build_tasks = %w[tasks/build_native_gem.rb tasks/build.rb tasks/ext.rake
+                   tasks/swig_ruby_runtime_patch.rb tasks/swig.rake]
+  s.files.select! do |path|
+    next false if path.start_with?('docs/', 'test/') || path == 'AGENTS.md'
+    next build_tasks.include?(path) if path.start_with?('tasks/')
+
+    true
+  end
+
   if native_platform
     s.files.concat(Dir['lib/*.bundle'])
     s.files.concat(Dir['lib/taglib_plus/native/**/*'].select { |path| File.file?(path) })
