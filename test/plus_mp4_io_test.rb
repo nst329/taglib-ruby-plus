@@ -286,7 +286,7 @@ class PlusMP4IOTest < Test::Unit::TestCase
       file.metadata = file.metadata.with(mdta: { 'custom' => [API::MdtaValue.new(data_type: 1, locale: 7, data: 'value')] })
       result = file.save!
       assert_equal 2, calls.length
-      assert_equal File.realpath(@source), calls.first.first
+      assert_equal File.expand_path(@source), calls.first.first
       assert calls.first.last[:destination]
       assert_empty calls.last.last
       assert_equal result[:output_digest], Digest::SHA256.file(@source).hexdigest

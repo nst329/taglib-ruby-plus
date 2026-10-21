@@ -854,6 +854,9 @@ module TagLib
             load_metadata if changed && @repair_kind != :limited_repairs
             @source_scan = nil
             prepare_candidate(temporary_path, changed: changed)
+            # prepare_candidate内の正規化・編集が候補を同一pathへ原子的に置換する場合を反映する。
+            temporary_identity = path_identity(temporary_path)
+            @temporary_cleanup_identity = temporary_identity
             source_digest = @source_scan.fetch(:digest)
             phase = :verify
             output_generation = Generation.new(temporary_path, :stat)

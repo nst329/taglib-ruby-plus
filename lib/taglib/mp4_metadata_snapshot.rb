@@ -386,6 +386,7 @@ module TagLib::MP4
     def safe_pair?(contexts)
       return false unless contexts.is_a?(Array) && contexts.length == 2
       return false unless contexts.map { |context| context[:handler] }.sort == %w[mdir mdta]
+      return false unless contexts.all? { |context| context.key?(:parent_offset) && context.key?(:parent_end_offset) }
       parents = contexts.map { |context| [context[:parent_offset], context[:parent_end_offset]] }
       return false unless parents.uniq.length == 1
       return false if contexts.any? { |context| context[:path] && context[:path] != 'moov/udta/meta' }
@@ -416,7 +417,12 @@ module TagLib::MP4
       @ordinary_keys = {}
       ::File.open(path, 'rb') { |io| walk(io, 0, io.stat.size, [], nil) }
       issue(:multiple_meta, 'metadata', 'multiple metadata contexts') if @metas.length > 1 && !MetadataContextPolicy.safe_pair?(@metas)
-      { issues: @issues, structure: { contexts: @metas } }
+      contexts = if @detailed
+                   @metas
+                 else
+                   @metas.map { |context| context.slice(:path, :handler, :keys) }
+                 end
+      { issues: @issues, structure: { contexts: contexts } }
     rescue ParseError => error
       { issues: [{ code: :unreadable_structure, severity: :error, path: 'metadata', message: error.message }], structure: {} }
     end
@@ -644,7 +650,8 @@ module TagLib::MP4
       native = respond_to?(:_metadata_status) ? _metadata_status : :unknown
       entries = item_map.to_a
       info = if @metadata_source_path
-               MetadataStructureReader.read(@metadata_source_path, item_types: @metadata_disk_item_types || entries.to_h { |key, item| [key, item.type] })
+               MetadataStructureReader.read(@metadata_source_path, detailed: true,
+                                            item_types: @metadata_disk_item_types || entries.to_h { |key, item| [key, item.type] })
              else
                { issues: [{ code: :unbound_tag, severity: :error, path: 'metadata', message: 'File-owned Tag required' }], structure: {} }
              end
@@ -663,6 +670,7 @@ module TagLib::MP4
         issues << { code: :unsupported_item, severity: :error, path: 'metadata/ilst', key: key,
                     message: 'item type/encoding cannot round-trip through native writer' }
       end
+      structure = { contexts: structure.fetch(:contexts).map { |context| context.slice(:path, :handler, :keys) } } if structure[:contexts]
       if native == :editable && structure[:contexts]&.length == 1
         structure = { contexts: [structure[:contexts].first.merge(keys: _metadata_keys)] }
       end

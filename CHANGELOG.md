@@ -10,6 +10,13 @@ revision of a specific TagLib release.
 
 ## 開発中
 
+## 2.3.2.39
+
+### Fixed
+
+- `prepare_candidate`中に候補を同一pathへ原子的に置換する保存処理を許容し、検証後の外部差し替えはcleanup前のdev/inode確認で拒否するようにした。
+- 通常ファイルの原表記を保持する保存経路に合わせ、候補走査のpath契約テストを更新した。
+
 - `verification: :sha256`で基準SHAを取得したSMB原本のctime-only差分は、fd/pathの内容SHA256が一致する場合だけ継続し、dev/inode/size/mtime差や内容差は`source_changed`で拒否するようにした。比較時のexpected/handle/path statをissuesへ記録する。stat既定は従来どおり厳格検証する。
 - SMB上のNFDファイル名を`File.realpath`がNFCへ変換して再open不能にする場合に備え、通常ファイルは入力経路をそのまま保持し、symlinkだけ同一実体を確認したcanonical pathへ解決する。
 - 通常ファイルのopen/saveでは入力のUnicode表記を保持し、symlinkだけを同一dev/ino確認後に解決するようにした。出力の存在判定は`lstat`へ変更し、一時候補のcleanup前に作成時dev/inoを再確認して別実体を削除しないようにした。
