@@ -181,13 +181,25 @@ class MP4ItemsTest < Test::Unit::TestCase
       end
 
       should 'release borrowed wrappers when the file closes' do
-        baseline = eval('$SWIG_TRACKINGS_COUNT')
-        file = TagLib::MP4::File.new('test/data/mp4.m4a')
-        file.tag.item_map
-        assert_operator eval('$SWIG_TRACKINGS_COUNT'), :>, baseline
-
-        file.close
-        assert_equal baseline, eval('$SWIG_TRACKINGS_COUNT')
+        # 他のテストのFile finalizerによる追跡数の変動を切り離して検証する。
+        script = <<~'RUBY'
+          require 'taglib_plus'
+          GC.start
+          GC.disable
+          baseline = eval('$SWIG_TRACKINGS_COUNT')
+          100.times do
+            file = TagLib::MP4::File.new(ARGV.fetch(0))
+            map = file.tag.item_map
+            art = map['covr'].to_cover_art_list.first
+            raise 'borrowed wrappers were not tracked' unless eval('$SWIG_TRACKINGS_COUNT') > baseline
+            file.close
+            raise "tracking count changed: #{baseline} -> #{eval('$SWIG_TRACKINGS_COUNT')}" unless eval('$SWIG_TRACKINGS_COUNT') == baseline
+          end
+        RUBY
+        fixture = File.expand_path('data/mp4.m4a', __dir__)
+        lib = File.expand_path('../lib', __dir__)
+        stdout, stderr, status = Open3.capture3(RbConfig.ruby, "-I#{lib}", '-e', script, fixture)
+        assert_predicate status, :success?, "child process failed: #{stdout}\n#{stderr}"
       end
 
       should 'not track owned Item factory results' do
