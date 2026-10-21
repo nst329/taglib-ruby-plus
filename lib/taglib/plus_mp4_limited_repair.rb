@@ -137,6 +137,7 @@ module TagLib::Plus::MP4
       unless checked.report == @repair_plan.retained_report && checked.preservation_signature == @repair_plan.preservation_signature
         raise IOError, 'limited repair preservation verification failed'
       end
+      verify_metadata_contexts(native)
       raise IOError, 'media verification failed' unless @source_scan.fetch(:media) == @output_scan.fetch(:media)
       if @limited_repair_plan.quicktime[:status] == :required
         if @limited_repair_plan.quicktime[:operation] == :remove_dangling_chapter_references
@@ -146,6 +147,17 @@ module TagLib::Plus::MP4
         end
       end
       capture_snapshots(native, @requested_snapshots)
+    end
+
+    # 保存後も同じcontext許可条件を再解析し、不明な構造を成功扱いしない。
+    def verify_metadata_contexts(native)
+      report = native.metadata_context_diagnostics
+      contexts = report.fetch(:structure).fetch(:contexts)
+      if contexts.length > 1 && !::TagLib::MP4::MetadataContextPolicy.safe_pair?(contexts)
+        raise IOError, 'metadata context preservation verification failed'
+      end
+      issues = report.fetch(:issues).reject { |issue| issue[:code] == :unrepresented_item }
+      raise IOError, 'metadata context validation failed' unless issues.empty?
     end
 
     # 欠落参照解除ではtrack atomを残し、missing targetのchapだけがないことを確認する。

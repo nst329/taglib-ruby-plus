@@ -8,6 +8,22 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 開発中
+
+- `verification: :sha256`で基準SHAを取得したSMB原本のctime-only差分は、fd/pathの内容SHA256が一致する場合だけ継続し、dev/inode/size/mtime差や内容差は`source_changed`で拒否するようにした。比較時のexpected/handle/path statをissuesへ記録する。stat既定は従来どおり厳格検証する。
+- SMB上のNFDファイル名を`File.realpath`がNFCへ変換して再open不能にする場合に備え、通常ファイルは入力経路をそのまま保持し、symlinkだけ同一実体を確認したcanonical pathへ解決する。
+- 通常ファイルのopen/saveでは入力のUnicode表記を保持し、symlinkだけを同一dev/ino確認後に解決するようにした。出力の存在判定は`lstat`へ変更し、一時候補のcleanup前に作成時dev/inoを再確認して別実体を削除しないようにした。
+
+## 2.3.2.38
+
+### Added
+- 同一`moov/udta`内の検証済み`mdir`+`mdta` metadata context pairを限定修復で保持し、`mdta`の不正indexだけを除去できるようにした。
+- pairの親atom実体、handler、子atom、keys、順序を診断・計画・保存後検証で共通確認するテストを追加した。
+
+### Changed
+- 複数metadata contextは安全な2個のpairだけを許可し、3個以上、同種handler、別`udta`、未知子atom、境界不明は従来どおりblockedとする。
+- mdir contextはnative setterへ変換せずraw保持し、保存後の独立再openで限定修復計画を再確認する。
+
 ## 2.3.2.37
 
 ### Added

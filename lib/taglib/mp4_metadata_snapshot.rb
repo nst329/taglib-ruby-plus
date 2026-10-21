@@ -378,6 +378,24 @@ module TagLib::MP4
     end
   end
 
+  # 診断・限定修復・保存後検証で共有するcontext集合の許可条件。
+  module MetadataContextPolicy
+    module_function
+
+    # 個別atomの妥当性は呼出側が検証し、ここでは配置とhandlerの組合せだけを判定する。
+    def safe_pair?(contexts)
+      return false unless contexts.is_a?(Array) && contexts.length == 2
+      return false unless contexts.map { |context| context[:handler] }.sort == %w[mdir mdta]
+      parents = contexts.map { |context| [context[:parent_offset], context[:parent_end_offset]] }
+      return false unless parents.uniq.length == 1
+      return false if contexts.any? { |context| context[:path] && context[:path] != 'moov/udta/meta' }
+
+      mdir = contexts.find { |context| context[:handler] == 'mdir' }
+      mdta = contexts.find { |context| context[:handler] == 'mdta' }
+      mdir[:keys] == [] && mdta[:keys].is_a?(Array)
+    end
+  end
+
   # Bounded metadata-only inspection. Media payloads are skipped; no repair/write is performed.
   class MetadataStructureReader
     # 構造拒否だけを診断へ変換し、I/O障害と実装エラーを伝播させる。
@@ -396,8 +414,8 @@ module TagLib::MP4
       @item_types = item_types
       @issues, @metas, @count = [], [], 0
       @ordinary_keys = {}
-      ::File.open(path, 'rb') { |io| walk(io, 0, io.stat.size, []) }
-      issue(:multiple_meta, 'metadata', 'multiple metadata contexts') if @metas.length > 1 && !valid_context_pair?
+      ::File.open(path, 'rb') { |io| walk(io, 0, io.stat.size, [], nil) }
+      issue(:multiple_meta, 'metadata', 'multiple metadata contexts') if @metas.length > 1 && !MetadataContextPolicy.safe_pair?(@metas)
       { issues: @issues, structure: { contexts: @metas } }
     rescue ParseError => error
       { issues: [{ code: :unreadable_structure, severity: :error, path: 'metadata', message: error.message }], structure: {} }
@@ -407,19 +425,6 @@ module TagLib::MP4
 
     def issue(code, path, message, **fields)
       @issues << { code: code, severity: :error, path: path, message: message, **fields }
-    end
-
-    # Plus保存が通常item(mdir)とmdtaを同じudtaへ配置する形だけを許可する。
-    def valid_context_pair?
-      return false unless @metas.length == 2
-
-      handlers = @metas.map { |context| context[:handler] }
-      return false unless handlers.sort == %w[mdir mdta]
-      return false unless @metas.map { |context| context[:path] }.uniq.length == 1
-
-      mdir = @metas.find { |context| context[:handler] == 'mdir' }
-      mdta = @metas.find { |context| context[:handler] == 'mdta' }
-      mdir[:keys].empty? && mdta[:keys].is_a?(Array)
     end
 
     def boxes(io, start, limit)
@@ -440,28 +445,28 @@ module TagLib::MP4
           size = limit - offset
         end
         raise ParseError, 'invalid atom length' if size < header || size > limit - offset
-        rows << [type, offset + header, offset + size, header]
+        rows << [type, offset + header, offset + size, header, offset]
         offset += size
       end
       rows
     end
 
-    def walk(io, start, limit, path)
+    def walk(io, start, limit, path, parent)
       raise ParseError, 'metadata nesting exceeds limit' if path.length > 8
-      boxes(io, start, limit).each do |type, payload, finish, header|
+      boxes(io, start, limit).each do |type, payload, finish, header, offset|
         current = path + [type]
         if type == 'meta'
           issue(:unsupported_scope, current.join('/'), 'metadata outside moov/udta') unless path == %w[moov udta]
-          inspect_meta(io, payload, finish, current, header)
+          inspect_meta(io, payload, finish, current, header, parent)
         elsif type == 'moof'
           issue(:fragmented_file, current.join('/'), 'fragmented MP4 is unsupported')
         elsif CONTAINERS.include?(type)
-          walk(io, payload, finish, current)
+          walk(io, payload, finish, current, { offset: offset, end_offset: finish, type: type })
         end
       end
     end
 
-    def inspect_meta(io, start, finish, path, header)
+    def inspect_meta(io, start, finish, path, header, parent)
       name = path.join('/')
       raise ParseError, 'metadata exceeds inspection size limit' if finish - start > LIMIT
       issue(:extended_metadata, name, 'extended metadata atom is unsupported') unless header == 8
@@ -483,12 +488,19 @@ module TagLib::MP4
       unless %w[mdta mdir].include?(handler) && ilst && ((handler == 'mdta') == !key_row.nil?)
         issue(:handler_keys_mismatch, name, 'handler/keys/ilst do not match a supported layout')
       end
+      allowed_children = handler == 'mdir' ? %w[hdlr ilst free] : %w[hdlr keys ilst free]
+      children.each do |row|
+        issue(:unsupported_child, name, 'metadata context contains an unsupported child atom', atom_type: row[0]) unless allowed_children.include?(row[0])
+      end
       keys = key_row ? read_keys(io, key_row, name) : []
       context = { path: name, offset: start - header, end_offset: finish, handler: handler, keys: keys,
+                  parent_offset: parent && parent[:offset], parent_end_offset: parent && parent[:end_offset],
                   handler_offset: handler_row && handler_row[1] - handler_row[3],
                   keys_offset: key_row && key_row[1] - key_row[3],
                   ilst_offset: ilst && ilst[1] - ilst[3], items: [] }
-      @metas << (@detailed ? context : { path: name, handler: handler, keys: keys })
+      @metas << (@detailed ? context : { path: name, handler: handler, keys: keys,
+                                          parent_offset: context[:parent_offset],
+                                          parent_end_offset: context[:parent_end_offset] })
       return unless ilst
 
       boxes(io, ilst[1], ilst[2]).each_with_index do |(type, payload, ending, item_header), item_index|
@@ -636,19 +648,17 @@ module TagLib::MP4
              else
                { issues: [{ code: :unbound_tag, severity: :error, path: 'metadata', message: 'File-owned Tag required' }], structure: {} }
              end
-      issues = info[:issues].dup
+      structure = info[:structure]
+      paired_contexts = MetadataContextPolicy.safe_pair?(structure[:contexts])
+      issues = info[:issues].reject { |issue| paired_contexts && issue[:code] == :unrepresented_item }.dup
       if @metadata_file_valid == false
         issues << { code: :invalid_file, severity: :error, path: 'metadata', message: 'native File is invalid' }
       end
-      structure = info[:structure]
-      paired_contexts = structure[:contexts]&.length == 2 &&
-                        structure[:contexts].map { |context| context[:handler] }.sort == %w[mdir mdta] &&
-                        structure[:contexts].map { |context| context[:path] }.uniq.length == 1 &&
-                        structure[:contexts].find { |context| context[:handler] == 'mdir' }[:keys].empty?
       if (native == :unknown || native == :unsupported) && !paired_contexts
         issues << { code: :unsupported_native_structure, severity: :error, path: 'metadata', message: "native status: #{native}" }
       end
       entries.each do |key, item|
+        next if paired_contexts
         next if item.type.between?(1, 9) && respond_to?(:_metadata_item_supported) && _metadata_item_supported(key, item)
         issues << { code: :unsupported_item, severity: :error, path: 'metadata/ilst', key: key,
                     message: 'item type/encoding cannot round-trip through native writer' }

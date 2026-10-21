@@ -12,6 +12,7 @@ module TagLib::MP4
       @metadata_atom_count = 0
       @removed_metadata = []
       @metadata_replacements = {}
+      @metadata_context_headers = {}
       super(file, chapter_report: chapter_report)
     end
 
@@ -64,23 +65,73 @@ module TagLib::MP4
 
     # 原本raw bytes上で不正indexだけを除き、保持対象はnativeへ変換しない。
     def prepare_metadata_edits
-      metas = []
-      walk(@moov[:children]) { |atom| metas << atom if atom[:type] == 'meta' }
-      fail!('multiple metadata contexts', :multiple_meta) if metas.size > 1
+      contexts = metadata_contexts
       @metadata_report = { status: :not_needed, reason_code: :metadata_absent, removed: [] }
-      return if metas.empty?
+      return if contexts.empty?
+      validate_context_set!(contexts)
+      contexts.each { |context| prepare_metadata_context(context) }
+      @metadata_report = { status: @removed_metadata.empty? ? :not_needed : :required,
+        reason_code: @removed_metadata.empty? ? :metadata_complete : :invalid_index, removed: @removed_metadata }
+    end
 
-      meta = metas.first
-      udta = @moov[:children].find { |atom| atom[:type] == 'udta' && atom[:children].include?(meta) }
-      fail!('unsupported metadata location', :unsupported) unless udta
-      raw = bytes(meta)
-      fail!('unsupported metadata header', :unsupported) unless raw.unpack1('N') == raw.bytesize && raw.byteslice(8, 4) == "\0".b * 4
+    # metaの実親を保持し、同じ名前の別udtaを同一contextと誤認しない。
+    def metadata_contexts
+      contexts = []
+      visit = lambda do |atoms, parent|
+        atoms.each do |atom|
+          contexts << { atom: atom, udta: parent } if atom[:type] == 'meta'
+          visit.call(atom[:children], atom) if atom[:children] && !atom[:children].empty?
+        end
+      end
+      visit.call(@moov[:children], nil)
+      contexts
+    end
+
+    # 複数contextは検証済みの同一udta mdir+mdta pairだけ許可する。
+    def validate_context_set!(contexts)
+      return if contexts.one?
+      fail!('multiple metadata contexts', :multiple_meta) unless contexts.size == 2
+      normalized = contexts.map do |context|
+        parent = context[:udta]
+        {
+          handler: metadata_context_header(context).fetch(:handler), keys: [],
+          path: supported_metadata_parent?(parent) ? 'moov/udta/meta' : nil,
+          parent_offset: parent && parent[:offset], parent_end_offset: parent && parent[:end_offset]
+        }
+      end
+      fail!('multiple metadata contexts', :multiple_meta) unless contexts.all? { |context| supported_metadata_parent?(context[:udta]) } &&
+        MetadataContextPolicy.safe_pair?(normalized)
+    end
+
+    def supported_metadata_parent?(parent)
+      parent && parent[:type] == 'udta' && @moov[:children].any? { |atom| atom.equal?(parent) }
+    end
+
+    # contextごとに一度だけ子atomとhandlerを解析し、集合検証と編集で再利用する。
+    # 例: { raw: meta全体のbytes, children: 元順序のatom配列, handler: 'mdta' }。
+    def metadata_context_header(context, raw: nil)
+      meta = context.fetch(:atom)
+      return @metadata_context_headers.fetch(meta[:offset]) if @metadata_context_headers.key?(meta[:offset])
+
+      raw ||= bytes(meta)
       children = boxes(raw, 12)
-      handler = children.select { |row| row[:type] == 'hdlr' }
-      fail!('single metadata handler required', :unsupported) unless handler.one?
-      hdlr = handler.first[:raw]
+      handlers = children.select { |row| row[:type] == 'hdlr' }
+      fail!('single metadata handler required', :unsupported) unless handlers.one?
+      hdlr = handlers.first[:raw]
       fail!('invalid metadata handler', :unsupported) unless hdlr.bytesize >= 32 && hdlr.byteslice(8, 4) == "\0".b * 4
-      if hdlr.byteslice(16, 4) == 'mdir'
+      @metadata_context_headers[meta[:offset]] = { raw: raw, children: children, handler: hdlr.byteslice(16, 4) }
+    end
+
+    # 保持するmdirと編集するmdtaを同じraw構造検証へ通す。
+    def prepare_metadata_context(context)
+      meta = context[:atom]
+      fail!('unsupported metadata location', :unsupported) unless supported_metadata_parent?(context[:udta])
+      raw = @metadata_context_headers.dig(meta[:offset], :raw) || bytes(meta)
+      fail!('unsupported metadata header', :unsupported) unless raw.unpack1('N') == raw.bytesize && raw.byteslice(8, 4) == "\0".b * 4
+      header = metadata_context_header(context, raw: raw)
+      children = header.fetch(:children)
+      handler = header.fetch(:handler)
+      if handler == 'mdir'
         fail!('unsupported mdir children', :unsupported) unless children.all? { |row| %w[hdlr ilst free].include?(row[:type]) }
         lists = children.select { |row| row[:type] == 'ilst' }
         fail!('multiple ilst', :unsupported) if lists.size > 1
@@ -90,10 +141,10 @@ module TagLib::MP4
             validate_item(item, ordinary: true)
           end
         end
-        @metadata_report = { status: :not_needed, reason_code: :metadata_complete, removed: [] }
         return
       end
-      fail!('unsupported metadata handler', :unsupported) unless hdlr.byteslice(16, 4) == 'mdta'
+      fail!('unsupported metadata handler', :unsupported) unless handler == 'mdta'
+      fail!('unsupported mdta children', :unsupported) unless children.all? { |row| %w[hdlr keys ilst free].include?(row[:type]) }
       %w[hdlr keys ilst].each { |type| fail!("single #{type} required", :unsupported) unless children.count { |row| row[:type] == type } == 1 }
       keys = children.find { |row| row[:type] == 'keys' }[:raw]
       fail!('invalid keys header', :malformed) unless keys.bytesize >= 16 && keys.byteslice(8, 4) == "\0".b * 4
@@ -133,8 +184,6 @@ module TagLib::MP4
         replacement_ilst = make_box('ilst', survivors.map { |item| item[:raw] }.join.b)
         @metadata_replacements[meta[:offset]] = make_box('meta', raw.byteslice(8, 4) + children.map { |row| row.equal?(ilst) ? replacement_ilst : row[:raw] }.join.b)
       end
-      @metadata_report = { status: @removed_metadata.empty? ? :not_needed : :required,
-        reason_code: @removed_metadata.empty? ? :metadata_complete : :invalid_index, removed: @removed_metadata }
     end
 
     # 保持する値の構造だけを検査し、data typeやpayloadの意味は変換しない。

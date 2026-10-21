@@ -81,6 +81,54 @@ class PlusMP4IOTest < Test::Unit::TestCase
     end
   end
 
+  should 'allow a ctime-only read observation after matching fd and path content' do
+    generation_class = API.const_get(:Generation, false)
+    generation = generation_class.new(@source, :sha256)
+    baseline = generation.instance_variable_get(:@identity)
+    generation.define_singleton_method(:identity) do |_stat|
+      baseline[0, 4] + [baseline[4] + 1]
+    end
+
+    assert_nothing_raised { generation.check! }
+    assert_equal baseline, generation.__send__(:token)
+  ensure
+    generation&.close
+  end
+
+  should 'preserve the original Unicode path representation for regular files' do
+    nfd_path = File.join(@dir, "source-か\u3099.m4a")
+    FileUtils.cp(@source, nfd_path)
+    API.open(nfd_path) do |file|
+      assert_equal nfd_path, file.path
+    end
+  end
+
+  should 'resolve symlink input to the same target identity' do
+    link = File.join(@dir, 'source-link.m4a')
+    File.symlink(@source, link)
+    API.open(link) do |file|
+      assert_equal File.realpath(link), file.path
+      assert File.identical?(link, file.path)
+    end
+  end
+
+  should 'reject content changes even when only a ctime difference is observed' do
+    generation_class = API.const_get(:Generation, false)
+    generation = generation_class.new(@source, :sha256)
+    baseline = generation.instance_variable_get(:@identity)
+    change_source
+    generation.define_singleton_method(:identity) do |_stat|
+      baseline[0, 4] + [baseline[4] + 1]
+    end
+
+    error = assert_raise(API::Error) { generation.check! }
+    assert_equal :source_changed, error.code
+    assert_equal :prepare, error.phase
+    assert_equal 'source/generation', error.issues.fetch(0).fetch(:location)
+  ensure
+    generation&.close
+  end
+
   should 'reject path replacement while retaining the original handle' do
     API.open(@source) do |file|
       replacement = File.join(@dir, 'replacement.mp4')

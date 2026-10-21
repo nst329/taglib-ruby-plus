@@ -1,5 +1,11 @@
 # テスト構成
 
+`test/probes/mp4_smb_generation_design.rb`はSMB原本のctime差を模擬する設計probe。
+製品Generationの`:sha256`基準SHAによるctime-only許容、stat既定の厳格拒否、plan後の内容変更・実体差し替えの拒否を確認する。
+`ruby -Ilib -Itest test/probes/mp4_smb_generation_design.rb`で単独実行する。実SMBでctimeが揺れる瞬間の再現とは区別する。
+
+`plus_mp4_io_test.rb`には、通常ファイルのNFD原表記保持とsymlinkの同一実体解決を確認する回帰assertを追加している。`shoulda-context`が必要なため、依存がない環境では構文チェックと設計probeを代替確認とする。指定SMB原本は読み取り専用のplan確認に限定する。
+
 通常のRubyテストは`test/**/*_test.rb`を対象にする。test-unitとminitestはautorunの干渉を避けるため実行プロセスを分け、`rake test`が`test:unit`、`test:minitest`の順に実行する。個別に確認する場合は次を使う。
 
 ```sh
@@ -60,6 +66,14 @@ ruby test/probes/plus_mp4_metadata_contract.rb \
 追加の[header・保存snapshot計測](../docs/Memos/2026-10-16-headerと保存snapshotの再利用検証.md)では、大きいartworkとmdatで原本native open、String共有、選択情報取得のbytesも記録する。
 
 ## 不正mdtaとQuickTime併用の設計probe
+
+`test/probes/mp4_metadata_context_pair_design.rb`は複数metadata contextの設計probeである。公開診断と計画、別udtaの識別、context順序、未知子atom、独立候補のraw保持を確認する。公開pair修復の主な保存契約は`plus_mp4_limited_repair_test.rb`で受入検証する。
+
+```sh
+ruby -Ilib -Itest test/probes/mp4_metadata_context_pair_design.rb \
+  --verbose=important-only --no-use-color \
+  --progress-style=fault-only --no-show-detail-immediately
+```
 
 `test/probes/mp4_invalid_mdta_repair_design.rb`は未実装の併用修復設計を検討する試験で、通常テストglobから分離する。FFmpegと現行native bindingを必要とする。
 不正indexの任意位置・32bit値域・fourcc解釈、正常bytes保持、現行readerの制約、同一moov候補への両編集と独立再読込を確認する。製品保存APIや障害契約の受入試験ではない。

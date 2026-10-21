@@ -1,7 +1,60 @@
 # QuickTime chapter限定削除と不正mdta index限定除去の併用設計
 
 日付: 2026-10-20
-状態: 実装済み。対象versionは2.3.2.32。
+状態: 実装済み。対象versionは2.3.2.38。
+
+## 複数metadata contextへの拡張設計（2026-10-21、実装済み）
+
+本節は設計probeの結果に基づく追加実装の記録である。公開APIの形は維持し、既存の限定修復経路へ安全なpair判定を統合した。
+
+### 設計probeで確認したこと
+
+`test/probes/mp4_metadata_context_pair_design.rb`をRuby 4.0.7、ローカルnative binding、FFmpegで実行し、5 tests / 45 assertions / 0 failures / 0 errorsを確認した。fixtureはFFmpeg生成AAC MP4へ、公開APIでNero chapterを追加し、独立fixture parserでcontextを注入したもの。
+
+- 同一udtaの正常mdir→mdtaは公開metadata診断がcompleteでissuesなし、限定修復計画もunchangedになる。
+- 別udtaへ分散したpairは親の絶対座標で区別され、multiple_metaとしてblockedになる。
+- 正常mdta→mdirもraw保持を前提にcompleteと判定し、native側のunrepresented_itemだけでは拒否しない。
+- meta直下の未知子atomはunsupported_childとして検出され、pairを成功扱いしない。
+- 3 context、mdir+mdir、mdta+mdta、未知handlerはmultiple_metaまたは既存の構造理由でblockedになる。
+- 両順序について、コピー上でindex 0だけを独立fixture editorで除去できた。期待するmoov全体のraw一致、mdir・mdtaのkeys/handler/free/対象外item・順序・track・Nero保持、mdat一致、原本不変、独立再openとFFmpeg decode成功を確認した。このfixtureではmoovがmdatより後にあり、chunk offsetの移動補正そのものの証明ではない。
+
+このprobeは構造境界と保存保持の受入試験として実行する。独立候補編集だけでなく、公開apply/save経路のpair試験も追加した。
+
+### 決定する内部構成と安全境界
+
+汎用性は許可件数を増やすことではなく、context収集・検証・修復対象選択を分離することで確保する。ルール登録frameworkは導入しない。既存reader/editorが取得したatom記述を受け取る小さな共通検証器を置き、検証器自身はI/Oしない。
+
+contextの内部記述には、原本世代、metaの開始/終了、親udtaの開始/終了、所属moovの開始/終了、兄弟順序、handler、子atom記述を持たせる。例として同じpathを持ってもudta開始位置が異なれば別親とする。内部情報の追加を公開issues/location/detailsの変更へ直結させない。
+
+単一contextは既存契約を維持する。複数は正確に2個、handlerがmdirとmdtaで各1個、同一moov直下の同一udtaの直接の子である場合だけ次の個別検証へ進む。両順序を許可する。
+
+- metaの通常header、FullBox、境界、hdlrの件数・長さ・flagsを検証する。
+- mdirはhdlr/ilst/freeだけを許可し、既存の通常item構造検証を行う。未知・未保持の子や複数ilstは拒否する。
+- mdtaはhdlr/keys/ilstが各1個、追加子はfreeのみとし、keys件数・namespace・文字列・重複と保持item構造を検証する。
+- mdta_layoutの既存解釈を維持する。pairだからindexedとは推測しない。確定したindexの0またはkeys件数超過だけを除去可能とし、解釈不能・keys破損などは拒否する。
+- 3個以上、同種pair、別udta、未知handler/子atom、境界や親が不明な入力はblocked。集合の拒否はmultiple_meta、個別の拒否は既存の適切な理由を使用する。
+
+### 診断とsnapshot能力の分離
+
+安全なpairの構造診断は両順序ともcomplete/issuesなし、正常計画はunchanged、除去可能な不正indexのみならrepairableとする。metadata reasonはmetadata_complete/invalid_indexを維持する。不正indexが残る入力の診断までcompleteにはしない。
+
+native ItemMapに見えないこととrawで安全に保持できないことを同一視しない。pair時のmdirも共通のraw構造検証で直接検証し、native entriesの不足だけでunrepresented_itemを作らない設計にする。ただしissueを一括除外するfallbackは不可とし、値構造を検証できないitemは失敗させる。snapshot取得・完全復元の既存安全gateは緩和しない。構造診断がcompleteになったことだけを根拠に、nativeが取得できない後続mdir値を欠落snapshotとして返してはならない。この境界は製品化時の追加必須試験とする。
+
+### 保存とI/O
+
+mdirはraw保持対象、mdtaだけを編集対象とする。既存のoffset指定raw置換でmdtaのilstだけを再構成し、handler/keys/freeと対象外itemをそのまま使う。contextの統合・削除・再配置やnative setterへの変換はしない。
+
+保存後の既存独立構造解析へ共通検証器を接続し、安全な集合であることと不正indexが残らないことを確認する。原本絶対offsetは移動し得るため候補にそのまま要求せず、候補自身の親子境界と順序・保持signatureで照合する。media/track/chapter比較、chunk補正、session ownership、世代、別出力、publication_statusは既存経路を維持する。
+
+計画時は取得済み構造を再利用し、追加の全体scan・media読込・コピーを導入しない。保存後は共通条件を再確認するためmetadata構造readerを一度だけ呼び、root/moov/udta/metaの境界とheaderだけを走査する。mdat payloadは読まない。検証器用の記述と上限内metadata検証にCPU/メモリを使う。製品化後のI/O回数・bytesは未計測であり、今回のprobeから削減の実測を主張しない。
+
+### 製品化時の残る受入条件
+
+公開plan→apply→save!→独立再openでunchanged、正常pairの無変更save-as、保存後のmdir/keys/順序改変検出、複数ilst・未知子・壊れたkeys・layout曖昧性の拒否を追加する。pairでの保存失敗・世代競合・別File plan・publication_status、moov先行ファイルのchunk補正、通常snapshotの欠落拒否を確認する。
+
+既存limited repair製品テストは20 tests / 123 assertions / 0 failures / 0 errors。pair設計probeは5 tests / 45 assertions / 0 failures / 0 errors。実際に問題となったMP4のpathは提供されておらず、実ファイルコピーは未検証。別OS・配布gem・他native backendも未検証。CHANGELOGとversionの更新はリリース作業で行い、MListNew側はこの変更に含めない。
+
+追加probeのRuby構文チェックとgit diff --checkも成功した。plus_mp4_api_test.rbはshoulda-context不足で起動できず、Bundler経由でもrake-compiler 0.9.9、shoulda-context 2.0.0、yard 0.9.45が未導入のため起動前に停止した。公開API全般の回帰成功とは扱わない。
 
 ## 前提と対象
 
@@ -158,7 +211,7 @@ strictモードの世代確認SHAは既存仕様どおり別走査になり得�
 - 不正metadata＋壊れたQuickTimeの合成入力は、現行公開APIで計画を作れてもsave!が拒否することを確認した。
 - 一時コピーで両編集を一つのmoov候補へ反映し、原本不変、正常mdtaの製品再読込、QuickTime不在、Nero chpl bytes、全mdat payload、残存trackのraw bytesとmdat内相対chunk位置の一致を確認した。
 
-候補編集には独立fixture editorを使った。これは製品の保存フロー・I/O予算・世代／障害契約の受入試験ではなく、合成可能性の設計実験である。検証環境の現在のbindingのみで実行し、別backend、実ユーザーファイル、巨大入力、任意fourcc識別の安全性は未検証。全体テストは製品コード変更がないため実行していない。
+独立fixture editorと公開save!の両方で確認した。検証環境の現在のbindingのみで実行し、別backend、実ユーザーファイル、巨大入力、任意fourcc識別の安全性は未検証。
 
 ## 製品実装とI/O見直し
 

@@ -45,6 +45,30 @@ class PlusMP4LimitedRepairTest < Test::Unit::TestCase
     fixture_child(fixture_child(read_fixture_moov(path).first, 'udta'), 'meta')
   end
 
+  # mdirの通常itemとmdtaのindexed itemを同じmoov/udtaへ配置する。
+  def inject_mdir_mdta_pair(path, keys: %w[a], indices: [1])
+    inject_metadata(path, keys: keys, indices: indices)
+    edit_fixture(path) do |moov|
+      udta = fixture_child(moov, 'udta')
+      mdta = fixture_child(udta, 'meta')
+      title = fixture_child(mdta, 'ilst')[:children].pop
+      handler = [0, 0].pack('N2') + 'mdir' + "\0".b * 13
+      mdir = parse_boxes(atom_box('meta', [0].pack('N') + atom_box('hdlr', handler) +
+        atom_box('free', 'padding') + atom_box('ilst', render_boxes([title])))).first
+      mdta[:children] << { type: 'free', data: 'mdta-padding'.b }
+      udta[:children].unshift(mdir)
+    end
+  end
+
+  def metadata_contexts(path)
+    udta = fixture_child(read_fixture_moov(path).first, 'udta')
+    udta[:children].select { |node| node[:type] == 'meta' }
+  end
+
+  def metadata_handler(meta)
+    fixture_child(meta, 'hdlr')[:data].byteslice(8, 4)
+  end
+
   def test_both_repairs_preserve_original_raw_metadata_nero_and_media
     seed_chapters
     inject_metadata(@path, keys: %w[a b], indices: [1, 0, 2, 3, 0xffffffff, 1])
@@ -104,6 +128,87 @@ class PlusMP4LimitedRepairTest < Test::Unit::TestCase
       assert_equal false, file.save![:changed]
     end
     assert_equal false, File.exist?(@output)
+  end
+
+  def test_safe_mdir_mdta_pair_is_diagnosed_and_saved_unchanged
+    inject_mdir_mdta_pair(@path, indices: [1])
+    original_contexts = metadata_contexts(@path).map { |context| render_boxes([context]) }
+    API.open(@path) do |file|
+      report = file.diagnose(:metadata)
+      assert_equal :complete, report[:status]
+      assert_equal [], report[:issues]
+      plan = file.plan_limited_repairs(mdta_layout: :mixed_known_fourcc)
+      assert_equal :unchanged, plan.status
+      assert_equal :metadata_complete, plan.metadata[:reason_code]
+      assert_equal [], file.apply_limited_repairs(plan: plan, allow: ALLOW)
+      file.save!(to: @output)
+    end
+    assert_equal original_contexts, metadata_contexts(@output).map { |context| render_boxes([context]) }
+    API.open(@output) do |file|
+      assert_equal :unchanged, file.plan_limited_repairs(mdta_layout: :mixed_known_fourcc).status
+    end
+  end
+
+  def test_safe_pair_removes_only_invalid_mdta_indices_and_preserves_mdir
+    seed_chapters(broken: false)
+    inject_mdir_mdta_pair(@path, keys: %w[a b], indices: [1, 0, 2, 0xffffffff])
+    original = File.binread(@path)
+    before = metadata_contexts(@path)
+    mdir_raw = render_boxes([before.find { |context| metadata_handler(context) == 'mdir' }])
+    output = @output
+    API.open(@path) do |file|
+      plan = file.plan_limited_repairs(mdta_layout: :mixed_known_fourcc)
+      assert_equal :repairable, plan.status
+      assert_equal [:remove_invalid_mdta_indices], plan.required_operations
+      assert_equal [0, 0xffffffff], plan.metadata[:removed].map { |row| row[:index] }
+      file.apply_limited_repairs(plan: plan, allow: ALLOW)
+      result = file.save!(to: output)
+      assert_equal true, result[:committed]
+    end
+    assert_equal original, File.binread(@path)
+    after = metadata_contexts(output)
+    assert_equal %w[mdir mdta], after.map { |context| metadata_handler(context) }
+    assert_equal mdir_raw, render_boxes([after.find { |context| metadata_handler(context) == 'mdir' }])
+    mdta = after.find { |context| metadata_handler(context) == 'mdta' }
+    assert_equal [[1].pack('N'), [2].pack('N')], fixture_child(mdta, 'ilst')[:children].map { |item| item[:type] }
+    assert_equal ['QT'], API.open(output) { |file| file.read_chapters(style: :quicktime).map(&:title) }
+    API.open(output) do |file|
+      assert_equal :unchanged, file.plan_limited_repairs(mdta_layout: :mixed_known_fourcc).status
+    end
+  end
+
+  def test_unsafe_multiple_context_sets_remain_blocked
+    %i[three same_mdir same_mdta separate_udta].each do |variant|
+      path = File.join(@dir, "#{variant}.m4a")
+      FileUtils.cp(@path, path)
+      inject_mdir_mdta_pair(path, indices: [1])
+      edit_fixture(path) do |moov|
+        udta = fixture_child(moov, 'udta')
+        contexts = udta[:children].select { |node| node[:type] == 'meta' }
+        case variant
+        when :three
+          udta[:children] << Marshal.load(Marshal.dump(contexts.first))
+        when :same_mdir
+          udta[:children].delete(contexts.find { |node| metadata_handler(node) == 'mdta' })
+          duplicate = Marshal.load(Marshal.dump(contexts.find { |node| metadata_handler(node) == 'mdir' }))
+          udta[:children] << duplicate
+        when :same_mdta
+          udta[:children].delete(contexts.find { |node| metadata_handler(node) == 'mdir' })
+          duplicate = Marshal.load(Marshal.dump(contexts.find { |node| metadata_handler(node) == 'mdta' }))
+          udta[:children] << duplicate
+        when :separate_udta
+          mdta = contexts.find { |node| metadata_handler(node) == 'mdta' }
+          udta[:children].delete(mdta)
+          moov[:children] << { type: 'udta', children: [mdta] }
+        end
+      end
+      API.open(path) do |file|
+        plan = file.plan_limited_repairs(mdta_layout: :mixed_known_fourcc)
+        assert_equal :blocked, plan.status, variant
+        assert_equal :multiple_meta, plan.metadata[:reason_code], variant
+        assert_raise(API::Error) { file.apply_limited_repairs(plan: plan, allow: ALLOW) }
+      end
+    end
   end
 
   def test_explicit_indexed_layout_handles_fourcc_shaped_index

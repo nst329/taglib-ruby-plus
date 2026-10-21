@@ -524,7 +524,7 @@ module TagLib
 
         def initialize(path, verification: :stat)
           raise ArgumentError, 'verification must be :stat or :sha256' unless %i[stat sha256].include?(verification)
-          @path = ::File.realpath(path).freeze
+          @path = stable_path(path).freeze
           @verification = verification
           @generation = Generation.new(@path, verification)
           @digest = @generation.digest
@@ -539,6 +539,23 @@ module TagLib
         rescue SystemCallError => error
           raise Error.new(error.message, code: :open, phase: :read), cause: error
         end
+
+        # 通常ファイルは原表記を保持し、symlinkだけtarget実体を確認してcanonical化する。
+        def stable_path(path)
+          expanded = ::File.expand_path(path)
+          entry = ::File.lstat(expanded)
+          return expanded unless entry.symlink?
+
+          resolved = ::File.realpath(expanded)
+          unless ::File.identical?(expanded, resolved)
+            raise Error.new('path resolves to a different file', code: :path_conflict,
+                            area: :source, phase: :read,
+                            issues: [{ code: :path_conflict, message: 'symlink target identity differs',
+                                       location: 'source/path', details: { requested: expanded, resolved: resolved } }])
+          end
+          resolved
+        end
+        private :stable_path
 
         def metadata
           ensure_current!
@@ -823,6 +840,7 @@ module TagLib
           source_digest = @digest
           temporary = nil
           temporary_path = nil
+          temporary_identity = nil
           output_generation = nil
           begin
             @requested_snapshots = snapshots
@@ -831,6 +849,8 @@ module TagLib
             temporary = Tempfile.create(['taglib-plus-', '.mp4'], ::File.dirname(output))
             temporary_path = temporary.path
             temporary.close
+            temporary_identity = path_identity(temporary_path)
+            @temporary_cleanup_identity = temporary_identity
             load_metadata if changed && @repair_kind != :limited_repairs
             @source_scan = nil
             prepare_candidate(temporary_path, changed: changed)
@@ -890,6 +910,8 @@ module TagLib
                               temporary_path: temporary_path,
                               issues: [{ code: :cleanup_failed, message: error.message,
                                          details: { class: error.class.name } }]), cause: (failure || error)
+            ensure
+              @temporary_cleanup_identity = nil
             end
           end
         end
@@ -1468,6 +1490,20 @@ module TagLib
         end
 
         def cleanup_candidate(temporary)
+          identity = @temporary_cleanup_identity
+          unless identity
+            raise Error.new('temporary candidate identity unavailable', code: :cleanup_collision,
+                            area: :output, phase: :cleanup,
+                            issues: [{ code: :cleanup_collision, message: 'temporary candidate identity unavailable',
+                                       location: 'output/temporary' }])
+          end
+          current = path_identity(temporary.path)
+          if current != identity
+            raise Error.new('temporary candidate identity changed', code: :cleanup_collision,
+                            area: :output, phase: :cleanup,
+                            issues: [{ code: :cleanup_collision, message: 'temporary candidate identity changed',
+                                       location: 'output/temporary', details: { expected: identity, actual: current } }])
+          end
           ::File.unlink(temporary.path)
         rescue Errno::ENOENT
           # 原本へのrenameが成功した場合は、一時pathが既にない。
@@ -1476,7 +1512,21 @@ module TagLib
 
         def validate_output!(output, replace_source)
           return if replace_source
-          raise Error.new('output exists', code: :output_exists, output_path: output) if ::File.exist?(output) || ::File.symlink?(output)
+          begin
+            ::File.lstat(output)
+          rescue Errno::ENOENT
+            return
+          rescue SystemCallError => error
+            raise Error.new(error.message, code: :io, area: :output, phase: :prepare), cause: error
+          end
+
+          raise Error.new('output exists', code: :output_exists, output_path: output)
+        end
+
+        # cleanup対象の文字列表記を変換せず、作成時の実体だけを識別する。
+        def path_identity(path)
+          stat = ::File.lstat(path)
+          [stat.dev, stat.ino]
         end
 
         # 公開前に独立再読込した値を採用し、公開後のnative読取を不要にする。

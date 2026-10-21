@@ -1,7 +1,25 @@
 # QuickTimeと不正mdtaの限定修復を一つの候補へ合成する
 
+## 2026-10-21追記: 安全なcontext pairの拡張実装
+
+### 追加実装後のリファクタリング
+
+context集合のpolicy呼出だけを包む補助メソッドを削除し、親識別をreader/editorとも絶対offsetと終端の組へ統一した。editor内のmeta子atomとhandlerはcontextごとに一度解析し、集合検証と編集で共有する。重複したraw bytesの切り出しとatom走査を避け、atom件数上限を重複解析で消費しないためである。キャッシュはeditorインスタンス内だけに保持し、別世代へ流用しない。ファイル読取回数・media payload読込範囲は増やさず、上限内の解析結果を編集終了まで保持するメモリと引き換えに走査CPUと一時bytes割当を減らす。総bytesや性能の削減量は未計測。
+
+同種handlerの拒否試験が3 contextを生成していた点も修正し、mdir+mdirとmdta+mdtaを正確に2 contextで検証する。公開API、reason_code、保存経路と個別item検証は維持する。
+
+5 tests / 45 assertionsの設計probeにより、現行の診断と限定修復の不一致、別udtaをpathで区別できない問題、mdta先行時のnative通常値欠落、未知meta子atomの検査不足を確認した。
+
+採用案は、取得済みatom情報を使う共通検証器で、親の実体・個別context構造・集合の許可条件を分けて検証する方式とする。許可は同一moov直下の同一udtaにある検証済みmdir+mdtaの2個だけで、順序は問わない。汎用性は検証責務の再利用に置き、任意数contextや拡張可能なrule frameworkは採用しない。実装ではlimited editorのraw構造検証とMetadataStructureReaderの親座標検証を共通条件として揃え、必要範囲に対して複雑さを増やさず安全境界を保った。
+
+mdirはnativeへ変換せずraw保持し、mdtaだけを既存raw置換へ渡す。診断・計画・保存後検証は同じ条件を使用する。構造診断とnative snapshot能力を分離し、後続mdirがnativeから見えなくてもrawで検証する一方、不完全snapshotの取得許可には使わない。issueの一括除外や未知構造の成功fallbackは採用しない。
+
+計画時の検証器はI/Oせず既存解析結果を使う。保存後は共通条件を再確認するためmetadata構造readerを一度だけ呼び、root/moov/udta/metaの境界とheaderだけを走査する。mdat payloadは読まない。製品経路のI/O回数・bytesは今回未計測。
+
+独立fixture候補のraw保持・decode成功に加え、公開apply/save!で不正indexだけを除去し、mdir保持・原本不変・独立再open後unchangedを確認した。詳細と未検証条件は[併用設計の拡張節](../mp4-combined-limited-repair-design.md)を参照する。
+
 日付: 2026-10-20
-状態: 採用・実装済み。対象versionは2.3.2.32。
+状態: 採用・実装済み。対象versionは2.3.2.38。
 
 ## 背景
 

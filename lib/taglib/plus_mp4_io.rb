@@ -115,12 +115,35 @@ module TagLib
         end
 
         def check_stat!
-          changed! unless identity(@io.stat) == @identity && identity(::File.stat(@path)) == @identity
+          handle_identity = identity(@io.stat)
+          path_identity = identity(::File.stat(@path))
+          return if handle_identity == @identity && path_identity == @identity
+
+          if ctime_only_difference?(@identity, handle_identity, path_identity) &&
+             content_matches_source?(path_identity)
+            return
+          end
+
+          changed!(handle_identity, path_identity)
         end
 
-        def changed!
+        # ctimeだけが揺れた場合に限り、fdとpathの内容SHA256が一致することを確認する。
+        def content_matches_source?(_path_identity)
+          return false unless @verification == :sha256 && @digest
+
+          hash_content == @digest && Digest::SHA256.file(@path).hexdigest == @digest
+        rescue SystemCallError, IOError
+          false
+        end
+
+        def changed!(handle_identity = nil, path_identity = nil)
           @stale = true
-          raise Error.new('source changed', code: :source_changed, phase: :prepare)
+          issue = if handle_identity && path_identity
+                    { code: :source_changed, message: 'source generation differs', location: 'source/generation',
+                      details: { expected: @identity, handle: handle_identity, path: path_identity } }
+                  end
+          raise Error.new('source changed', code: :source_changed, area: :source, phase: :prepare,
+                          issues: issue ? [issue] : [])
         end
       end
 
