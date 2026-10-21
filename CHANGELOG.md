@@ -8,6 +8,12 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.35
+
+### Changed
+- gemspecの収録対象を実行・ビルドに必要なファイルへ限定し、ADR・設計資料・テストfixtureを配布gemから除外した。
+- `gemspec_check`を新しい収録対象の方針に合わせた。
+
 ## 2.3.2.34
 
 ### Fixed
