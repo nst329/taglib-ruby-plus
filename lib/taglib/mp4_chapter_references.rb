@@ -47,11 +47,13 @@ module TagLib::MP4
                  end
         @moov = one(@atoms, 'moov')
         fail!('moov exceeds repair limit', :unsupported) if length(@moov) > MAX_MOOV_BYTES
+        @title_payloads = {}
         walk(@atoms) { |atom| fail!("unsupported #{atom[:type]} structure", :unsupported) if UNSUPPORTED.include?(atom[:type]) }
         hint_validator = HintValidator.new(file: file, io: io)
         validate_structure(@atoms, :root, hint_validator)
-        @mdat_ranges = @atoms.select { |a| a[:type] == 'mdat' }.map { |a| [a[:payload_offset], a[:end_offset]] }
         @raw = bytes(@moov) if capture_raw
+        validate_title_boxes!
+        @mdat_ranges = @atoms.select { |a| a[:type] == 'mdat' }.map { |a| [a[:payload_offset], a[:end_offset]] }
         @edits = {}
         @offset_tables = {}
         # [source_track_id, 元tref_index] => 保存後tref_index。例: [2, 1] => 0。
@@ -171,6 +173,7 @@ module TagLib::MP4
     end
 
     def payload(atom)
+      return @title_payloads.fetch(atom[:offset]) if atom[:type] == 'titl' && @title_payloads&.key?(atom[:offset])
       size = atom[:end_offset] - atom[:payload_offset]
       return @raw.byteslice(atom[:payload_offset] - @moov[:offset], size) if cached_atom?(atom)
 
@@ -191,7 +194,8 @@ module TagLib::MP4
     def validate_structure(atoms, parent, hint_validator)
       atoms.each do |atom|
         supported = STRUCTURES[parent]
-        fail!("unsupported #{parent}/#{atom[:type]}", :unsupported) if supported && !supported.include?(atom[:type])
+        titl_candidate = atom[:type] == 'titl' && parent == 'udta'
+        fail!("unsupported #{parent}/#{atom[:type]}", :unsupported) if supported && !supported.include?(atom[:type]) && !titl_candidate
         if atom[:type] == 'meta'
           # version/flagsの確認に、置換予定の画像や旧metadata本文を読み込まない。
           valid_version = atom[:end_offset] - atom[:payload_offset] >= 4 &&
@@ -203,6 +207,57 @@ module TagLib::MP4
         hint_validator.validate_information(atom) if atom[:type] == 'hnti'
         validate_structure(atom[:children], atom[:type], hint_validator)
       end
+    end
+
+    # 位置に依存しない3GPP Title boxだけをopaque payloadとして通過させる。
+    def validate_title_boxes!
+      titles = []
+      walk(@atoms) { |atom| titles << atom if atom[:type] == 'titl' }
+      return if titles.empty?
+
+      movie_udta = @moov[:children].select { |atom| atom[:type] == 'udta' }
+      allowed = movie_udta.flat_map { |udta| udta[:children].select { |atom| atom[:type] == 'titl' } }
+      fail!('unsupported titl location', :unsupported) unless titles == allowed
+      fail!('multiple moov/udta/titl atoms', :unsupported) unless allowed.one?
+
+      atom = allowed.first
+      fail!('unsupported titl header width', :unsupported) unless atom[:payload_offset] - atom[:offset] == 8
+      raw_atom = bytes(atom)
+      declared_size = raw_atom.unpack1('N')
+      fail!('unsupported titl size form', :unsupported) if declared_size.zero? || declared_size == 1
+      fail!('malformed titl atom boundary', :malformed) unless declared_size == atom[:end_offset] - atom[:offset]
+      raw = raw_atom.byteslice(8..)
+      validate_title_payload!(raw)
+      @title_payloads[atom[:offset]] = raw
+    end
+
+    # 対応するversion・言語・文字列表現だけを検証し、元bytesの再構成は行わない。
+    def validate_title_payload!(raw)
+      fail!('malformed titl payload', :malformed) if raw.bytesize < 7
+      fail!('unsupported titl version or flags', :unsupported) unless raw.byteslice(0, 4) == "\0".b * 4
+
+      language = raw.byteslice(4, 2).unpack1('n')
+      fail!('unsupported titl language', :unsupported) unless (language & 0x8000).zero? &&
+        [10, 5, 0].all? { |shift| ((language >> shift) & 0x1f).between?(1, 26) }
+
+      text = raw.byteslice(6..)
+      if text.start_with?("\xFE\xFF".b)
+        validate_title_utf16!(text)
+      else
+        validate_title_utf8!(text)
+      end
+    end
+
+    def validate_title_utf16!(text)
+      fail!('malformed titl UTF-16 payload', :malformed) unless text.bytesize.even? && text.end_with?("\0\0".b)
+      body = text.byteslice(0, text.bytesize - 2).force_encoding(Encoding::UTF_16BE)
+      fail!('malformed titl UTF-16 payload', :malformed) unless body.valid_encoding? && !body.byteslice(2..).to_s.include?("\0\0".b)
+    end
+
+    def validate_title_utf8!(text)
+      fail!('malformed titl UTF-8 payload', :malformed) unless text.end_with?("\0".b)
+      body = text.byteslice(0, text.bytesize - 1).dup.force_encoding(Encoding::UTF_8)
+      fail!('malformed titl UTF-8 payload', :malformed) unless body.valid_encoding? && !body.include?("\0")
     end
 
     # 欠落ID除去後のchapを含む構造とbytesを比較する。chunk位置はmdat内の相対位置で比較する。
@@ -479,7 +534,7 @@ module TagLib::MP4
 
     def initialize(file, chapter_report:)
       @chapter_report = chapter_report
-      super(file, timing: true)
+      super(file, timing: true, removal: @allow_missing_only ? :missing : nil)
     end
 
     private
@@ -489,6 +544,14 @@ module TagLib::MP4
       validate_quicktime_report!
       rows = @report
       fail!('no QuickTime chapter reference', :quicktime_absent) if rows.empty?
+      if @allow_missing_only && rows.all? { |row| row[:status] == :missing }
+        @dangling_only = true
+        @target_track_id = nil
+        @removal = :missing
+        @deleted_track_offsets = []
+        recalculate_tref_positions!
+        return
+      end
       validate_source_handlers!(rows)
       fail!('QuickTime reference target is missing', :missing_reference) unless rows.all? { |row| row[:target_exists] }
       fail!('QuickTime reference target is not a dedicated text track', :shared_reference) unless rows.all? { |row| row[:status] == :chapter_candidate }
@@ -519,7 +582,10 @@ module TagLib::MP4
       return if unsupported.empty?
 
       code = unsupported.all? { |handler| SUBTITLE_SOURCE_HANDLERS.include?(handler) } ? :subtitle_source : :unsupported_source_handler
-      fail!('QuickTime reference source is not a safe media track', code)
+      row = rows.find { |reference| unsupported.include?(reference[:source_handler]) }
+      fail!("QuickTime reference source is not a safe media track: " \
+            "source_track_id=#{row[:source_track_id]} handler=#{row[:source_handler]} " \
+            "target_track_id=#{row[:target_track_id]} target_exists=#{row[:target_exists]}", code)
     end
 
     def validate_quicktime_report!

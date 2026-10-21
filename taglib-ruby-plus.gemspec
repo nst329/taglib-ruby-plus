@@ -30,6 +30,7 @@ Gem::Specification.new do |s|
 
   s.require_paths = ['lib']
   s.required_ruby_version = '>= 3.2'
+  s.add_dependency 'fiddle', '>= 1.1'
   s.requirements = if native_platform
                      []
                    else
@@ -119,8 +120,18 @@ Gem::Specification.new do |s|
     'docs/ADR/2026-10-16-テスト責務の現行APIと設計probe分離.md',
     'docs/ADR/2026-10-16-テストログの成功抑制と失敗詳細化.md',
     'docs/ADR/2026-10-16-Plus保存フローの共通化.md',
+    'lib/taglib/plus_mp4_publication.rb',
     'lib/taglib/plus_mp4.rb',
     'test/plus_mp4_api_test.rb',
+    'test/mp4_separate_output_publication_design_test.rb',
+    'test/support/exclusive_publication_design_probe.rb',
+    'docs/mp4-separate-output-publication-design.md',
+    'docs/ADR/2026-10-21-SMB別出力の排他的renameと確定不明状態.md',
+    'docs/mp4-chapter-plan-safety-design.md',
+    'test/mp4_chapter_plan_safety_design_test.rb',
+    'docs/ADR/2026-10-21-chapter計画の拒否メッセージを保持する.md',
+    'docs/ADR/2026-10-21-chapter計画の責務整理とtitl再読込削減.md',
+    'docs/ADR/2026-10-21-titl保持と欠落chapter参照計画の分離.md',
     'test/plus_mp4_quicktime_removal_test.rb',
     'docs/ADR/2026-10-16-Plus独自APIを編集セッションへ簡素化.md',
     'test/support/plus_api_design_probe.rb',

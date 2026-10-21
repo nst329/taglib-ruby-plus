@@ -8,6 +8,18 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.33
+
+### Added
+- `udta/titl`を未対応構造として安全に保持し、chapter参照・時間診断と限定修復の可否を分離した。
+- 欠落したchapter target参照だけを解除する計画APIと、具体的なtrack・atom位置を含む拒否診断を追加した。
+- 別出力の`File.link`が非対応の環境で、同じ検証済み候補をmacOSの排他的renameへ一度だけ切り替える公開処理を追加した。
+
+### Changed
+- 計画拒否と保存失敗の公開Errorへ具体的なmessage、issue、publication statusを保持するようにした。
+- 保存候補の生成・独立検証・公開責務を分離し、fallback時の追加コピー・再修復・再検証を行わないよう整理した。
+- 確定状態が判定不能な場合は`committed: nil`としてセッションを再利用不可にし、原本と競合出力を保護する。
+
 ## 2.3.2.32
 
 ### Added

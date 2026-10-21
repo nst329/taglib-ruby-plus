@@ -7,6 +7,7 @@ module TagLib::MP4
 
     # QuickTimeの既存安全判定とmetadataのraw編集を同じ解析世代へ束縛する。
     def initialize(file, chapter_report:, mdta_layout:)
+      @allow_missing_only = true
       @mdta_layout = mdta_layout
       @metadata_atom_count = 0
       @removed_metadata = []
@@ -29,15 +30,21 @@ module TagLib::MP4
     def prepare_atom_edits
       begin
         super
-        reason = @chapter_report[:quicktime][:status] == :complete ? :quicktime_time_mismatch :
-          (@chapter_report[:quicktime][:reason_code] || :quicktime_broken)
+        reason = if @dangling_only
+                   :missing_reference
+                 elsif @chapter_report[:quicktime][:status] == :complete
+                   :quicktime_time_mismatch
+                 else
+                   @chapter_report[:quicktime][:reason_code] || :quicktime_broken
+                 end
         @quicktime_report = { status: :required, reason_code: reason,
-          target_track_id: @target_track_id }
+          operation: reason == :missing_reference ? :remove_dangling_chapter_references : :remove_broken_quicktime_chapters,
+          target_track_id: @target_track_id, track_ids: @track_ids }
       rescue ChapterReferenceError => error
         raise if error.code == :source_changed
         status = %i[quicktime_complete quicktime_absent].include?(error.code) ? :not_needed : :blocked
         @quicktime_report = { status: status, reason_code: error.code,
-          target_track_id: nil, issues: status == :blocked ? [{ code: error.code, message: error.message }] : [] }
+          target_track_id: nil, track_ids: @track_ids, issues: status == :blocked ? [{ code: error.code, message: error.message }] : [] }
       end
       begin
         prepare_metadata_edits

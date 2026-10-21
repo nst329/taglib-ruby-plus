@@ -4,6 +4,7 @@ require 'digest'
 require 'fileutils'
 require 'tempfile'
 require_relative 'plus_mp4_io'
+require_relative 'plus_mp4_publication'
 require_relative 'plus_mp4_info'
 require_relative 'mp4_sample_boundaries'
 require_relative 'mp4_structure_diagnostics'
@@ -77,12 +78,24 @@ module TagLib
       ContentRating = ::TagLib::MP4::ContentRating
 
       class Error < StandardError
-        attr_reader :code, :area, :phase, :committed, :output_path, :temporary_path, :issues
+        attr_reader :code, :area, :phase, :committed, :publication_status, :output_path, :temporary_path, :issues
 
         def initialize(message, code: nil, area: nil, phase: nil, committed: false,
-                       output_path: nil, temporary_path: nil, issues: [])
+                       publication_status: nil, output_path: nil, temporary_path: nil, issues: [])
+          publication_status ||= if committed.nil?
+                                  :unknown
+                                elsif committed
+                                  :committed
+                                else
+                                  :not_committed
+                                end
+          unless Publication::State::STATUSES.include?(publication_status)
+            raise ArgumentError, "invalid publication_status: #{publication_status.inspect}"
+          end
           @code, @area, @phase = code, area, phase
-          @committed, @output_path, @temporary_path = committed, output_path, temporary_path
+          @publication_status = publication_status
+          @committed = publication_status == :committed ? true : (publication_status == :unknown ? nil : false)
+          @output_path, @temporary_path = output_path, temporary_path
           @issues = DeepCopy.call(issues)
           super(message)
         end
@@ -452,12 +465,15 @@ module TagLib
       # QuickTime限定除去の判定と、同一原本世代へ結び付いた編集計画。
       # `status: :removable`だけがremove_quicktime_chaptersへ渡せる。
       class QuickTimeChapterRemovalPlan
-        attr_reader :status, :reason, :reason_code, :references, :target_track_id,
+        attr_reader :status, :reason, :reason_code, :message, :operation, :issues, :references, :target_track_id,
                     :nero, :nero_status, :nero_chpl_sha256
 
         def initialize(status:, reason:, reason_code:, references:, target_track_id:, nero:, nero_status:,
-                       nero_chpl_sha256:, source_path:, generation_token:, repair: nil)
+                       nero_chpl_sha256:, source_path:, generation_token:, repair: nil, message: nil, operation: nil, issues: [])
           @status, @reason, @reason_code = status, reason, reason_code
+          @message = (message || reason.to_s).dup.freeze
+          @operation = operation
+          @issues = DeepCopy.call(issues)
           @references = DeepCopy.call(references)
           @target_track_id = target_track_id
           @nero = DeepCopy.call(nero)
@@ -471,6 +487,30 @@ module TagLib
 
         def removable?
           status == :removable
+        end
+
+        private
+
+        attr_reader :source_path, :generation_token, :repair
+      end
+
+      # 欠落targetのchap参照だけを解除する、track削除を含まない計画。
+      class DanglingChapterReferenceRemovalPlan
+        attr_reader :status, :reason, :reason_code, :message, :references, :issues
+
+        def initialize(status:, reason:, reason_code:, message:, references:, issues:, source_path:, generation_token:, repair: nil)
+          @status, @reason, @reason_code = status, reason, reason_code
+          @message = message.dup.freeze
+          @references = DeepCopy.call(references)
+          @issues = DeepCopy.call(issues)
+          @source_path = source_path.dup.freeze
+          @generation_token = DeepCopy.call(generation_token)
+          @repair = repair
+          freeze
+        end
+
+        def repairable?
+          status == :repairable
         end
 
         private
@@ -495,6 +535,7 @@ module TagLib
           @repair_plan = nil
           @repair_kind = nil
           @quicktime_removal_plan = nil
+          @issued_dangling_plan = nil
         rescue SystemCallError => error
           raise Error.new(error.message, code: :open, phase: :read), cause: error
         end
@@ -586,6 +627,54 @@ module TagLib
           plan
         end
 
+        # 欠落targetのchapだけを選び、通常字幕・media・実在targetを保持する計画を作る。
+        def plan_dangling_chapter_reference_removal
+          ensure_current!
+          ensure_repair_slot!
+          analysis = read_structure { |native| ::TagLib::MP4::ChapterReferences.new(native, removal: :missing) }
+          references = analysis.removed
+          issues = references.map do |row|
+            { code: :missing_reference, message: 'chapter reference target is missing',
+              location: 'moov/trak/tref/chap',
+              details: row.slice(:source_track_id, :source_handler, :target_track_id,
+                                 :target_exists, :tref_index, :reference_index) }
+          end
+          status = references.empty? ? :unchanged : :repairable
+          reason = references.empty? ? :no_dangling_references : :missing_reference
+          message = references.empty? ? 'no dangling chapter references' : 'chapter reference target is missing'
+          issue_dangling_reference_plan(
+            status: status, reason: reason, message: message,
+            references: references, issues: issues, repair: analysis.repair_plan
+          )
+        rescue ::TagLib::MP4::ChapterReferenceError, Error => error
+          raise if error.is_a?(Error) && error.phase != :read
+          raise if error.respond_to?(:code) && %i[source_changed io open].include?(error.code)
+          issue_dangling_reference_plan(
+            status: :blocked, reason: error.code, message: error.message,
+            issues: [{ code: error.code, message: error.message, location: 'chapter_references', details: {} }]
+          )
+        end
+
+        # 同じFile世代で発行した欠落参照計画だけを保存候補へ登録する。
+        def remove_dangling_chapter_references(plan:)
+          ensure_current!
+          ensure_repair_slot!
+          unless plan.is_a?(DanglingChapterReferenceRemovalPlan)
+            raise ArgumentError, 'plan must be DanglingChapterReferenceRemovalPlan'
+          end
+          unless plan.__send__(:source_path) == @path && plan.__send__(:generation_token) == @generation.__send__(:token) &&
+                 plan.equal?(@issued_dangling_plan)
+            raise Error.new('dangling reference plan is stale', code: :source_changed, area: :chapter_references, phase: :prepare)
+          end
+          unless plan.repairable?
+            raise Error.new("dangling chapter reference removal is blocked: #{plan.message}",
+                            code: plan.reason_code, area: :chapter_references, phase: :prepare, issues: plan.issues)
+          end
+          @repair_plan = plan.__send__(:repair)
+          @repair_kind = :chapter_references
+          DeepCopy.call(plan.references)
+        end
+
         # 同じFile世代から作られたremovable計画だけを編集へ登録する。
         def remove_quicktime_chapters(plan:)
           ensure_current!
@@ -594,10 +683,10 @@ module TagLib
             raise ArgumentError, 'plan must be QuickTimeChapterRemovalPlan'
           end
           unless plan.removable?
-            raise Error.new('QuickTime chapter removal is blocked', code: plan.reason,
+            raise Error.new("QuickTime chapter removal is blocked: #{plan.message}", code: plan.reason,
                             area: :chapter_references, phase: :prepare,
-                            issues: [{ code: plan.reason_code, message: plan.reason.to_s,
-                                       location: 'chapters/quicktime', details: {} }])
+                            issues: plan.issues.empty? ? [{ code: plan.reason_code, message: plan.message,
+                                                            location: 'chapters/quicktime', details: {} }] : plan.issues)
           end
           unless plan.__send__(:repair).is_a?(::TagLib::MP4::ChapterReferenceRepair)
             raise Error.new('QuickTime chapter removal plan is incomplete', code: :invalid_plan,
@@ -729,7 +818,7 @@ module TagLib
             return result(output, @digest, changed: false, snapshots: actual)
           end
 
-          committed = false
+          publication = Publication::State.new
           phase = :write
           source_digest = @digest
           temporary = nil
@@ -737,6 +826,7 @@ module TagLib
           output_generation = nil
           begin
             @requested_snapshots = snapshots
+            @publication_state = publication
             # cleanup失敗で残すpathをGCが後からunlinkしないよう、明示管理のFileを使う。
             temporary = Tempfile.create(['taglib-plus-', '.mp4'], ::File.dirname(output))
             temporary_path = temporary.path
@@ -763,7 +853,6 @@ module TagLib
             ensure_generation!
             phase = :publish
             publish_candidate(temporary_path, output, replace_source: replace_source)
-            committed = true
             phase = :adopt
             if replace_source && changed
               output_generation.publish_to(@path)
@@ -773,11 +862,13 @@ module TagLib
             phase = :result
             result(output, output_digest, changed: changed, source_digest: source_digest, snapshots: baseline || {})
           rescue StandardError => error
-            @unusable = true if committed
+            publication_status = publication.status
+            mark_publication_failure!(publication_status)
             raise Error.new(error.message, code: error.is_a?(Error) ? error.code : :save,
                             area: error.is_a?(Error) ? error.area : nil,
-                            issues: error.is_a?(Error) ? error.issues : [],
-                            phase: phase, committed: committed,
+                            issues: save_error_issues(error, phase, publication),
+                            phase: phase, committed: publication.committed,
+                            publication_status: publication_status,
                             output_path: output, temporary_path: temporary_path), cause: error
           ensure
             failure = $!
@@ -788,12 +879,16 @@ module TagLib
               @rendered_nero = nil
               @requested_snapshots = nil
               @candidate_generation = nil
-              cleanup_candidate(temporary) if temporary
+              @publication_state = nil
+              cleanup_candidate(temporary) if temporary && publication.status != :unknown
             rescue StandardError => error
-              @unusable = true if committed
+              mark_publication_failure!(publication.status)
               raise Error.new("temporary cleanup failed: #{error.message}", code: :cleanup,
-                              phase: :cleanup, committed: committed, output_path: output,
-                              temporary_path: temporary_path), cause: (failure || error)
+                              phase: :cleanup, committed: publication.committed,
+                              publication_status: publication.status, output_path: output,
+                              temporary_path: temporary_path,
+                              issues: [{ code: :cleanup_failed, message: error.message,
+                                         details: { class: error.class.name } }]), cause: (failure || error)
             end
           end
         end
@@ -806,8 +901,35 @@ module TagLib
 
         private
 
+        # 公開が確定または判定不能になった後は、同じセッションの再利用を止める。
+        def mark_publication_failure!(status)
+          return unless %i[committed unknown].include?(status)
+
+          @unusable = true
+          @publication_status = status
+        end
+
+        # publish phaseだけ、元例外を短い診断issueへ変換する。
+        def save_error_issues(error, phase, publication)
+          return error.issues if error.is_a?(Error)
+          return [] unless phase == :publish
+
+          [{ code: :publication_failed, message: error.message,
+             details: { publication_method: publication.publication_method,
+                        errno: error.respond_to?(:errno) ? error.errno : nil } }]
+        end
+
         def public_chapters(values)
           values.map { |chapter| Chapter.new(start_ms: chapter.start_time, title: chapter.title) }.freeze
+        end
+
+        # 成功・拒否のどちらも同じ発行境界で原本世代と所有セッションへ結び付ける。
+        def issue_dangling_reference_plan(status:, reason:, message:, references: [], issues: [], repair: nil)
+          @issued_dangling_plan = DanglingChapterReferenceRemovalPlan.new(
+            status: status, reason: reason, reason_code: reason, message: message,
+            references: references, issues: issues, repair: repair,
+            source_path: @path, generation_token: @generation.__send__(:token)
+          )
         end
 
         def build_quicktime_removal_plan(native)
@@ -822,7 +944,9 @@ module TagLib
 
           unless %i[complete absent].include?(nero[:status])
             return QuickTimeChapterRemovalPlan.new(**common, status: :blocked, reason: :nero_unreadable,
-              reason_code: nero[:reason_code] || nero[:status])
+              reason_code: nero[:reason_code] || nero[:status], message: nero[:reason] || 'Nero chapter read is incomplete',
+              issues: [{ code: nero[:reason_code] || nero[:status], message: nero[:reason] || 'Nero chapter read is incomplete',
+                         location: 'chapters/nero', details: {} }])
           end
           return QuickTimeChapterRemovalPlan.new(**common, status: :absent, reason: :quicktime_absent,
             reason_code: :quicktime_absent) if quicktime[:status] == :absent
@@ -842,7 +966,9 @@ module TagLib
                 reason_code: :quicktime_complete)
             end
             QuickTimeChapterRemovalPlan.new(**common, status: :blocked, reason: error.code,
-              reason_code: error.code)
+              reason_code: error.code, message: error.message,
+              issues: [{ code: error.code, message: error.message,
+                         location: error.message.include?('titl') ? 'moov/udta/titl' : 'chapters/quicktime', details: {} }])
           end
         end
 
@@ -890,7 +1016,13 @@ module TagLib
         # 全公開操作に共通するセッション状態と原本世代の検査。
         def ensure_current!
           raise Error.new('file is closed', code: :closed) if @closed
-          raise Error.new('file is unusable after publication failure', code: :committed_failure, committed: true) if @unusable
+          if @unusable
+            status = @publication_status || :committed
+            code = status == :unknown ? :publication_unknown : :committed_failure
+            raise Error.new('file is unusable after publication failure', code: code,
+                            committed: status == :committed ? true : nil,
+                            publication_status: status)
+          end
           ensure_generation!
         end
 
@@ -1284,9 +1416,55 @@ module TagLib
                           issues: [{ code: error.code, path: 'movie', message: error.message }]), cause: error
         end
 
-        # 別出力はlinkの排他的作成を使い、競合した既存ファイルを上書きしない。
-        def publish_candidate(temporary_path, output, replace_source:)
-          replace_source ? ::File.rename(temporary_path, output) : ::File.link(temporary_path, output)
+        # 別出力はlinkを優先し、非対応時だけ同じ候補を排他的renameする。
+        def publish_candidate(temporary_path, output, replace_source:,
+                             publication: (@publication_state || Publication::State.new))
+          return publish_replacement(temporary_path, output, publication) if replace_source
+
+          publish_separate_output(temporary_path, output, publication)
+        end
+
+        # 原本置換は通常renameだけを使い、成功が確認できるまで状態を確定しない。
+        def publish_replacement(temporary_path, output, publication)
+          publication.mark_method!(:replace)
+          publication.unknown!
+          ::File.rename(temporary_path, output)
+          publication.committed!
+        rescue SystemCallError => error
+          publication.not_committed! if Publication::ExclusiveRename.definitive_error?(error)
+          raise
+        end
+
+        # 別出力の候補を追加コピーせず、link非対応時だけ排他的renameへ切り替える。
+        def publish_separate_output(temporary_path, output, publication)
+          publication.unknown!
+          publication.mark_method!(:link)
+          link_candidate(temporary_path, output)
+          publication.committed!
+        rescue SystemCallError => error
+          publication.not_committed! if Publication::ExclusiveRename.definitive_error?(error)
+          raise unless Publication::ExclusiveRename.unsupported_link_error?(error)
+
+          publication.not_committed!
+          publication.mark_method!(:exclusive_rename)
+          exclusive_rename_candidate(temporary_path, output, publication: publication, link_error: error)
+        end
+
+        def link_candidate(temporary_path, output)
+          ::File.link(temporary_path, output)
+        end
+
+        def exclusive_rename_candidate(temporary_path, output, publication:, link_error:)
+          Publication::ExclusiveRename.call(temporary_path, output, state: publication)
+        rescue Publication::ExclusiveRename::Unsupported => error
+          raise Error.new('exclusive rename is unavailable', code: :exclusive_publish_unsupported,
+                          phase: :publish,
+                          issues: [{ code: :exclusive_publish_unsupported, message: error.message,
+                                     details: { publication_method: :exclusive_rename,
+                                                link_error: link_error.class.name,
+                                                link_errno: link_error.respond_to?(:errno) ? link_error.errno : nil,
+                                                link_message: link_error.message } }]),
+                cause: error
         end
 
         def cleanup_candidate(temporary)
@@ -1399,8 +1577,9 @@ module TagLib
               return DeepCopy.call(status: structure[:status], data: structure[:data], issues: issues)
             end
           end
+          location = error.message.include?('titl') ? 'moov/udta/titl' : area.to_s
           DeepCopy.call(status: status, data: nil,
-                        issues: [diagnostic_issue(error.code, error.message, area.to_s)])
+                        issues: [diagnostic_issue(error.code, error.message, location)])
         end
 
         def diagnostic_issue(code, message, location, details = {})

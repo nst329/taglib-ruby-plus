@@ -143,11 +143,11 @@ save!は内部で入力全体とwriter可否を検証し、候補作成 → 別h
 
 戻り値は不変Hashの`{ output_path:, changed:, source_digest:, output_digest:, verification:, snapshots: }`。SaveResultクラスは作らない。snapshotsは保存候補から独立再読込した値だけを含み、変更保存のmetadataを常に返す。chapterは変更時または明示選択時だけ読む。期待値で未読領域を埋めない。原本保存でwriterが残した空キー等は、検証済みの実出力値を新baselineにする。値比較は厳密な==を基本とし、明示的にclearしたキーだけ空残存を許可する。公開snapshotの一致だけで全保持の成功とはしない。
 
-失敗時に原本未変更なら編集候補を保持し、障害解消後にsave!を再試行できる。cleanup失敗は一時pathと元の失敗をcauseに残す。公開済みの失敗ではcommitted=trueとして自動再試行しない。外部writerとの完全排他・電源断耐性・ACL等の完全保持まで新しく保証するものではない。
+失敗時に原本未変更なら編集候補を保持し、障害解消後にsave!を再試行できる。cleanup失敗は一時pathと元の失敗をcauseに残す。公開済みの失敗ではcommitted=trueとして自動再試行しない。別出力の確定有無が不明な場合は`publication_status=:unknown`、`committed=nil`で通知し、候補cleanupと自動再試行を行わない。外部writerとの完全排他・電源断耐性・ACL等の完全保持まで新しく保証するものではない。
 
 ## 例外と比較
 
-入力不正はArgumentError。ファイル由来の未対応・不正・世代不一致・保存失敗は共通の`MP4::Error`とし、code/area/phase/committed/output_path/temporary_path/issuesで判別する。用途ごとの6種類の公開例外階層は作らない。ClosedError相当はcode=:closed、世代不一致は:source_changed、混在は禁止理由に応じたcodeを持つ。保存前のcode=:source_changedはcommitted=false。I/O失敗はcauseを保持し、プログラミングエラーを一律にunsupportedへ変換しない。
+入力不正はArgumentError。ファイル由来の未対応・不正・世代不一致・保存失敗は共通の`MP4::Error`とし、code/area/phase/committed/publication_status/output_path/temporary_path/issuesで判別する。用途ごとの6種類の公開例外階層は作らない。ClosedError相当はcode=:closed、世代不一致は:source_changed、混在は禁止理由に応じたcodeを持つ。保存前のcode=:source_changedはcommitted=false。I/O失敗はcauseを保持し、プログラミングエラーを一律にunsupportedへ変換しない。
 
 MetadataSnapshotの==/eql?/hashは型・locale・順序・重複・空キーの存在を含む値の厳密比較。取得元配置・raw情報は別である。diff(other)も同じ厳密値基準とし、比較modeや同義aliasを公開しない。別ファイルへの復元で空keysの残存を許すのは保存検証の責務にする。
 
