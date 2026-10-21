@@ -8,6 +8,15 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.34
+
+### Fixed
+- Ruby 4.0.7 LinuxのGC compaction後にMP4 `ItemMap#item_map`で発生していたSWIG trackingのSIGSEGVを修正した。
+- 借用wrapperのVALUEを`rb_gc_register_address`へ直接登録し、GC移動後の参照をRubyに更新させるようにした。
+
+### Changed
+- 借用wrapperはnative所有者のclose・置換時まで強参照され、tracking解除後に通常どおり回収される契約へ整理した。Ruby所有wrapperは従来どおりtracking対象外とする。
+
 ## 2.3.2.33
 
 ### Added

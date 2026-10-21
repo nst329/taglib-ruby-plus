@@ -132,6 +132,7 @@ Gem::Specification.new do |s|
     'docs/ADR/2026-10-21-chapter計画の拒否メッセージを保持する.md',
     'docs/ADR/2026-10-21-chapter計画の責務整理とtitl再読込削減.md',
     'docs/ADR/2026-10-21-titl保持と欠落chapter参照計画の分離.md',
+    'docs/ADR/2026-10-21-SWIG trackingを直接GC登録へ変更する.md',
     'test/plus_mp4_quicktime_removal_test.rb',
     'docs/ADR/2026-10-16-Plus独自APIを編集セッションへ簡素化.md',
     'test/support/plus_api_design_probe.rb',

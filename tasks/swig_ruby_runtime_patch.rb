@@ -2,6 +2,7 @@
 
 SWIG_RUBY_TRACKING_START = '/* Global hash table to store Trackings'
 SWIG_RUBY_SAFE_TRACKING_START = '/* Keep a movable weak reference instead of rooting the wrapper itself. */'
+SWIG_RUBY_REGISTERED_TRACKING_START = '/* Register borrowed wrappers directly so Ruby updates VALUEs during compaction. */'
 SWIG_RUBY_RUNTIME_END = "/* -----------------------------------------------------------------------------\n * Ruby API portion"
 SWIG_RUBY_OWNED_ITEM_FACTORIES = %w[
   from_bool
@@ -15,13 +16,12 @@ SWIG_RUBY_OWNED_ITEM_FACTORIES = %w[
 ].freeze
 
 SAFE_SWIG_RUBY_TRACKING_RUNTIME = <<~'CPP'
-  /* Keep a movable weak reference instead of rooting the wrapper itself. */
+  /* Register borrowed wrappers directly so Ruby updates VALUEs during compaction. */
   typedef struct {
-    VALUE weakref;
+    VALUE object;
   } swig_ruby_tracking_entry;
 
   static st_table* swig_ruby_trackings = NULL;
-  static VALUE swig_ruby_weakref_class = Qnil;
 
   static VALUE swig_ruby_trackings_count(ID id, VALUE *var) {
     return SWIG2NUM(swig_ruby_trackings->num_entries);
@@ -49,8 +49,6 @@ SAFE_SWIG_RUBY_TRACKING_RUNTIME = <<~'CPP'
     rb_define_virtual_variable("SWIG_TRACKINGS_COUNT",
                                VALUEFUNC(swig_ruby_trackings_count),
                                SWIG_RUBY_VOID_ANYARGS_FUNC((rb_gvar_setter_t *)NULL));
-    rb_require("weakref");
-    swig_ruby_weakref_class = rb_const_get(rb_cObject, rb_intern("WeakRef"));
   }
 
   /* Track only borrowed wrappers. Ruby-owned wrappers keep their native
@@ -58,9 +56,6 @@ SAFE_SWIG_RUBY_TRACKING_RUNTIME = <<~'CPP'
   SWIGRUNTIME void SWIG_RubyAddTracking(void* ptr, VALUE object) {
     st_data_t old_value;
     swig_ruby_tracking_entry *entry;
-    VALUE weakref;
-    VALUE arguments[1];
-
     if (!ptr || TYPE(object) != T_DATA || RTYPEDDATA_P(object) ||
         RDATA(object)->dfree != SWIG_RubyRemoveTracking) {
       return;
@@ -74,37 +69,23 @@ SAFE_SWIG_RUBY_TRACKING_RUNTIME = <<~'CPP'
       SWIG_RubyRemoveTracking(ptr);
     }
 
-    arguments[0] = object;
-    weakref = rb_class_new_instance(1, arguments, swig_ruby_weakref_class);
     entry = (swig_ruby_tracking_entry *)malloc(sizeof(*entry));
     if (!entry) {
       rb_raise(rb_eNoMemError, "failed to allocate SWIG tracking entry");
     }
-    entry->weakref = Qnil;
-    rb_gc_register_address(&entry->weakref);
-    entry->weakref = weakref;
+    entry->object = Qnil;
+    rb_gc_register_address(&entry->object);
+    entry->object = object;
     st_insert(swig_ruby_trackings, (st_data_t)ptr, (st_data_t)entry);
-  }
-
-  /* Get the current Ruby wrapper for a native pointer. */
-  static VALUE swig_ruby_weakref_get(VALUE weakref) {
-    return rb_funcall(weakref, rb_intern("__getobj__"), 0);
   }
 
   SWIGRUNTIME VALUE SWIG_RubyInstanceFor(void* ptr) {
     st_data_t value;
     swig_ruby_tracking_entry *entry;
-    int state = 0;
-    VALUE object;
 
     if (st_lookup(swig_ruby_trackings, (st_data_t)ptr, &value)) {
       entry = (swig_ruby_tracking_entry *)value;
-      object = rb_protect(swig_ruby_weakref_get, entry->weakref, &state);
-      if (!state) {
-        return object;
-      }
-      rb_set_errinfo(Qnil);
-      SWIG_RubyRemoveTracking(ptr);
+      return entry->object;
     }
     return Qnil;
   }
@@ -119,7 +100,7 @@ SAFE_SWIG_RUBY_TRACKING_RUNTIME = <<~'CPP'
       return;
     }
     entry = (swig_ruby_tracking_entry *)value;
-    rb_gc_unregister_address(&entry->weakref);
+    rb_gc_unregister_address(&entry->object);
     free(entry);
   }
 
@@ -135,8 +116,7 @@ SAFE_SWIG_RUBY_TRACKING_RUNTIME = <<~'CPP'
 
   static int swig_ruby_internal_iterate_callback(st_data_t ptr, st_data_t obj, st_data_t meth) {
     swig_ruby_tracking_entry *entry = (swig_ruby_tracking_entry *)obj;
-    VALUE object = swig_ruby_weakref_get(entry->weakref);
-    ((void (*) (void *, VALUE))meth)((void *)ptr, object);
+    ((void (*) (void *, VALUE))meth)((void *)ptr, entry->object);
     return ST_CONTINUE;
   }
 
@@ -155,7 +135,8 @@ CPP
 # Regenerate-safe postprocessing for the SWIG runtime and ownership markers.
 def patch_swig_ruby_runtime(path)
   source = File.read(path)
-  start = source.index(SWIG_RUBY_TRACKING_START) || source.index(SWIG_RUBY_SAFE_TRACKING_START)
+  start = source.index(SWIG_RUBY_TRACKING_START) || source.index(SWIG_RUBY_SAFE_TRACKING_START) ||
+          source.index(SWIG_RUBY_REGISTERED_TRACKING_START)
   if start
     finish = source.index(SWIG_RUBY_RUNTIME_END, start)
     raise "SWIG tracking runtime markers not found in #{path}" unless finish

@@ -1,5 +1,8 @@
 # ADR: SWIG trackingをRuby GC追随型の借用ラッパー管理へ変更する
 
+> 2026-10-21追補: WeakRef経由の方式はLinux Ruby 4.0.7のcompaction後にSIGSEGVを再現したため、
+> 現行実装では[直接GC登録のADR](2026-10-21-SWIG%20tracking%E3%82%92%E7%9B%B4%E6%8E%A5GC%E7%99%BB%E9%8C%B2%E3%81%B8%E5%A4%89%E6%9B%B4%E3%81%99%E3%82%8B.md)へ置き換えた。
+
 ## 背景
 
 各SWIG bundleは、nativeポインタからRubyラッパーを引くために、`st_table`へ生のRuby `VALUE`を保存している。この表はRuby GCの管理対象ではないため、Rubyのcompaction後に移動前の`VALUE`を返す。`SWIG_Ruby_MangleStr`、`SWIG_Ruby_NewPointerObj`、および`SWIG_RubyUnlinkObjects`がその値をRubyオブジェクトとして扱うと、SIGSEGVになる。
