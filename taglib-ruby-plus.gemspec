@@ -258,6 +258,7 @@ Gem::Specification.new do |s|
     'docs/ADR/2026-08-28-mp4-chapter-read-ownership.md',
     'docs/ADR/2026-08-28-bundler4-ci-compatibility.md',
     'docs/ADR/2026-09-01-swig-tracking-moving-gc.md',
+    'docs/ADR/2026-10-21-SWIG追跡数テストを子プロセスで隔離する.md',
     'docs/Memos/2026-09-01-ruby4-mp4-item-map-segfault-investigation.md',
     'docs/taglib/aiff.rb',
     'docs/taglib/base.rb',
