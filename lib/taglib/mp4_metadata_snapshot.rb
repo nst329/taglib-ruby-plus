@@ -385,11 +385,12 @@ module TagLib::MP4
     # 個別atomの妥当性は呼出側が検証し、ここでは配置とhandlerの組合せだけを判定する。
     def safe_pair?(contexts)
       return false unless contexts.is_a?(Array) && contexts.length == 2
-      return false unless contexts.map { |context| context[:handler] }.sort == %w[mdir mdta]
-      return false unless contexts.all? { |context| context.key?(:parent_offset) && context.key?(:parent_end_offset) }
+      return false unless contexts.map { |context| context[:handler] }.tally == { 'mdir' => 1, 'mdta' => 1 }
+      return false unless contexts.all? { |context| context[:parent_offset].is_a?(Integer) &&
+        context[:parent_end_offset].is_a?(Integer) && context[:parent_offset] < context[:parent_end_offset] }
       parents = contexts.map { |context| [context[:parent_offset], context[:parent_end_offset]] }
       return false unless parents.uniq.length == 1
-      return false if contexts.any? { |context| context[:path] && context[:path] != 'moov/udta/meta' }
+      return false unless contexts.all? { |context| context[:path] == 'moov/udta/meta' }
 
       mdir = contexts.find { |context| context[:handler] == 'mdir' }
       mdta = contexts.find { |context| context[:handler] == 'mdta' }
@@ -650,7 +651,7 @@ module TagLib::MP4
       native = respond_to?(:_metadata_status) ? _metadata_status : :unknown
       entries = item_map.to_a
       info = if @metadata_source_path
-               MetadataStructureReader.read(@metadata_source_path, detailed: true,
+               MetadataStructureReader.read(@metadata_source_path, detailed: true, digest_items: false,
                                             item_types: @metadata_disk_item_types || entries.to_h { |key, item| [key, item.type] })
              else
                { issues: [{ code: :unbound_tag, severity: :error, path: 'metadata', message: 'File-owned Tag required' }], structure: {} }

@@ -10,6 +10,23 @@ revision of a specific TagLib release.
 
 ## 開発中
 
+## 2.3.2.40
+
+### Fixed
+
+- 全体CIを公開前の必須検証へ追加し、Ruby 3.2/4.0の同一コミットでの回帰を公開ジョブへ反映する。
+- 世代検証、Unicode原表記保持、metadata context境界検証、候補cleanupの追加回帰テストを製品API経由で実行する。
+
+### Fixed
+
+- ctime差をSHA256で許容する前にfd/pathのdev/inode/size/mtimeを再確認し、走査中の変更も拒否する。読取り中の世代競合はareaとstat差分を保持したまま`phase: :read`で報告する。
+- metadata contextの未知handler・未確定の親境界を確実に拒否し、診断時に不要なitem全体のSHA読取りを避ける。
+- 原表記保持に合わせてsample境界とartwork読取りのテスト監視pathを更新し、SMB相当の遅延・plan後の変更・検証後の候補差し替えを製品コードの通常テストへ追加する。
+
+### Changed
+
+- バイナリgemの公開は、同一commitに対するRuby 3.2/4.0の全体CI成功を必須とする。
+
 ## 2.3.2.39
 
 ### Fixed

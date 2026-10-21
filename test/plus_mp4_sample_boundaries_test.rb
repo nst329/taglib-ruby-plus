@@ -367,7 +367,7 @@ class MP4SampleBoundariesTest < Test::Unit::TestCase
   end
 
   def observe(action = nil)
-    observer = { path: File.realpath(@path), reads: [], action: action }
+    observer = { path: File.expand_path(@path), reads: [], action: action }
     Thread.current[:boundary_read_observer] = observer
     value = yield
     [value, observer[:reads]]

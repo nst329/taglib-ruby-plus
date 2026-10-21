@@ -93,13 +93,13 @@ class SMBGenerationDesignTest < Test::Unit::TestCase
     assert_nothing_raised { value.check! }
   end
 
-  def test_current_phase_reports_prepare_during_read_and_verify_inside_save
+  def test_current_phase_reports_read_during_read_and_verify_inside_save
     API.open(@path) do |file|
       value = file.instance_variable_get(:@generation)
       error = assert_raise(API::Error) do
         file.__send__(:read_checked) { simulate_stat_difference(value) }
       end
-      assert_equal :prepare, error.phase
+      assert_equal :read, error.phase
     end
     API.open(@path) do |file|
       plan = file.plan_limited_repairs(mdta_layout: :mixed_known_fourcc)

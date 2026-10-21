@@ -211,6 +211,34 @@ class PlusMP4LimitedRepairTest < Test::Unit::TestCase
     end
   end
 
+  def test_malformed_pair_is_blocked_by_diagnosis_and_planning
+    %i[unknown_handler missing_handler unknown_child duplicate_ilst].each do |variant|
+      path = File.join(@dir, "#{variant}.m4a")
+      FileUtils.cp(@path, path)
+      inject_mdir_mdta_pair(path)
+      edit_fixture(path) do |moov|
+        mdir = fixture_child(fixture_child(moov, 'udta'), 'meta')
+        case variant
+        when :unknown_handler then fixture_child(mdir, 'hdlr')[:data][8, 4] = 'zzzz'
+        when :missing_handler then mdir[:children].reject! { |node| node[:type] == 'hdlr' }
+        when :unknown_child then mdir[:children] << { type: 'zzzz', data: 'unknown'.b }
+        when :duplicate_ilst
+          mdir[:children] << Marshal.load(Marshal.dump(fixture_child(mdir, 'ilst')))
+        end
+      end
+      original = File.binread(path)
+      API.open(path) do |file|
+        report = file.diagnose(:metadata)
+        assert_not_equal :complete, report[:status], variant
+        assert_not_empty report[:issues], variant
+        plan = file.plan_limited_repairs
+        assert_equal :blocked, plan.status, variant
+        assert_raise(API::Error) { file.apply_limited_repairs(plan: plan, allow: ALLOW) }
+      end
+      assert_equal original, File.binread(path)
+    end
+  end
+
   def test_explicit_indexed_layout_handles_fourcc_shaped_index
     inject_metadata(@path, keys: ['a'], indices: [1, 'zzzz'.unpack1('N'), 0xffffffff])
     edit_fixture(@path) { |moov| fixture_child(fixture_child(fixture_child(moov, 'udta'), 'meta'), 'ilst')[:children].pop }

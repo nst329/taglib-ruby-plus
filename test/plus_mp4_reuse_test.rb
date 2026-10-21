@@ -226,7 +226,7 @@ class PlusMP4ReuseTest < Test::Unit::TestCase
     end
     original = File.instance_method(:read)
     calls = []
-    path = File.realpath(@source)
+    path = File.expand_path(@source)
     File.define_method(:read) do |*args, **kwargs|
       offset = pos
       result = original.bind_call(self, *args, **kwargs)

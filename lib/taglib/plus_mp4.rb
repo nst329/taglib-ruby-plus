@@ -1013,6 +1013,11 @@ module TagLib
           value = yield
           ensure_generation!
           value
+        rescue Error => error
+          raise unless error.code == :source_changed
+
+          raise Error.new(error.message, code: error.code, area: error.area, phase: :read,
+                          issues: error.issues), cause: error
         rescue *STRUCTURE_ERRORS => error
           raise Error.new(error.message, code: error.code, phase: :read,
                           issues: error.respond_to?(:issues) ? error.issues : []), cause: error

@@ -120,7 +120,7 @@ module TagLib
           return if handle_identity == @identity && path_identity == @identity
 
           if ctime_only_difference?(@identity, handle_identity, path_identity) &&
-             content_matches_source?(path_identity)
+             content_matches_source?
             return
           end
 
@@ -128,10 +128,13 @@ module TagLib
         end
 
         # ctimeだけが揺れた場合に限り、fdとpathの内容SHA256が一致することを確認する。
-        def content_matches_source?(_path_identity)
+        def content_matches_source?
           return false unless @verification == :sha256 && @digest
 
-          hash_content == @digest && Digest::SHA256.file(@path).hexdigest == @digest
+          return false unless hash_content == @digest && Digest::SHA256.file(@path).hexdigest == @digest
+
+          # SHA走査中のpath差し替え・size/mtime変化も許容前に拒否する。
+          [identity(@io.stat), identity(::File.stat(@path))].all? { |value| value[0, 4] == @identity[0, 4] }
         rescue SystemCallError, IOError
           false
         end

@@ -17,6 +17,10 @@ permissions:
   packages: write
 
 jobs:
+  # 公開対象と同じcommitでRuby両版の全体CIを完了させてから公開する。
+  validate:
+    uses: ./.github/workflows/ci.yml
+
   build:
     strategy:
       fail-fast: false
@@ -155,7 +159,7 @@ jobs:
 
   publish:
     if: startsWith(github.ref, 'refs/tags/v') || inputs.publish == true
-    needs: [build, build-source]
+    needs: [validate, build, build-source]
     runs-on: ubuntu-24.04
 
     steps:
