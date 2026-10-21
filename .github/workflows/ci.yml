@@ -136,16 +136,16 @@ jobs:
             TagLib::MP4::Chapter.new(start_time: 0, title: 'Opening'),
             TagLib::MP4::Chapter.new(start_time: 500, title: 'Main')
           ]
-          file = TagLib::MP4::File.new(path, false)
+          file = TagLib::MP4::Internal::File.new(path, false)
           file.set_chapters(chapters, style: :preserve)
           raise 'save_chapters failed' unless file.save_chapters
           file.close
 
-          file = TagLib::MP4::File.new(path, false)
+          file = TagLib::MP4::Internal::File.new(path, false)
           raise 'chapter round-trip failed' unless file.chapters == chapters
           file.close
 
-          file = TagLib::MP4::File.new(path, false)
+          file = TagLib::MP4::Internal::File.new(path, false)
           tag = file.tag
           raise 'MP4 metadata API unavailable' unless tag.property('title') == 'Title'
           artwork = tag.artwork
