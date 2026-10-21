@@ -90,6 +90,98 @@ class PlusMP4IOTest < Test::Unit::TestCase
     end
   end
 
+  should 'adopt a published generation when only ctime differs and both contents match' do
+    generation = API.const_get(:Generation, false).new(@source, :stat)
+    original = generation.instance_variable_get(:@identity)
+    calls = 0
+    generation.define_singleton_method(:identity) do |_stat|
+      calls += 1
+      original[0, 4] + [original[4] + [calls, 2].min]
+    end
+
+    generation.__send__(:expect_publication_digest, Digest::SHA256.file(@source).hexdigest)
+    generation.publish_to(@source)
+
+    assert_equal original[0, 4] + [original[4] + 2], generation.__send__(:token)
+  ensure
+    generation&.close
+  end
+
+  should 'reject a published generation when ctime differs but content SHA256 differs' do
+    generation = API.const_get(:Generation, false).new(@source, :stat)
+    original = generation.instance_variable_get(:@identity)
+    calls = 0
+    generation.define_singleton_method(:identity) do |_stat|
+      calls += 1
+      original[0, 4] + [original[4] + calls]
+    end
+
+    error = assert_raise(API::Error) do
+      generation.__send__(:expect_publication_digest, '0' * 64)
+      generation.publish_to(@source)
+    end
+    assert_equal :source_changed, error.code
+  ensure
+    generation&.close
+  end
+
+  should 'reject a published generation when dev, inode, size, or mtime differs' do
+    generation_class = API.const_get(:Generation, false)
+    %i[dev ino size mtime].each do |field|
+      generation = generation_class.new(@source, :stat)
+      baseline = generation.instance_variable_get(:@identity)
+      index = %i[dev ino size mtime ctime].index(field)
+      generation.define_singleton_method(:identity) do |_stat|
+        value = baseline.dup
+        value[index] += 1
+        value
+      end
+      generation.__send__(:expect_publication_digest, Digest::SHA256.file(@source).hexdigest)
+      error = assert_raise(API::Error) { generation.publish_to(@source) }
+      assert_equal :source_changed, error.code, "#{field}差分をsource_changedにできません"
+    ensure
+      generation&.close
+    end
+  end
+
+  should 'complete in-place save when publication ctime differs but candidate content matches' do
+    generation_class = API.const_get(:Generation, false)
+    generation_class.prepend(Module.new do
+      # 公開候補だけfd/pathのctimeをずらし、SMB属性反映遅延を合成する。
+      def publish_to(path)
+        return super unless Thread.current[:smb_ctime_probe]
+
+        @smb_ctime_probe_active = true
+        super
+      ensure
+        @smb_ctime_probe_active = false
+      end
+
+      def identity(stat)
+        value = super
+        return value unless @smb_ctime_probe_active
+
+        @smb_ctime_probe_calls = (@smb_ctime_probe_calls || 0) + 1
+        return value unless @smb_ctime_probe_calls == 1
+
+        value.dup.tap { |identity| identity[4] += 1 }
+      end
+    end)
+
+    Thread.current[:smb_ctime_probe] = true
+    API.open(@source) do |file|
+      file.metadata = file.metadata.with(properties: { title: 'ctime遅延を許容' })
+      result = file.save!
+      assert_equal true, result[:changed]
+      assert_equal result[:output_digest], Digest::SHA256.file(@source).hexdigest
+      assert_equal ['ctime遅延を許容'], file.metadata.properties[:title]
+      assert_equal false, file.changes[:changed]
+    end
+    assert_equal ['ctime遅延を許容'], API.open(@source) { |file| file.metadata.properties[:title] }
+  ensure
+    Thread.current[:smb_ctime_probe] = nil
+  end
+
   should 'use content verification in strict mode even if stat observations are unchanged' do
     API.open(@source, verification: :sha256) do |file|
       generation = file.instance_variable_get(:@generation)

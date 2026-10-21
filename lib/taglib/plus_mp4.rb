@@ -855,6 +855,7 @@ module TagLib
             publish_candidate(temporary_path, output, replace_source: replace_source)
             phase = :adopt
             if replace_source && changed
+              output_generation.__send__(:expect_publication_digest, output_digest)
               output_generation.publish_to(@path)
               @verified_generation = output_generation
               adopt_baseline!(baseline, output_digest)

@@ -60,10 +60,18 @@ module TagLib
         end
 
         # rename後も検証済み候補のhandleを所有し続け、別inodeの採用を防ぐ。
+        # SMBのctime反映遅延だけは、既取得の候補SHA256でfd/pathを再確認して許容する。
         def publish_to(path)
           current = identity(@io.stat)
-          changed! unless current[0, 4] == @identity[0, 4] && identity(::File.stat(path)) == current
+          published = identity(::File.stat(path))
+          unless current[0, 4] == @identity[0, 4] && published == current
+            changed! unless ctime_only_difference?(@identity, current, published) &&
+                           published_content_matches?(path)
+            current = identity(@io.stat)
+            changed! unless current[0, 4] == @identity[0, 4] && identity(::File.stat(path)) == current
+          end
           @path, @identity = path, current
+          @publication_digest = nil
         end
 
         private
@@ -83,8 +91,27 @@ module TagLib
           @verification, @digest = :sha256, digest
         end
 
+        # 公開直前に得た候補SHAを、stat検証世代のctime再確認へだけ渡す。
+        def expect_publication_digest(digest)
+          @publication_digest = digest
+        end
+
         def identity(stat)
           [stat.dev, stat.ino, stat.size, stat.mtime.to_r, stat.ctime.to_r]
+        end
+
+        def ctime_only_difference?(expected, current, published)
+          expected[0, 4] == current[0, 4] && current[0, 4] == published[0, 4] &&
+            [expected[4], current[4], published[4]].uniq.length > 1
+        end
+
+        # ctime差分の許容条件を、公開前に検証した候補内容へ限定する。
+        def published_content_matches?(path)
+          return false unless @publication_digest
+
+          handle_digest = hash_content
+          path_digest = Digest::SHA256.file(path).hexdigest
+          handle_digest == @publication_digest && path_digest == @publication_digest
         end
 
         def check_stat!

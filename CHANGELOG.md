@@ -8,6 +8,15 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.36
+
+### Fixed
+- SMB共有で保存後のfd/pathのctimeだけが遅れて不一致になる場合、候補SHA256とdev/inode/size/mtimeを再確認して同一世代として採用するようにした。
+- 候補内容、dev、inode、size、mtimeのいずれかが一致しない場合は、従来どおり`source_changed`を返す。
+
+### Changed
+- MListNewは修正版を利用するため、taglib-ruby-plus依存を2.3.2.36へ更新する必要がある。
+
 ## 2.3.2.35
 
 ### Changed
