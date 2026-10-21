@@ -155,7 +155,7 @@ jobs:
           raise 'metadata API save failed' unless file.save
           file.close
 
-          file = TagLib::MP4::File.new(path, false)
+          file = TagLib::MP4::Internal::File.new(path, false)
           raise 'metadata API round-trip failed' unless file.tag.property('description') == 'Packaged gem API'
           raise 'artwork API round-trip failed' unless file.tag.artwork.length == 1
           file.close
