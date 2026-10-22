@@ -14,6 +14,27 @@ rake test:minitest
 rake test
 ```
 
+## 開発依存gemの導入
+
+テストに必要な開発依存gemは、テスト時だけ一時ディレクトリへ導入する。プロジェクトの
+`vendor/bundle`、ユーザーのgem環境、リポジトリ内の設定へ残さない。テストが成功・失敗の
+どちらになっても、一時ディレクトリを削除する。
+
+```sh
+TEST_GEM_DIR=$(mktemp -d /private/tmp/taglib-ruby-test-gems.XXXXXX)
+trap 'rm -rf "$TEST_GEM_DIR"' EXIT
+
+BUNDLE_USER_HOME="$TEST_GEM_DIR/home" \
+  BUNDLE_PATH="$TEST_GEM_DIR/gems" \
+  bundle install
+BUNDLE_USER_HOME="$TEST_GEM_DIR/home" \
+  BUNDLE_PATH="$TEST_GEM_DIR/gems" \
+  bundle exec rake test:plus_mp4
+```
+
+`test:plus_mp4`以外のテストを実行する場合も、同じ一時導入とcleanupの手順を使う。
+依存gemの導入に失敗した場合は、依存なしでテスト済みと扱わず、失敗理由を報告する。
+
 Rake経由ではtest-unitの成功時の進捗・テスト名・色を抑制し、失敗時だけ例外、backtrace、causeを出力する。minitestには専用のオプションだけを渡し、6以降では--quietで進捗を抑制する。MP4のnative bindingを使うため、ローカルのTagLibライブラリを`DYLD_LIBRARY_PATH`で指定する環境では、プロジェクトの標準テストと同じRubyを使う。
 
 現行のPlus APIは[plus_mp4_api_test.rb](plus_mp4_api_test.rb)で確認する。[plus_mp4_io_test.rb](plus_mp4_io_test.rb)は通常/厳密モード、cache、コピー予算、競合・部分コピー・purl raw・同時編集の独立検証を確認する。`test:plus_mp4`は`plus_mp4*_test.rb`をすべて実行する。ここでは編集用File、不変metadata/chapter値、save/save-as、世代不一致、無変更コピー、typed mdtaの所有コピー、chapter形式の保持を検証する。公開前後の障害注入、cleanupの原因連鎖、公開競合、旧APIの非公開化、診断schema、chapter sampleの所有もここで確認する。

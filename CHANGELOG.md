@@ -10,6 +10,18 @@ revision of a specific TagLib release.
 
 ## 開発中
 
+## 2.3.2.41
+
+### Added
+
+- QuickTime chapterを正として正常なNero chapterを代替扱いし、形式を問わず破損chapterを安全に除去する公開APIを追加した。
+- chapter参照の診断・除去計画とatom編集の回帰テストを追加した。
+
+### Changed
+
+- chapter形式の選択、破損判定、除去を同一のMP4保存計画へ統合した。
+- テスト用開発依存gemは一時ディレクトリへ導入し、テスト終了時に削除する運用を文書化した。
+
 ## 2.3.2.40
 
 ### Fixed
