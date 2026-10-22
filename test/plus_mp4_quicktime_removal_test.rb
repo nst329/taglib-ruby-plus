@@ -90,6 +90,80 @@ class PlusMP4QuickTimeRemovalTest < Test::Unit::TestCase
     end
   end
 
+  def test_policy_selects_quicktime_and_removes_broken_nero
+    break_nero
+    output = File.join(@dir, 'policy-removed.m4a')
+    API.open(@path) do |file|
+      selection = file.select_chapters
+      assert_equal :quicktime, selection.style
+      assert_equal %w[QT開始 QT本編], selection.chapters.map(&:title)
+      plan = file.plan_broken_chapter_removal
+      assert_equal :removable, plan.status
+      assert_equal [:nero], plan.remove_styles
+      file.define_singleton_method(:load_metadata) { raise 'source metadata must not be loaded for chapter removal' }
+      file.remove_broken_chapters(plan: plan)
+      result = file.save!(to: output)
+      assert_instance_of API::MetadataSnapshot, result.fetch(:snapshots).fetch(:metadata)
+    end
+    API.open(output) do |file|
+      assert_equal :quicktime, file.select_chapters.style
+      assert_equal %w[QT開始 QT本編], file.select_chapters.chapters.map(&:title)
+      assert_nil file.read_chapters(style: :nero)
+    end
+  end
+
+  def test_broken_chapter_plan_skips_timing_and_renders_unchanged_size_once
+    break_nero
+    API.open(@path) do |file|
+      analysis = file.send(:read_structure) do |native|
+        report = TagLib::MP4.const_get(:ChapterReader, false).read(native).report
+        TagLib::MP4::BrokenChapterRemovalReferences.new(native, chapter_report: report, remove_nero: true)
+      end
+      assert_nil analysis.timing_report
+      render = analysis.method(:render)
+      moov_renders = []
+      analysis.define_singleton_method(:render) do |atom, delta|
+        moov_renders << delta if atom[:type] == 'moov'
+        render.call(atom, delta)
+      end
+      assert_not_nil analysis.repair_plan
+      assert_equal [0], moov_renders
+      file.plan_broken_chapter_removal
+      assert_not_nil file.diagnose(:chapter_timing).fetch(:data).fetch(:tracks)
+    end
+  end
+
+  def test_broken_chapter_removal_rejects_changed_output_metadata_without_source_snapshot
+    break_nero
+    original = File.binread(@path)
+    output = File.join(@dir, 'changed-metadata.m4a')
+    corrupt_metadata = lambda do |path|
+      edit_fixture(path) do |moov|
+        meta = fixture_child(fixture_child(moov, 'udta'), 'meta')
+        item = fixture_child(meta, 'ilst').fetch(:children).first
+        data = item.fetch(:data).dup
+        data.setbyte(data.bytesize - 1, data.getbyte(data.bytesize - 1) ^ 1)
+        item[:data] = data
+      end
+    end
+    API.open(@path) do |file|
+      plan = file.plan_broken_chapter_removal
+      file.remove_broken_chapters(plan: plan)
+      prepare = file.method(:prepare_candidate)
+      file.define_singleton_method(:prepare_candidate) do |path, changed:|
+        prepare.call(path, changed: changed)
+        corrupt_metadata.call(path)
+      end
+      file.define_singleton_method(:load_metadata) { raise 'source metadata must not be loaded' }
+      error = assert_raise(API::Error) { file.save!(to: output) }
+      assert_equal :verify, error.phase
+      assert_equal false, error.committed
+      assert_match(/preservation verification failed/, error.message)
+    end
+    assert_equal original, File.binread(@path)
+    assert_equal false, File.exist?(output)
+  end
+
   def test_broken_quicktime_with_absent_nero_is_allowed_and_time_mismatch_is_a_candidate
     TagLib::MP4::Internal::File.open(@path, false) do |file|
       file.remove_nero_chapters
@@ -391,6 +465,13 @@ class PlusMP4QuickTimeRemovalTest < Test::Unit::TestCase
     edit_fixture(@path) do |moov|
       source = fixture_tracks(moov).find { |track| fixture_track_id(track) == source_id }
       source[:children] << { type: 'tref', children: [{ type: type, data: ids.pack('N*') }] }
+    end
+  end
+
+  def break_nero
+    edit_fixture(@path) do |moov|
+      chpl = fixture_child(fixture_child(moov, 'udta'), 'chpl')
+      chpl[:data] = chpl.fetch(:data).byteslice(0...-1)
     end
   end
 

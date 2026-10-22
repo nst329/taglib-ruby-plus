@@ -11,7 +11,6 @@ module TagLib::MP4
       @mdta_layout = mdta_layout
       @metadata_atom_count = 0
       @removed_metadata = []
-      @metadata_replacements = {}
       @metadata_context_headers = {}
       super(file, chapter_report: chapter_report)
     end
@@ -182,7 +181,7 @@ module TagLib::MP4
       end
       unless @removed_metadata.empty?
         replacement_ilst = make_box('ilst', survivors.map { |item| item[:raw] }.join.b)
-        @metadata_replacements[meta[:offset]] = make_box('meta', raw.byteslice(8, 4) + children.map { |row| row.equal?(ilst) ? replacement_ilst : row[:raw] }.join.b)
+        @atom_replacements[meta[:offset]] = make_box('meta', raw.byteslice(8, 4) + children.map { |row| row.equal?(ilst) ? replacement_ilst : row[:raw] }.join.b)
       end
     end
 
@@ -214,19 +213,6 @@ module TagLib::MP4
 
     def make_box(type, data)
       [data.bytesize + 8].pack('N') + type + data
-    end
-
-    def render(atom, delta)
-      @metadata_replacements[atom[:offset]] || super
-    end
-
-    def preservation_value(atom)
-      if (raw = @metadata_replacements[atom[:offset]])
-        payload = raw.byteslice(8..)
-        [payload.bytesize, Digest::SHA256.hexdigest(payload)]
-      else
-        super
-      end
     end
   end
   private_constant :LimitedRepairEditor

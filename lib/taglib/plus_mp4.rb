@@ -462,14 +462,30 @@ module TagLib
         end
       end
 
+      # QuickTime優先の選択結果を、形式別診断とともにnativeから切り離して保持する。
+      class ChapterSelection
+        attr_reader :style, :chapters, :statuses, :issues
+
+        def initialize(style:, chapters:, statuses:, issues: [])
+          @style, @chapters = style, DeepCopy.call(chapters)
+          @statuses, @issues = DeepCopy.call(statuses), DeepCopy.call(issues)
+          freeze
+        end
+
+        def [](key)
+          public_send(key)
+        end
+      end
+
       # QuickTime限定除去の判定と、同一原本世代へ結び付いた編集計画。
       # `status: :removable`だけがremove_quicktime_chaptersへ渡せる。
       class QuickTimeChapterRemovalPlan
         attr_reader :status, :reason, :reason_code, :message, :operation, :issues, :references, :target_track_id,
-                    :nero, :nero_status, :nero_chpl_sha256
+                    :nero, :nero_status, :nero_chpl_sha256, :remove_styles, :quicktime_status
 
         def initialize(status:, reason:, reason_code:, references:, target_track_id:, nero:, nero_status:,
-                       nero_chpl_sha256:, source_path:, generation_token:, repair: nil, message: nil, operation: nil, issues: [])
+                       nero_chpl_sha256:, source_path:, generation_token:, repair: nil, message: nil, operation: nil,
+                       issues: [], remove_styles: [], quicktime_status: nil)
           @status, @reason, @reason_code = status, reason, reason_code
           @message = (message || reason.to_s).dup.freeze
           @operation = operation
@@ -479,6 +495,8 @@ module TagLib
           @nero = DeepCopy.call(nero)
           @nero_status = nero_status
           @nero_chpl_sha256 = nero_chpl_sha256&.dup&.freeze
+          @remove_styles = DeepCopy.call(remove_styles)
+          @quicktime_status = quicktime_status
           @source_path = source_path.dup.freeze
           @generation_token = DeepCopy.call(generation_token)
           @repair = repair
@@ -612,9 +630,7 @@ module TagLib
 
           ensure_current!
           ensure_no_repair!
-          reader = @generation.cached_chapter_reader(false) || read_structure do |native|
-            ::TagLib::MP4.send(:const_get, :ChapterReader, false).read(native)
-          end
+          reader = chapter_reader
           result = reader.report.fetch(style)
           unless %i[complete absent].include?(result[:status])
             raise Error.new(result[:reason], code: result[:status], area: :chapters, phase: :read,
@@ -625,6 +641,51 @@ module TagLib
           return nil if result[:status] == :absent
 
           public_chapters(reader.values.fetch(style))
+        end
+
+        # QuickTimeを正として完全読取できる形式を選び、なければNeroを代替する。
+        # 不在は選択不能、破損・未対応は診断に残し、読取だけでは原本を変更しない。
+        def select_chapters
+          ensure_current!
+          ensure_no_repair!
+          reader = chapter_reader
+          statuses = reader.report.transform_values { |row| row.fetch(:status) }
+          style = %i[quicktime nero].find { |candidate| statuses.fetch(candidate) == :complete }
+          values = style ? public_chapters(reader.values.fetch(style)) : nil
+          ChapterSelection.new(style: style, chapters: values, statuses: statuses,
+                        issues: reader.report.filter_map do |format, row|
+                          next if %i[complete absent].include?(row[:status])
+                          { format: format, status: row[:status], reason_code: row[:reason_code], reason: row[:reason] }
+                        end)
+        end
+
+        # 形式を問わずmalformedと確定したchapterを、同一moov計画へ束ねる。
+        def plan_broken_chapter_removal
+          ensure_current!
+          ensure_repair_slot!
+          read_structure { |native| build_broken_chapter_removal_plan(native) }
+        end
+
+        # 同一世代で発行した破損chapter計画だけを保存候補へ登録する。
+        def remove_broken_chapters(plan:)
+          ensure_current!
+          ensure_repair_slot!
+          unless plan.is_a?(QuickTimeChapterRemovalPlan)
+            raise ArgumentError, 'plan must be QuickTimeChapterRemovalPlan'
+          end
+          unless plan.removable?
+            raise Error.new("broken chapter removal is blocked: #{plan.message}", code: plan.reason_code,
+                            area: :chapters, phase: :prepare, issues: plan.issues)
+          end
+          unless plan.__send__(:repair).is_a?(::TagLib::MP4::ChapterReferenceRepair) &&
+                 plan.__send__(:source_path) == @path && plan.__send__(:generation_token) == @generation.__send__(:token)
+            raise Error.new('broken chapter removal plan is stale', code: :source_changed,
+                            area: :chapters, phase: :prepare)
+          end
+          @repair_plan = plan.__send__(:repair)
+          @repair_kind = :broken_chapter_removal
+          @quicktime_removal_plan = plan
+          DeepCopy.call(plan.remove_styles)
         end
 
         # 指定形式だけを含む不変ChapterSnapshotを保存候補にする。
@@ -640,8 +701,7 @@ module TagLib
         def plan_quicktime_chapter_removal
           ensure_current!
           ensure_repair_slot!
-          plan = read_structure { |native| build_quicktime_removal_plan(native) }
-          plan
+          read_structure { |native| build_quicktime_removal_plan(native) }
         end
 
         # 欠落targetのchapだけを選び、通常字幕・media・実在targetを保持する計画を作る。
@@ -851,7 +911,7 @@ module TagLib
             temporary.close
             temporary_identity = path_identity(temporary_path)
             @temporary_cleanup_identity = temporary_identity
-            load_metadata if changed && @repair_kind != :limited_repairs
+            load_metadata if changed && !%i[limited_repairs broken_chapter_removal].include?(@repair_kind)
             @source_scan = nil
             prepare_candidate(temporary_path, changed: changed)
             # prepare_candidate内の正規化・編集が候補を同一pathへ原子的に置換する場合を反映する。
@@ -997,10 +1057,51 @@ module TagLib
           end
         end
 
+        # 同一readerの診断から除去形式と保持条件を一度だけ組み立てる。
+        def build_broken_chapter_removal_plan(native)
+          reader = ::TagLib::MP4.send(:const_get, :ChapterReader, false).read(native)
+          @diagnostics[:chapters] ||= diagnostic_report(:chapters, reader.report)
+          statuses = reader.report.transform_values { |row| row.fetch(:status) }
+          remove_styles = statuses.filter_map { |style, status| style if status == :malformed }
+          common = {
+            references: [], target_track_id: nil,
+            nero: statuses[:nero] == :complete ? public_chapters(reader.values.fetch(:nero)) : [].freeze,
+            nero_status: statuses[:nero], nero_chpl_sha256: reader.nero_payload_sha256,
+            source_path: @path, generation_token: @generation.__send__(:token),
+            remove_styles: remove_styles, quicktime_status: statuses[:quicktime]
+          }
+          if remove_styles.empty?
+            return QuickTimeChapterRemovalPlan.new(**common, status: :unchanged, reason: :no_broken_chapters,
+                                                   reason_code: :no_broken_chapters)
+          end
+          begin
+            analysis = ::TagLib::MP4::BrokenChapterRemovalReferences.new(native,
+              chapter_report: reader.report, remove_nero: remove_styles.include?(:nero))
+            cache_reference_diagnostics(analysis)
+            QuickTimeChapterRemovalPlan.new(**common.merge(
+              references: analysis.removed, target_track_id: analysis.target_track_id,
+              repair: analysis.repair_plan), status: :removable,
+              reason: :broken_chapters, reason_code: :broken_chapters,
+              operation: :remove_broken_chapters)
+          rescue ::TagLib::MP4::ChapterReferenceError => error
+            raise if error.code == :source_changed
+
+            QuickTimeChapterRemovalPlan.new(**common, status: :blocked, reason: error.code,
+              reason_code: error.code, message: error.message, issues: repair_error_issues(error, location: 'chapters'))
+          end
+        end
+
         # 修復計画のために解析済みの原本観測を、同一世代の診断でも共有する。
         def cache_reference_diagnostics(analysis)
           @diagnostics[:chapter_references] ||= diagnostic_report(:chapter_references, analysis.report)
-          @diagnostics[:chapter_timing] ||= diagnostic_report(:chapter_timing, analysis.timing_report)
+          @diagnostics[:chapter_timing] ||= diagnostic_report(:chapter_timing, analysis.timing_report) if analysis.timing_report
+        end
+
+        # 完全読取の不変結果を原本世代内で共有し、選択と形式別取得で再読込しない。
+        def chapter_reader
+          @generation.cached_chapter_reader(false) || read_structure do |native|
+            ::TagLib::MP4.const_get(:ChapterReader, false).read(native)
+          end
         end
 
         def header_reader
@@ -1142,13 +1243,17 @@ module TagLib
             native.io_generation = @candidate_generation
             return verify_limited_repair(native) if @repair_kind == :limited_repairs
             actual = MetadataSnapshot.__send__(:from_legacy, native.metadata_snapshot)
-            expected = metadata_verification_snapshot
-            matches = actual == expected
-            matches ||= actual.__send__(:to_legacy).same_values?(expected.__send__(:to_legacy)) if expected != @metadata_candidate
-            raise IOError, 'metadata verification failed' unless matches
-            raw_expected = expected.__send__(:to_legacy).purl_raw_digests
-            unless raw_expected.empty? || actual.__send__(:to_legacy).purl_raw_digests == raw_expected
-              raise IOError, 'purl raw verification failed'
+            # 破損chapter除去は後段のraw保持署名でmetadata全体を比較する。
+            # 元metadataのnative再読込を省き、返却snapshotは出力から従来どおり取得する。
+            unless @repair_kind == :broken_chapter_removal
+              expected = metadata_verification_snapshot
+              matches = actual == expected
+              matches ||= actual.__send__(:to_legacy).same_values?(expected.__send__(:to_legacy)) if expected != @metadata_candidate
+              raise IOError, 'metadata verification failed' unless matches
+              raw_expected = expected.__send__(:to_legacy).purl_raw_digests
+              unless raw_expected.empty? || actual.__send__(:to_legacy).purl_raw_digests == raw_expected
+                raise IOError, 'purl raw verification failed'
+              end
             end
             if chapters_changed? || @requested_snapshots.include?(:chapters)
               chapters = ChapterSnapshot.__send__(:from_legacy, native.chapter_snapshot)
@@ -1168,6 +1273,7 @@ module TagLib
                 raise IOError, 'repair structure preservation verification failed'
               end
               verify_quicktime_removal(native, checked: checked) if @repair_kind == :quicktime_chapter_removal
+              verify_broken_chapter_removal(native, checked: checked) if @repair_kind == :broken_chapter_removal
               native.chapter_snapshot if @repair_kind == :chapter_timing
             end
             captured = { metadata: actual }
@@ -1191,6 +1297,26 @@ module TagLib
           end
           raise IOError, 'QuickTime chapter verification failed' unless quicktime[:status] == :absent
           raise IOError, 'QuickTime track verification failed' if checked.track_ids.include?(expected.target_track_id)
+        end
+
+        # 形式別の除去対象が不在になり、保持対象の正常値は開始時の観測と一致することを確認する。
+        def verify_broken_chapter_removal(native, checked:)
+          reader = ::TagLib::MP4.send(:const_get, :ChapterReader, false).read(native)
+          expected = @quicktime_removal_plan
+          styles = expected.remove_styles
+          if styles.include?(:nero)
+            raise IOError, 'Nero chapter removal verification failed' unless reader.report.fetch(:nero)[:status] == :absent
+          elsif expected.nero_status == :complete
+            raise IOError, 'Nero chapter preservation verification failed' unless
+              public_chapters(reader.values.fetch(:nero)) == expected.nero &&
+              reader.nero_payload_sha256 == expected.nero_chpl_sha256
+          end
+          if styles.include?(:quicktime)
+            raise IOError, 'QuickTime chapter removal verification failed' unless reader.report.fetch(:quicktime)[:status] == :absent
+            raise IOError, 'QuickTime track verification failed' if expected.target_track_id && checked.track_ids.include?(expected.target_track_id)
+          elsif expected.quicktime_status == :complete
+            raise IOError, 'QuickTime chapter preservation verification failed' unless reader.report.fetch(:quicktime)[:status] == :complete
+          end
         end
 
         # 呼出側が選択した値だけを実ファイルから取得し、期待値を返却結果へ混ぜない。
@@ -1326,7 +1452,7 @@ module TagLib
         # 原本を短時間だけ開き、検証済みatom計画を作業コピーへ適用する。
         def write_metadata_atoms(destination, **transforms)
           editor_class = ::TagLib::MP4.send(:const_get, :MP4AtomEditor, false)
-          editor = editor_class.new(header_reader, **transforms)
+          editor = editor_class.new(header_reader, **transforms, capture_signature: false)
           editor.atom_plan.write_copy(@path, destination) do |source, output, replacement|
             @source_scan = Stream.scan(source, destination: output, replacement: replacement)
           end
@@ -1433,7 +1559,8 @@ module TagLib
           end
           helper.validate_raw!(legacy)
           metadata_destination
-          ::TagLib::MP4::ChapterReferences.new(header_reader, ignore_metadata: true, capture_raw: false)
+          ::TagLib::MP4::ChapterReferences.new(header_reader, ignore_metadata: true,
+            capture_raw: false, capture_signature: false)
         rescue ::TagLib::MP4::MetadataSnapshotError => error
           raise Error.new(error.message, code: error.code, phase: :prepare,
                           issues: error.respond_to?(:issues) ? error.issues : []), cause: error

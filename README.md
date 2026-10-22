@@ -137,7 +137,21 @@ end
 診断は`file.diagnose(:chapter_references)`、参照解除は診断行を選択して
 `file.detach_chapter_references(references: selected)`、保存は同じ`save!`を使います。
 
-壊れたQuickTime chapterだけを除去する場合は、形式別完全読取と計画判定を使います。正常Neroは独立して取得され、正常QuickTimeは削除計画になりません。
+チャプターの選択はQuickTimeを正とし、QuickTimeがない場合だけ正常なNeroを代替します。形式を問わず`malformed`と確定したチャプターは、同一計画で除去できます。
+
+```ruby
+TagLib::Plus::MP4.open(stage_path) do |file|
+  selected = file.select_chapters
+  # selected.style は :quicktime を優先し、なければ :nero。不在・破損はissuesへ残る。
+  plan = file.plan_broken_chapter_removal
+  if plan.status == :removable
+    file.remove_broken_chapters(plan: plan)
+    file.save!
+  end
+end
+```
+
+従来のQuickTime限定除去も互換のため利用できます。正常Neroは削除計画にならず、未対応構造や安全性を確認できない異常はblockedになります。
 
 ```ruby
 TagLib::Plus::MP4.open(stage_path) do |file|

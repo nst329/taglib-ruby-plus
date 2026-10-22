@@ -55,6 +55,8 @@ ruby test/probes/plus_mp4_metadata_contract.rb \
 
 ## I/O性能の検証
 
+`plus_mp4_atom_pipeline_test.rb`は共通atom編集のサイズ計算と1回の出力生成を検証する。metadata完全置換時の保持payloadの実readを計測し、構造検証で0回、生成時に1回、原本コピーと合わせた読取量の上限を確認する。moovの拡大・縮小、free消費、通常・拡張header、stco/co64の12ケースでもmdatとoffsetを独立比較する。実測と判断は[atom編集のADR](../Docs/ADR/2026-10-22-atom編集をサイズ計算と一回の出力生成に分離する.md)を参照する。
+
 [plus_mp4_sample_boundaries_test.rb](plus_mp4_sample_boundaries_test.rb)は公開sample境界APIを、独立生成したMP4のoffset・時刻・edit・table破損・非対応・予算・I/O障害・世代競合で検証する。巨大sparse mdatと1億固定sampleを使い、実File#readの位置・回数・要求bytesと割当object数も確認する。ffmpeg/ffprobeが利用可能ならpriming editを含む実生成MP4とも比較する（全packet取得はテスト専用oracle）。結果と限界は[検証記録](../docs/Memos/2026-10-19-sample境界APIの検証.md)を参照。
 
 [plus_mp4_info_test.rb](plus_mp4_info_test.rb)はnative/sample/probe不要のheader宣言、時間軸・日時・役割・名前・選択cacheを確認する。[plus_mp4_reuse_test.rb](plus_mp4_reuse_test.rb)は旧値変換と旧画像payload読取の禁止、stage直接出力、実出力snapshot、chapter解析の選択と観測共有、画像bytes共有を確認する。
@@ -88,3 +90,7 @@ ruby -Ilib -Itest test/probes/mp4_invalid_mdta_repair_design.rb \
 
 `plus_mp4_limited_repair_test.rb`は製品公開APIの併用修復、各領域の独立判定、許可と要否の分離、layout、raw保持、出力digest、世代・障害契約を検証する。計画のmoov全面読込1回、候補copy1回と独立scan1回、保存後の構造解析1回も確認する。
 `plus_mp4_reuse_test.rb`は取得済みchapter・無変更snapshotの再利用、およびchapter参照／時間診断でartwork payloadを読まないことを検証する。native内部のI/OとRubyのFile#read計測は区別する。
+
+## QuickTime優先と形式別破損の設計probe
+
+`ruby -Ilib -Itest test/probes/mp4_chapter_policy_design.rb`で実行する。FFmpegとnative bindingを必要とする。合成MP4の形式別破損と原本不変、QuickTime優先・Nero代替の選択仕様を確認する。公開APIの除去回帰は`plus_mp4_quicktime_removal_test.rb`にも含む。[設計書](../Docs/mp4-chapter-policy-design.md)に残作業を記録する。

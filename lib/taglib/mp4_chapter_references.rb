@@ -56,6 +56,8 @@ module TagLib::MP4
         validate_title_boxes!
         @mdat_ranges = @atoms.select { |a| a[:type] == 'mdat' }.map { |a| [a[:payload_offset], a[:end_offset]] }
         @edits = {}
+        # atom開始offset => 置換済みatom全体のbytes。生成・サイズ・保持検証で共有する。
+        @atom_replacements = {}
         @offset_tables = {}
         # [source_track_id, 元tref_index] => 保存後tref_index。例: [2, 1] => 0。
         @tref_positions = {}
@@ -300,6 +302,11 @@ module TagLib::MP4
     end
 
     def preservation_value(atom)
+      if (raw = @atom_replacements[atom[:offset]])
+        header = raw.unpack1('N') == 1 ? 16 : 8
+        data = raw.byteslice(header..)
+        return [data.bytesize, Digest::SHA256.hexdigest(data)]
+      end
       return @edits.fetch(atom[:offset]) if @edits.key?(atom[:offset])
       # Titleはpayloadだけでなくheader形式も含めて独立再読込時に保持を検証する。
       return [length(atom), Digest::SHA256.hexdigest(bytes(atom))] if atom[:type] == 'titl'
@@ -508,11 +515,13 @@ module TagLib::MP4
 
     # 今回の編集で空になった参照atomだけを削除し、元から空のatomは保持する。
     def deleted_reference_atom?(atom)
+      return true if @deleted_atom_offsets&.include?(atom[:offset])
       return @edits.key?(atom[:offset]) && @edits.fetch(atom[:offset]).empty? if atom[:type] == 'chap'
       atom[:type] == 'tref' && atom[:children].any? && atom[:children].all? { |a| deleted_reference_atom?(a) }
     end
 
     def render(atom, delta)
+      return @atom_replacements.fetch(atom[:offset]) if @atom_replacements.key?(atom[:offset])
       return ''.b if deleted_reference_atom?(atom)
       data = if @edits.key?(atom[:offset])
                @edits.fetch(atom[:offset]).pack('N*')
@@ -524,6 +533,17 @@ module TagLib::MP4
                return @raw ? @raw.byteslice(atom[:offset] - @moov[:offset], length(atom)) : bytes(atom)
              end
       box(atom, data)
+    end
+
+    # 保持payloadを読まず、境界と編集済み参照数だけで出力サイズを決める。
+    def rendered_size(atom)
+      return @atom_replacements.fetch(atom[:offset]).bytesize if @atom_replacements.key?(atom[:offset])
+      return 0 if deleted_reference_atom?(atom)
+      header = atom[:payload_offset] - atom[:offset]
+      return header + @edits.fetch(atom[:offset]).size * 4 if @edits.key?(atom[:offset])
+      return length(atom) if atom[:children].empty?
+
+      header + atom[:children].sum { |child| rendered_size(child) }
     end
 
     def render_offsets(table, delta)
@@ -543,8 +563,7 @@ module TagLib::MP4
     end
 
     def replacement
-      edited = render(@moov, 0)
-      removed_bytes = length(@moov) - edited.bytesize
+      removed_bytes = length(@moov) - rendered_size(@moov)
       # 4 bytesだけ空いた場合はfreeの最小8 bytesを満たせないため、moovを8 bytes伸ばす。
       padding = removed_bytes >= 8 ? removed_bytes : removed_bytes + 8
       delta = padding - removed_bytes
@@ -564,9 +583,9 @@ module TagLib::MP4
 
     attr_reader :target_track_id
 
-    def initialize(file, chapter_report:)
+    def initialize(file, chapter_report:, timing: true)
       @chapter_report = chapter_report
-      super(file, timing: true, removal: @allow_missing_only ? :missing : nil)
+      super(file, timing: timing, removal: @allow_missing_only ? :missing : nil)
     end
 
     private
@@ -627,7 +646,9 @@ module TagLib::MP4
 
     def validate_quicktime_report!
       nero = @chapter_report.fetch(:nero)
-      fail!('Nero chapter read is incomplete', :nero_unreadable) unless %i[complete absent].include?(nero[:status])
+      unless @allow_broken_nero
+        fail!('Nero chapter read is incomplete', :nero_unreadable) unless %i[complete absent].include?(nero[:status])
+      end
       quicktime = @chapter_report.fetch(:quicktime)
       if quicktime[:status] == :complete && !@timing_report.any? { |row| row[:observations].any? }
         fail!('QuickTime chapter is not broken', :quicktime_complete)
@@ -676,6 +697,46 @@ module TagLib::MP4
 
     def reference_key(row)
       %i[source_track_id tref_index reference_index target_track_id].map { |key| row.fetch(key) }
+    end
+  end
+
+  # QuickTime参照除去と、破損Neroのchpl atom除去を同じmoov編集へ束ねる。
+  # 破損と断定できない未対応構造は呼出し側でblockedとして扱う。
+  class BrokenChapterRemovalReferences < QuickTimeChapterRemovalReferences
+    attr_reader :removed_nero
+
+    def initialize(file, chapter_report:, remove_nero: false)
+      @allow_broken_nero = remove_nero
+      @remove_nero = remove_nero
+      super(file, chapter_report: chapter_report, timing: false)
+    end
+
+    def repair_plan
+      return super unless @removed_nero
+
+      ChapterReferenceRepair.new(moov_start: @moov[:offset], moov_end: @moov[:end_offset],
+                                 replacement: replacement, source_digest: source_digest,
+                                 removed: removed + [@removed_nero], retained_report: retained_report,
+                                 preservation_signature: preservation_signature)
+    end
+
+    private
+
+    def prepare_atom_edits
+      quicktime_broken = @chapter_report.fetch(:quicktime)[:status] == :malformed
+      if @remove_nero
+        udta = child(@moov, 'udta', required: false)
+        chpl = udta && child(udta, 'chpl', required: false)
+        fail!('broken Nero chapter atom is missing', :nero_absent) unless chpl
+        @deleted_atom_offsets = [chpl[:offset]]
+        @removed_nero = { style: :nero, atom_offset: chpl[:offset], status: :malformed }
+      end
+      if quicktime_broken
+        super
+      else
+        @target_track_id = nil
+        @deleted_track_offsets = []
+      end
     end
   end
 

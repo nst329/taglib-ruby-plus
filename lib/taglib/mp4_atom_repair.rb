@@ -7,11 +7,10 @@ module TagLib::MP4
 
     # 例: timing_track: 4。metadata_transformはraw meta bytesだけを受け取る内部処理。
     def initialize(file, timing_track: nil, metadata_transform: nil, metadata_transforms: nil, container_transform: nil,
-                   container_replacement: nil, capture_raw: true)
+                   container_replacement: nil, capture_raw: true, capture_signature: true)
       @timing_track, @metadata_transform, @metadata_transforms, @container_transform = timing_track, metadata_transform, metadata_transforms, container_transform
       @container_replacement, @capture_raw = container_replacement, capture_raw
-      @atom_replacements = {}
-      super(file, timing: !timing_track.nil?, capture_raw: capture_raw,
+      super(file, timing: !timing_track.nil?, capture_raw: capture_raw, capture_signature: capture_signature,
         ignore_metadata: !metadata_transform.nil? || !metadata_transforms.nil? || !container_transform.nil? || !container_replacement.nil?)
     end
 
@@ -101,35 +100,24 @@ module TagLib::MP4
         edits == [{ version: 0, segment_duration: duration & 0xffff_ffff, media_time: 0, media_rate: 65_536 }]
     end
 
-    def preservation_value(atom)
-      if @atom_replacements.key?(atom[:offset])
-        data = @atom_replacements.fetch(atom[:offset]).byteslice(atom[:payload_offset] - atom[:offset]..)
-        [data.bytesize, Digest::SHA256.hexdigest(data)]
-      else
-        super
-      end
-    end
+    def deleted_reference_atom?(atom)
+      return true if @consumed_free&.include?(atom[:offset])
 
-    def render(atom, delta)
-      return @atom_replacements.fetch(atom[:offset]) if @atom_replacements.key?(atom[:offset])
-      return ''.b if @consumed_free&.include?(atom[:offset])
       super
     end
 
     # 直下freeを必要量だけ消費する。不足分だけmoovを拡張し、stco/co64を移動する。
     def replacement
       @consumed_free = []
-      edited = render(@moov, 0)
-      growth = edited.bytesize - length(@moov)
-      if growth.positive?
+      edited_size = rendered_size(@moov)
+      if edited_size > length(@moov)
         @moov[:children].select { |a| a[:type] == 'free' }.each do |atom|
-          break unless growth.positive?
+          break unless edited_size > length(@moov)
           @consumed_free << atom[:offset]
-          growth -= length(atom)
+          edited_size -= length(atom)
         end
       end
-      edited = render(@moov, 0)
-      available = length(@moov) - edited.bytesize
+      available = length(@moov) - edited_size
       padding = if available >= 8
                   available
                 elsif available.positive?
@@ -137,9 +125,9 @@ module TagLib::MP4
                 else
                   0
                 end
-      delta = edited.bytesize + padding - length(@moov)
+      delta = edited_size + padding - length(@moov)
+      fail!('edited moov exceeds repair limit', :unsupported) if edited_size + padding > MAX_MOOV_BYTES
       edited = render(@moov, delta)
-      fail!('edited moov exceeds repair limit', :unsupported) if edited.bytesize + padding > MAX_MOOV_BYTES
       return edited.freeze if padding.zero?
       box(@moov, edited.byteslice(@moov[:payload_offset] - @moov[:offset]..) + [padding].pack('N') + 'free' + "\0".b * (padding - 8)).freeze
     end
