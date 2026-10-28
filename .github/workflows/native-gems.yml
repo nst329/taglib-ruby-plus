@@ -180,7 +180,14 @@ jobs:
         run: |
           set -eu
           for gem in pkg/taglib-ruby-plus-*.gem; do
-            gem push --key github \
+            if output=$(gem push --key github \
               --host https://rubygems.pkg.github.com/nst329 \
-              "$gem"
+              "$gem" 2>&1); then
+              printf '%s\n' "$output"
+            elif printf '%s' "$output" | grep -Eq 'Repushing of gem versions is not allowed|already been pushed|already exists'; then
+              echo "既に公開済みのためスキップ: $gem"
+            else
+              printf '%s\n' "$output" >&2
+              exit 1
+            fi
           done
