@@ -1,6 +1,6 @@
 # MP4構造破損の読み取り専用診断
 
-状態: 実装済み（初期範囲） / 2026-10-17
+状態: 実装済み（初期範囲） / 2026-10-17、観測API追加 2026-10-28
 
 ## 目的と前提
 
@@ -65,6 +65,20 @@ end
 ```
 
 例中のatom位置・mdat開始位置はschema説明用。indexは0始まり、mdat範囲はheaderを除くpayloadの`[start, end)`、endは排他的。最大参照終端はoffset最大値ではなく、各chunkの`offset + chunk内sample size合計`の最大値。stsc/stsz（またはstz2）が未対応・不正で計算できなければ`nil`とし、coverageに理由を残す。推測値を入れない。track ID欠損・重複時もtrack_indexとatom位置で区別し、track_id/handlerは観測不能ならnil。
+
+## 観測API
+
+`File#observation(areas = OBSERVATION_AREAS)`は、同一世代の読み取り専用観測を領域別status付きでまとめる。既定領域はmetadata、chapters、chapter_references、chapter_timing、chapter_samples、tracks。
+
+```ruby
+TagLib::Plus::MP4.open(path) do |file|
+  observed = file.observation(%i[chapters metadata tracks])
+  observed[:chapters][:status] # :complete / :absent / :malformed / :unsupported / :limit
+  observed[:chapters][:value][:quicktime] # statusがcompleteでなければnil
+end
+```
+
+各領域は`{status:, data:, issues:, value:}`を返す。malformed等は例外にせずstatusへ集約し、`source_changed`、`io`、`closed`、`pending_changes`だけを再送出する。未知・重複の領域名は`ArgumentError`。`diagnose`のcacheと世代を共有し、metadataは診断と完全snapshotを同じnative読込みで取得して以後の編集候補へ再利用する。未保存のchapter編集は観測へ反映せず、保存待ちのまま観測を求めた場合は`pending_changes`で拒否する。詳細は[ADR](adr/2026-10-28-同一世代の観測をstatus付きで返す.md)を参照する。
 
 ## 検査範囲と分類
 

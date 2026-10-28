@@ -136,6 +136,10 @@ end
 および`committed == nil`で通知されるため、出力の再試行や候補削除を行わずセッションを閉じてください。
 診断は`file.diagnose(:chapter_references)`、参照解除は診断行を選択して
 `file.detach_chapter_references(references: selected)`、保存は同じ`save!`を使います。
+同一世代の状態をまとめて確認する場合は
+`file.observation(%i[chapters metadata tracks])`を使います。各領域は
+`{ status:, data:, issues:, value: }`を返し、malformed等は例外にせず領域別statusへ
+集約します。source変更・I/O・close・保存待ちの編集だけを再送出します。
 
 チャプターの選択はQuickTimeを正とし、QuickTimeがない場合だけ正常なNeroを代替します。形式を問わず`malformed`と確定したチャプターは、同一計画で除去できます。
 

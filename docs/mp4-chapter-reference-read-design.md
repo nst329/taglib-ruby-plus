@@ -48,6 +48,12 @@ ChapterReferencesは診断と明示選択を分離し、選択済み位置だけ
 
 保存後の利用者確認は既存参照診断、sample snapshot、preserved_equal?を使用し、新しい保存確認APIは追加しない。ffprobe依存も追加しない。
 
+## chunk offsetの一括検証と保持署名
+
+`ChapterReferences#collect_offsets`はstco/co64の全offsetを読み、mdatが1つなら最小値・最大値だけでmdat範囲内を判定する。複数mdatは開始位置で昇順な範囲を二分探索し、範囲外offsetを従来どおり`malformed`で拒否する。
+
+保持署名は`[header, width, count, digest]`。単一mdatはoffset − mdat開始位置の相対位置列、複数mdatは所属mdat index列と相対位置列を幅に応じた`N*`/`Q>*`で連結し、SHA-256へ畳み込む。絶対位置の移動を許しつつ、同じmdat内の同じmedia bytesを指すことを比較でき、chunk数に比例する配列を保持しない。公開snapshotの`preservation_signature`（v1/v2）とは別である。詳細は[ADR](adr/2026-10-28-chunk-offset検証と保持署名を一括化する.md)を参照する。
+
 ## 検証
 
 test/mp4_chapter_reference_selection_test.rbは合成映像・音声・mov_text字幕にnativeでtext chapterを追加し、独立parserで参照を注入する。実ファイルは使わず、fixture編集は一時ディレクトリ内に限定する。期待値を製品の編集計画から生成しない。

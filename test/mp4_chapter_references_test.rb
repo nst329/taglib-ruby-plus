@@ -200,6 +200,94 @@ class MP4ChapterReferencesTest < Test::Unit::TestCase
     end
   end
 
+  # 保存でmdat全体と全chunkが同じだけ移動しても、保持署名は変わらない。
+  def test_offset_signature_is_independent_from_uniform_chunk_shift
+    with_fixture do |path|
+      before = preservation_signature(path)
+      shift_all_chunks(path, 40)
+      assert_equal before, preservation_signature(path)
+    end
+  end
+
+  # mdat内のchunk位置が変われば、保持署名は一致しない。
+  def test_offset_signature_detects_chunk_position_change
+    with_fixture do |path|
+      before = preservation_signature(path)
+      edit(path) do |list, _moov|
+        table = nil
+        walk(list) { |atom| table ||= atom if atom[:type] == 'stco' }
+        data = table[:data]
+        offsets = data.byteslice(8..).unpack('N*')
+        offsets[0] += 4
+        table[:data] = data.byteslice(0, 8) + offsets.pack('N*')
+      end
+      assert_not_equal before, preservation_signature(path)
+    end
+  end
+
+  # 複数mdatでも、全chunkとmdatが同じだけ移動すれば保持署名は変わらない。
+  def test_offset_signature_is_stable_across_multiple_mdats
+    with_fixture do |path|
+      single_mdat = preservation_signature(path)
+      split_mdat_at_chunk_boundary(path)
+      assert_operator atoms(File.binread(path)).count { |atom| atom[:type] == 'mdat' }, :>=, 2
+      assert_not_equal single_mdat, preservation_signature(path)
+
+      before = preservation_signature(path)
+      shift_all_chunks(path, 40)
+      assert_equal before, preservation_signature(path)
+    end
+  end
+
+  # 2つ目のmdatをchunk境界で作り、後半chunkの絶対位置を新しいheader分だけ移す。
+  def split_mdat_at_chunk_boundary(path)
+    edit(path) do |list, _moov|
+      index = list.index { |atom| atom[:type] == 'mdat' }
+      mdat = list.fetch(index)
+      payload_start = render(list.take(index)).bytesize + 8
+      offsets = []
+      walk(list) do |atom|
+        next unless %w[stco co64].include?(atom[:type])
+
+        offsets.concat(atom[:data].byteslice(8..).unpack(atom[:type] == 'stco' ? 'N*' : 'Q>*'))
+      end
+      boundary = offsets.select { |offset| offset >= payload_start + (mdat[:data].bytesize / 2) }.min
+      raise 'fixture has no chunk in the second mdat half' unless boundary
+
+      split_at = boundary - payload_start
+      walk(list) do |atom|
+        next unless %w[stco co64].include?(atom[:type])
+
+        format = atom[:type] == 'stco' ? 'N*' : 'Q>*'
+        values = atom[:data].byteslice(8..).unpack(format).map { |offset| offset >= boundary ? offset + 8 : offset }
+        atom[:data] = atom[:data].byteslice(0, 8) + values.pack(format)
+      end
+      list[index, 1] = [{ type: 'mdat', data: mdat[:data].byteslice(0, split_at) },
+                        { type: 'mdat', data: mdat[:data].byteslice(split_at..) }]
+    end
+  end
+
+  # 先頭へfreeを追加した分だけ、全chunkの絶対位置を同じ量だけ移す。
+  def shift_all_chunks(path, size)
+    edit(path) { |list, _moov| list.unshift(type: 'free', data: 'x' * (size - 8)) }
+    edit(path) do |list, _moov|
+      walk(list) do |atom|
+        next unless %w[stco co64].include?(atom[:type])
+
+        format = atom[:type] == 'stco' ? 'N*' : 'Q>*'
+        values = atom[:data].byteslice(8..).unpack(format).map { |offset| offset + size }
+        atom[:data] = atom[:data].byteslice(0, 8) + values.pack(format)
+      end
+    end
+  end
+
+  # 同じ世代の参照解析から、mdat内相対位置の保持署名を得る。
+  def preservation_signature(path)
+    TagLib::MP4::Internal::File.open(path, false) do |file|
+      TagLib::MP4::ChapterReferences.new(file, capture_raw: false).preservation_signature
+    end
+  end
+
   def test_existing_inappropriate_target_is_preserved_in_mixed_payload
     with_fixture(faststart: true) do |path|
       inject(path, 2 => [1, 99])

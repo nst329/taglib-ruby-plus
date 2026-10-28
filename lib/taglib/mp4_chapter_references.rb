@@ -318,13 +318,42 @@ module TagLib::MP4
     end
 
     # 絶対位置の変更を許しつつ、同じmdat内の同じmedia bytesを指すことを比較する。
+    # chunk数に比例する配列を保持せず、mdat内の相対位置だけを固定長digestへ畳み込む。
     def offset_signature(table)
       header, offsets, width = table
-      relative = offsets.map do |offset|
-        index = @mdat_ranges.index { |first, last| offset >= first && offset < last }
-        [index, offset - @mdat_ranges.fetch(index).first]
+      format = width == 4 ? 'N*' : 'Q>*'
+      if @mdat_ranges.size == 1
+        base = @mdat_ranges.first.first
+        relative = offsets.map { |offset| offset - base }
+        digest = Digest::SHA256.digest(relative.pack(format))
+      else
+        indexes = Array.new(offsets.length)
+        relative = offsets.each_with_index.map do |offset, position|
+          index = mdat_index_for(offset)
+          indexes[position] = index
+          offset - @mdat_ranges.fetch(index).first
+        end
+        digest = Digest::SHA256.digest(indexes.pack('N*') + relative.pack(format))
       end
-      [header, width, relative]
+      [header, width, offsets.length, digest]
+    end
+
+    # 複数mdatでも保存前後の相対位置を比較できるよう、所属mdatを二分探索で確定する。
+    def mdat_index_for(offset)
+      low = 0
+      high = @mdat_ranges.length - 1
+      while low <= high
+        middle = (low + high) / 2
+        first, last = @mdat_ranges[middle]
+        return middle if offset >= first && offset < last
+
+        if offset < first
+          high = middle - 1
+        else
+          low = middle + 1
+        end
+      end
+      fail!('chunk offset outside mdat')
     end
 
     # 大きなmdatも全読込せず、保持対象payloadのサイズとhashを取得する。
@@ -505,12 +534,21 @@ module TagLib::MP4
         count = data.byteslice(4, 4).unpack1('N')
         fail!('chunk offset count mismatch') unless data.bytesize == 8 + count * width
         offsets = data.byteslice(8..).unpack(width == 4 ? 'N*' : 'Q>*')
-        offsets.each do |offset|
-          fail!('chunk offset outside mdat') unless @mdat_ranges.any? { |first, last| offset >= first && offset < last }
-        end
+        validate_chunk_offsets!(offsets)
         # atom位置 => [fullbox header/count bytes, 絶対chunk位置の配列, 整数幅4または8]。
         @offset_tables[table[:offset]] = [data.byteslice(0, 8), offsets, width]
       end
+    end
+
+    # mdat範囲外のchunk offsetを拒否する。通常の単一mdatは最小・最大だけで判定する。
+    def validate_chunk_offsets!(offsets)
+      return if offsets.empty?
+      if @mdat_ranges.size == 1
+        first, last = @mdat_ranges.first
+        fail!('chunk offset outside mdat') unless offsets.min >= first && offsets.max < last
+        return
+      end
+      offsets.each { |offset| mdat_index_for(offset) }
     end
 
     # 今回の編集で空になった参照atomだけを削除し、元から空のatomは保持する。

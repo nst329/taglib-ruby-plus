@@ -15,6 +15,7 @@
 
 | 領域 | 現行の意味と制限 |
 | --- | --- |
+| `chapters` / `chapters=` | ChapterReaderの完全読取値から両形式の編集候補を作る。snapshot取得だけのnative handle openは行わない |
 | `diagnose(:chapters)` | ChapterReaderによる形式別の値の完全読取。編集時の全構造保持を証明しない |
 | `diagnose(:structure)` | atom境界・chunk offset等の診断。参照編集が対応する構造全体の証明ではない |
 | `diagnose(:chapter_references)` / `:chapter_timing` | ChapterReferencesの全構造検証後に参照・時間情報を返す。構造未対応なら観測前に拒否 |

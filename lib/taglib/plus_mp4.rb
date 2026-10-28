@@ -29,6 +29,8 @@ module TagLib
         structure: nil
       }.freeze
       private_constant :DIAGNOSTIC_OPERATIONS
+      OBSERVATION_AREAS = %i[metadata chapters chapter_references chapter_timing chapter_samples tracks].freeze
+      private_constant :OBSERVATION_AREAS
       # 公開APIではcover artのwire整数を扱わせず、形式名を固定する。
       class Artwork
         FORMATS = { jpeg: 13, png: 14, bmp: 27 }.freeze
@@ -829,6 +831,96 @@ module TagLib
           @chapter_samples
         end
 
+        # 同一世代の読み取り専用観測をまとめ、破損は例外ではなく領域別statusで返す。
+        # 例: observation(:chapters)[:chapters][:value][:quicktime]はmalformedならnil。
+        def observation(areas = OBSERVATION_AREAS)
+          areas = Array(areas)
+          unknown = areas - OBSERVATION_AREAS
+          raise ArgumentError, "unknown observation areas: #{unknown.inspect}" unless unknown.empty?
+          raise ArgumentError, 'observation areas must be unique' unless areas.uniq == areas
+
+          ensure_current!
+          ensure_no_repair!
+          DeepCopy.call(areas.to_h { |area| [area, observation_for(area)] })
+        end
+
+        def observation_for(area)
+          case area
+          when :metadata then observation_metadata
+          when :chapters then observation_chapters
+          when :chapter_samples then observation_chapter_samples
+          when :tracks then observation_tracks
+          else
+            report = diagnose(area)
+            report.merge(value: report[:data])
+          end
+        end
+
+        # metadata診断と完全snapshotを同じnative読込みで取得し、以後の編集候補にも使う。
+        # 修復対象のmalformed metadataでも例外にせず、statusとissuesだけを返す。
+        def observation_metadata
+          report, snapshot = read_native do |native|
+            report = begin
+              diagnostic_report(:metadata, native.metadata_diagnostics)
+            rescue *STRUCTURE_ERRORS => error
+              raise if error.respond_to?(:code) && error.code == :source_changed
+
+              diagnostic_failure(:metadata, error)
+            end
+            snapshot = nil
+            if report[:status] == :complete
+              begin
+                snapshot = MetadataSnapshot.__send__(:from_legacy, native.metadata_snapshot)
+              rescue *STRUCTURE_ERRORS => error
+                raise if error.respond_to?(:code) && error.code == :source_changed
+
+                report = diagnostic_failure(:metadata, error)
+              end
+            end
+            [report, snapshot]
+          end
+          @diagnostics[:metadata] = report
+          @metadata_baseline = @metadata_candidate = snapshot if snapshot && !@metadata_candidate
+          report.merge(value: snapshot)
+        end
+
+        # 形式別statusと完全読取値を同じ観測で返し、破損形式だけ値をnilにする。
+        def observation_chapters
+          report = diagnose(:chapters)
+          formats = report.dig(:data, :formats) || {}
+          values = %i[nero quicktime].to_h do |style|
+            row = formats[style] || { status: :absent }
+            value = case row[:status]
+                    when :complete then public_chapters(chapter_reader.values.fetch(style))
+                    when :absent then nil
+                    end
+            [style, value]
+          end
+          report.merge(value: values)
+        end
+
+        def observation_chapter_samples
+          value = chapter_samples
+          { status: value ? :complete : :absent, data: nil, issues: [], value: value }
+        rescue Error => error
+          raise if %i[source_changed io closed pending_changes].include?(error.code)
+
+          { status: %i[unsupported limit].include?(error.code) ? error.code : :malformed,
+            data: nil, issues: repair_error_issues(error, location: 'chapter_samples'), value: nil }
+        end
+
+        def observation_tracks
+          value = info(sections: %i[movie tracks])
+          { status: :complete, data: nil, issues: [], value: value }
+        rescue Error => error
+          raise if %i[source_changed io closed].include?(error.code)
+
+          { status: %i[unsupported limit].include?(error.code) ? error.code : :malformed,
+            data: nil, issues: repair_error_issues(error, location: 'tracks'), value: nil }
+        end
+        private :observation_for, :observation_metadata, :observation_chapters,
+                :observation_chapter_samples, :observation_tracks
+
         # 診断行を再検証し、指定したchapter参照の解除だけを保留する。
         def detach_chapter_references(references:)
           ensure_current!
@@ -1167,10 +1259,20 @@ module TagLib
           raise Error.new('repair and snapshot edits cannot be mixed', code: :pending_changes) if changed?
         end
 
+        # 完全読取済みのRuby readerから候補を作り、保存用nativeの追加openを避ける。
         def load_chapters
           return if @chapters_baseline
 
-          @chapters_baseline = ChapterSnapshot.__send__(:from_legacy, read_native(&:chapter_snapshot))
+          reader = chapter_reader
+          begin
+            reader.require_complete!
+          rescue ::TagLib::MP4::ChapterSnapshotError => error
+            raise Error.new(error.message, code: error.code, phase: :read), cause: error
+          end
+          @chapters_baseline = ChapterSnapshot.new(
+            nero: public_chapters(reader.values.fetch(:nero)),
+            quicktime: public_chapters(reader.values.fetch(:quicktime))
+          )
           @chapters_candidate = @chapters_baseline
         end
 

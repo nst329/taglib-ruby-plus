@@ -10,6 +10,22 @@ revision of a specific TagLib release.
 
 ## 開発中
 
+### Added
+
+- `File#observation(areas)`を追加し、同一世代のmetadata、chapters、chapter参照、chapter時間、chapter sample、tracksを`{status:, data:, issues:, value:}`で一括観測できるようにした。malformed/unsupportedは例外にせず領域別statusで返し、source変更・I/O・close・保存待ちの編集は従来どおり送出する。
+- metadata観測と完全snapshotを同じnative読込みで取得し、以後の編集候補へ再利用する。
+
+### Changed
+
+- chapter参照の保持署名を、chunk offsetのmdat内相対位置を固定長digestへ畳み込む表現に変更した。chunk数に比例する配列とmdatごとの線形探索を保持しない。
+- 単一mdatのchunk offset検証を最小・最大値の一括判定に変更した。複数mdatは範囲の二分探索で従来どおりmdat外offsetを拒否する。
+- `File#chapters`の編集候補をChapterReaderの完全読取値から構築し、同じ世代で読んだchapter診断・`read_chapters`・観測と共有する。snapshot取得のためのnative handle追加openを廃止した。
+
+### Tests
+
+- `test/mp4_observation_test.rb`を追加し、正常観測、malformed metadata/chapter、未保存chapter編集、引数拒否を検証した。`chapters`がnative handleを追加openせず同じsnapshotを再利用することも確認した。
+- 均一なchunk移動では保持署名が変わらず、mdat内の位置変更を検出する回帰を追加した。
+
 ## 2.3.2.41
 
 ### Added
