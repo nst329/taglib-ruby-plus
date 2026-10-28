@@ -120,6 +120,9 @@ begin
       result = file.save!(to: output)
       actual = result[:snapshots]&.fetch(:metadata) || api.open(output) { |copy| copy.metadata }
       2.times { actual.properties[:title] }
+    when 'observation_metadata' then 2.times { file.observation(:metadata) }
+    when 'observation_chapters' then 2.times { file.observation(:chapters) }
+    when 'observation_metadata_chapters' then 2.times { file.observation(%i[metadata chapters]) }
     when 'read' then 2.times { file.metadata; file.chapters }
     when 'property' then 2.times { file.metadata.properties.key?(:title) }
     when 'diagnose' then 2.times { file.diagnose(:metadata); file.diagnose(:chapter_references) }
