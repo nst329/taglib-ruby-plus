@@ -377,13 +377,50 @@ module TagLib::MP4
 
     # nativeの値変換だけに使う、trackもmediaも持たない最小のmetadata作業領域。
     def metadata_only(raw, directory: nil)
-      Tempfile.create(['taglib-plus-metadata-', '.mp4'], directory) do |temp|
+      temp = Tempfile.create(['taglib-plus-metadata-', '.mp4'], directory)
+      identity = nil
+      begin
+        stat = temp.stat
+        identity = [stat.dev, stat.ino]
         temp.binmode
         temp.write(box('ftyp', 'M4A '.b + [0].pack('N') + 'M4A '.b))
         temp.write(box('moov', box('udta', raw)))
         temp.close
         yield temp.path
+      ensure
+        failure = $!
+        begin
+          temp.close unless temp.closed?
+          raise IOError, 'metadata temporary identity unavailable' unless identity
+          cleanup_metadata_temporary(temp.path, identity)
+        rescue StandardError => error
+          raise MetadataSnapshotError.new("metadata temporary cleanup failed: #{error.message}",
+            code: :cleanup, phase: :cleanup,
+            issues: [{ code: :cleanup_failed, temporary_path: temp.path, error_class: error.class.name }]),
+            cause: (failure || error)
+        end
       end
+    end
+
+    def cleanup_metadata_temporary(path, identity)
+      current = begin
+        ::File.lstat(path)
+      rescue Errno::ENOENT
+        return
+      end
+      raise IOError, 'metadata temporary identity changed' unless [current.dev, current.ino] == identity
+
+      begin
+        ::File.unlink(path)
+      rescue Errno::ENOENT
+        # 不在判定はunlinkの応答ではなくlstatに限定する。
+      end
+      begin
+        ::File.lstat(path)
+      rescue Errno::ENOENT
+        return
+      end
+      raise IOError, 'metadata temporary remains after unlink'
     end
   end
   private_constant :PurlSnapshot

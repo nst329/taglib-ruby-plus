@@ -24,14 +24,14 @@ end
 
 | 保証 | 通常 `:stat` | 厳密 `:sha256` |
 | --- | --- | --- |
-| 開いたhandleとcanonical pathのdev/ino照合 | あり | あり |
+| 開いたhandleとアクセス用pathのdev/ino照合 | あり | あり |
 | size、mtime、ctimeの照合 | 秒以下も含めて照合 | 同左 |
 | 同サイズの書換え、mtime復元 | ctimeの変更で検出 | statに加えて内容SHAも照合 |
 | stat属性が同一に見える内容変更 | 検出を保証しない | SHAの異なる内容を走査時に検出 |
 | 操作中の変更 | native読取・解析・候補生成の前後と公開直前に確認 | 同じ確認点でSHA照合も行う |
 | 外部writerとの排他 | なし | なし |
 
-ctimeの分解能や属性更新の可視性はファイルシステムに依存する。通常モードは内容同一性の暗号学的証明ではない。開いたhandleはcloseまで所有する。初回のpathはrealpathへ正規化し、そのcanonical pathの置換を確認する。入力symlink自体の付替えを追跡するAPIではない。
+ctimeの分解能や属性更新の可視性はファイルシステムに依存する。通常モードは内容同一性の暗号学的証明ではない。開いたhandleはcloseまで所有する。通常ファイルは入力表記を保持し、末尾symlinkだけ同一実体を照合して解決先を固定する。macOSではPOSIX realpathの返却bytesを保持する。入力symlink自体の付替えを追跡するAPIではない。詳細は[Unicode経路設計](mp4-unicode-path-safety-design.md)を参照する。
 
 厳密モードでも走査は瞬間的なsnapshotではない。走査中の改変と復元、stat属性の偽装、最終照合からrenameまでの競合を完全には排除しない。完全排他が必要な利用側は外部writerと別途調停する。これらは従来の毎回SHA方式にも存在する限界である。
 

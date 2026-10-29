@@ -121,6 +121,7 @@ Gem::Specification.new do |s|
     'docs/ADR/2026-10-16-テストログの成功抑制と失敗詳細化.md',
     'docs/ADR/2026-10-16-Plus保存フローの共通化.md',
     'lib/taglib/plus_mp4_publication.rb',
+    'lib/taglib/plus_mp4_path.rb',
     'lib/taglib/plus_mp4.rb',
     'test/plus_mp4_api_test.rb',
     'test/mp4_separate_output_publication_design_test.rb',

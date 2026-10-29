@@ -89,3 +89,11 @@ native ABIと既存配布名は維持し、各native gemのsmoke testへ新し�
 Ruby／native ABIと配布名は維持する。新規 `v2.3.2.43` タグで既存workflowを起動し、
 同一commitのRuby 3.2／4.0全体CI、arm64／x86_64 native build・smoke testの成功後に、
 arm64・x86_64・sourceの3種をGitHub Packagesへ公開する。既存versionとタグは上書きしない。
+
+## 2.3.2.44の公開
+
+macOSのPOSIX realpath/getcwd返却bytes保持と、一時ファイルの所有実体・削除後不在確認を収録する。
+Ruby／native ABI、配布名、deployment targetは維持する。新規`v2.3.2.44`で既存の全体CIと
+arm64／x86_64のbuild・隔離install・smokeを実行し、sourceと併せてGitHub Packagesへ公開する。
+native gemのsmokeに今回のUnicode公開API試験を加え、checkout側のRuby実装を読み込まずに検証する。
+SMB cache ON/OFFや正規等価な別実体の実FS受入は、この公開CIの保証に含めない。

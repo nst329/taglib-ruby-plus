@@ -85,7 +85,8 @@ jobs:
           bundle_gemfile="$RUNNER_TEMP/Gemfile.native-gem"
           printf '%s\n' \
             "source 'https://rubygems.org'" \
-            "gem '${GEM_NAME}', '${GEM_VERSION}'" > "$bundle_gemfile"
+            "gem '${GEM_NAME}', '${GEM_VERSION}'" \
+            "gem 'test-unit'" > "$bundle_gemfile"
           BUNDLE_GEMFILE="$bundle_gemfile" bundle lock --local
           BUNDLE_GEMFILE="$bundle_gemfile" bundle check
           BUNDLE_GEMFILE="$bundle_gemfile" bundle exec ruby <<'RUBY'
@@ -128,6 +129,20 @@ jobs:
             end
           end
           RUBY
+
+          # checkoutのhelperはlibをLOAD_PATHへ追加するため、隔離した入口を使う。
+          unicode_smoke="$RUNNER_TEMP/native-unicode-smoke"
+          mkdir -p "$unicode_smoke/support"
+          cp test/plus_mp4_unicode_path_test.rb "$unicode_smoke/"
+          cp test/support/mp4_investigation_fixture.rb "$unicode_smoke/support/"
+          cat > "$unicode_smoke/helper.rb" <<'RUBY'
+          require 'test/unit'
+          require 'taglib_plus'
+          installed = Gem::Specification.find_by_name(ENV.fetch('GEM_NAME')).full_gem_path
+          loaded = $LOADED_FEATURES.grep(%r{/taglib/plus_mp4\.rb$})
+          abort 'packaged Plus API was not loaded' if loaded.empty? || loaded.any? { |path| !path.start_with?(installed + '/') }
+          RUBY
+          BUNDLE_GEMFILE="$bundle_gemfile" bundle exec ruby "$unicode_smoke/plus_mp4_unicode_path_test.rb"
 
       - uses: actions/upload-artifact@v4
         with:

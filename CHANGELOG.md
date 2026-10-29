@@ -8,6 +8,18 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.44
+
+### Fixed
+
+- macOSのsymlink解決と相対パス絶対化でPOSIX realpath/getcwdの返却bytesを保持し、Ruby側でのNFC表記への変換を避ける。既存名をNFC/NFDへ統一しない。
+- 保存候補の所有実体を作成fdから確認する。候補とmetadata用一時ファイルは削除後もlstatで確認し、残存・EACCES・EIOをcleanup失敗として経路付きで報告する。再削除は行わない。
+
+### Tests
+
+- ASCII/NFC/NFDの親子9通りの合成MP4で保存・再open・cleanupとmetadata/章/媒体の保持を確認した。候補差替え・公開失敗・削除異常は失敗注入で検証した。
+- ローカルAPFSと隔離インストール済みarm64 gemでUnicode試験16件が成功した。実SMBは未試験で、cache ONの削除不整合の解消は保証しない。
+
 ## 2.3.2.43
 
 ### Added

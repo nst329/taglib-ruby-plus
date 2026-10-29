@@ -4,6 +4,7 @@ require 'digest'
 require 'fileutils'
 require 'tempfile'
 require_relative 'plus_mp4_io'
+require_relative 'plus_mp4_path'
 require_relative 'plus_mp4_publication'
 require_relative 'plus_mp4_info'
 require_relative 'mp4_sample_boundaries'
@@ -562,11 +563,11 @@ module TagLib
 
         # 通常ファイルは原表記を保持し、symlinkだけtarget実体を確認してcanonical化する。
         def stable_path(path)
-          expanded = ::File.expand_path(path)
+          expanded = Path.expand_path(path)
           entry = ::File.lstat(expanded)
           return expanded unless entry.symlink?
 
-          resolved = ::File.realpath(expanded)
+          resolved = Path.realpath(expanded)
           unless ::File.identical?(expanded, resolved)
             raise Error.new('path resolves to a different file', code: :path_conflict,
                             area: :source, phase: :read,
@@ -990,7 +991,7 @@ module TagLib
                  (diagnostics - %i[metadata chapters chapter_references chapter_timing]).empty?
             raise ArgumentError, 'diagnostics must contain unique metadata/chapters/chapter_references/chapter_timing symbols'
           end
-          output = to.nil? ? @path : ::File.expand_path(to)
+          output = to.nil? ? @path : Path.expand_path(to)
           replace_source = output == @path
           validate_output!(output, replace_source)
           if @repair_kind == :limited_repairs && replace_source
@@ -1023,9 +1024,11 @@ module TagLib
             # cleanup失敗で残すpathをGCが後からunlinkしないよう、明示管理のFileを使う。
             temporary = Tempfile.create(['taglib-plus-', '.mp4'], ::File.dirname(output))
             temporary_path = temporary.path
-            temporary.close
-            temporary_identity = path_identity(temporary_path)
+            stat = temporary.stat
+            temporary_identity = [stat.dev, stat.ino]
             @temporary_cleanup_identity = temporary_identity
+            temporary.close
+            raise IOError, 'temporary candidate identity changed after creation' unless path_identity(temporary_path) == temporary_identity
             load_metadata if changed && !%i[limited_repairs broken_chapter_removal].include?(@repair_kind)
             @source_scan = nil
             prepare_candidate(temporary_path, changed: changed)
@@ -1772,17 +1775,30 @@ module TagLib
                             issues: [{ code: :cleanup_collision, message: 'temporary candidate identity unavailable',
                                        location: 'output/temporary' }])
           end
-          current = path_identity(temporary.path)
+          current = begin
+            path_identity(temporary.path)
+          rescue Errno::ENOENT
+            # 原本へのrenameが成功した場合は、一時pathが既にない。
+            return
+          end
           if current != identity
             raise Error.new('temporary candidate identity changed', code: :cleanup_collision,
                             area: :output, phase: :cleanup,
                             issues: [{ code: :cleanup_collision, message: 'temporary candidate identity changed',
                                        location: 'output/temporary', details: { expected: identity, actual: current } }])
           end
-          ::File.unlink(temporary.path)
-        rescue Errno::ENOENT
-          # 原本へのrenameが成功した場合は、一時pathが既にない。
-          nil
+          begin
+            ::File.unlink(temporary.path)
+          rescue Errno::ENOENT
+            # unlinkの応答だけでは不在と判断せず、下のlstatで確認する。
+          end
+          # SMB等で削除が成功を返してもentryが残る場合を成功扱いしない。
+          begin
+            ::File.lstat(temporary.path)
+          rescue Errno::ENOENT
+            return
+          end
+          raise IOError, 'temporary candidate remains after unlink'
         end
 
         def validate_output!(output, replace_source)
