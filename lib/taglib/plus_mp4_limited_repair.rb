@@ -24,18 +24,24 @@ module TagLib::Plus::MP4
   class File
     # 方針とは独立に各領域を診断し、同じ原本座標の候補へ必要操作を合成する。
     def plan_limited_repairs(mdta_layout: nil)
+      build_limited_repair_plan(mdta_layout: mdta_layout)
+    end
+
+    # 両公開入口の同じ検証・所有権・原本座標を共有する。
+    def build_limited_repair_plan(mdta_layout:, update: nil)
       ensure_current!
       ensure_repair_slot!
       unless [nil, :indexed, :mixed_known_fourcc].include?(mdta_layout)
         raise ArgumentError, 'unknown mdta_layout'
       end
-      editor, qt = read_structure do |native|
+      editor, qt, repair = read_structure do |native|
         reader = ::TagLib::MP4.const_get(:ChapterReader, false).read(native)
         analysis = ::TagLib::MP4.const_get(:LimitedRepairEditor, false).new(native,
-          chapter_report: reader.report, mdta_layout: mdta_layout)
+          chapter_report: reader.report, mdta_layout: mdta_layout, update: update)
         @diagnostics[:chapters] ||= diagnostic_report(:chapters, reader.report)
         cache_reference_diagnostics(analysis)
-        [analysis, limited_quicktime_plan(reader, analysis)]
+        repair = analysis.repair_plan unless [analysis.metadata_report[:status], analysis.quicktime_report[:status]].include?(:blocked)
+        [analysis, limited_quicktime_plan(reader, analysis), repair]
       end
     rescue Error => error
       raise unless error.phase == :read
@@ -46,6 +52,7 @@ module TagLib::Plus::MP4
       quicktime = editor.quicktime_report.merge(references: editor.removed)
       operations = []
       operations << :remove_invalid_mdta_indices if metadata[:status] == :required
+      operations << :update_metadata if editor.updates_changed
       operations << quicktime.fetch(:operation, :remove_broken_quicktime_chapters) if quicktime[:status] == :required
       status = if [metadata[:status], quicktime[:status]].include?(:blocked)
                  :blocked
@@ -55,9 +62,16 @@ module TagLib::Plus::MP4
                  :repairable
                end
       plan = LimitedRepairPlan.new(status: status, required_operations: operations, metadata: metadata,
-        quicktime: quicktime, owner: (@limited_plan_owner ||= Object.new), repair: status == :repairable ? editor.repair_plan : nil, quicktime_plan: qt)
+        quicktime: quicktime, owner: (@limited_plan_owner ||= Object.new), repair: status == :repairable ? repair : nil, quicktime_plan: qt)
       @issued_limited_plan = plan
       plan
+    end
+
+    private :build_limited_repair_plan
+
+    # 修復後metadataへのproperty差分だけを許可し、古いsnapshotの復元を避ける。
+    def plan_metadata_repair_and_update(properties:, mdta_layout: nil)
+      build_limited_repair_plan(mdta_layout: mdta_layout, update: ::TagLib::MP4::MetadataUpdate.properties(properties))
     end
 
     # 構造解析が入口で失敗しても、限定修復を正常扱いせず理由付きblocked計画へ固定する。
@@ -85,7 +99,7 @@ module TagLib::Plus::MP4
     def apply_limited_repairs(plan:, allow:)
       ensure_current!
       ensure_repair_slot!
-      known = %i[remove_invalid_mdta_indices remove_broken_quicktime_chapters remove_dangling_chapter_references]
+      known = %i[update_metadata remove_invalid_mdta_indices remove_broken_quicktime_chapters remove_dangling_chapter_references]
       raise ArgumentError, 'allow must contain known unique operations' unless allow.is_a?(Array) && allow.uniq == allow && (allow - known).empty?
       unless plan.is_a?(LimitedRepairPlan) && plan.__send__(:owner).equal?(@limited_plan_owner) && @issued_limited_plan.equal?(plan)
         raise Error.new('unrecognized limited repair plan', code: :invalid_plan, phase: :prepare)
@@ -133,7 +147,8 @@ module TagLib::Plus::MP4
 
     # 完全snapshotを前提にせず、対象atomだけを変えたraw signatureを独立比較する。
     def verify_limited_repair(native)
-      checked = ::TagLib::MP4::ChapterReferences.new(native)
+      checked = ::TagLib::MP4::ChapterReferences.new(native, timing: Array(@requested_diagnostics).include?(:chapter_timing))
+      @verified_reference_reports = { chapter_references: checked.report, chapter_timing: checked.timing_report }
       unless checked.report == @repair_plan.retained_report && checked.preservation_signature == @repair_plan.preservation_signature
         raise IOError, 'limited repair preservation verification failed'
       end

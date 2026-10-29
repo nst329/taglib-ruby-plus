@@ -95,6 +95,15 @@ class MP4ObservationTest < Test::Unit::TestCase
     end
   end
 
+  should 'reuse the original metadata observation while a different candidate is pending' do
+    API.open(@path) do |file|
+      original = file.observation(:metadata)[:metadata][:value]
+      file.metadata = original.with(properties: { title: '候補' })
+      file.define_singleton_method(:read_native) { |*| raise 'observation must reuse the baseline' }
+      assert_same original, file.observation(:metadata)[:metadata][:value]
+    end
+  end
+
   private
 
   def build_mp4(path)

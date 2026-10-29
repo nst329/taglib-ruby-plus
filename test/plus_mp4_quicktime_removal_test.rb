@@ -112,6 +112,34 @@ class PlusMP4QuickTimeRemovalTest < Test::Unit::TestCase
     end
   end
 
+  def test_explicit_samples_ignore_broken_nero_and_both_broken_formats_can_be_removed
+    break_nero
+    API.open(@path) do |file|
+      assert_not_nil file.chapter_samples(style: :quicktime)
+    end
+    edit_fixture(@path) do |moov|
+      track = fixture_tracks(moov).find do |node|
+        fixture_child(fixture_child(node, 'mdia'), 'hdlr')[:data].byteslice(8, 4) == 'text'
+      end
+      stbl = fixture_child(fixture_child(fixture_child(track, 'mdia'), 'minf'), 'stbl')
+      fixture_child(stbl, 'stsz')[:data][12, 4] = [1].pack('N')
+    end
+    output = File.join(@dir, 'both-removed.m4a')
+    original = File.binread(@path)
+    API.open(@path) do |file|
+      plan = file.plan_broken_chapter_removal
+      assert_equal :removable, plan.status
+      assert_equal %i[nero quicktime], plan.remove_styles
+      file.remove_broken_chapters(plan: plan)
+      assert file.save!(to: output)[:changed]
+    end
+    assert_equal original, File.binread(@path)
+    API.open(output) do |file|
+      assert_nil file.read_chapters(style: :nero)
+      assert_nil file.read_chapters(style: :quicktime)
+    end
+  end
+
   def test_broken_chapter_plan_skips_timing_and_renders_unchanged_size_once
     break_nero
     API.open(@path) do |file|

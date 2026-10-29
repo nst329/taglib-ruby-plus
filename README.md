@@ -72,9 +72,9 @@ Gemfile:
     source 'https://rubygems.org'
     source 'https://rubygems.pkg.github.com/nst329' do
       # Apple Siliconの場合
-      gem 'taglib-ruby-plus-arm64-darwin', '2.3.2.36'
+      gem 'taglib-ruby-plus-arm64-darwin', '2.3.2.43'
       # Intelの場合は上記の代わりに次を指定
-      # gem 'taglib-ruby-plus-x86_64-darwin', '2.3.2.36'
+      # gem 'taglib-ruby-plus-x86_64-darwin', '2.3.2.43'
     end
 
 platform gemがまだ公開されていない環境、または対応外platformでは、同じregistryの

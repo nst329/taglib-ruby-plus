@@ -8,7 +8,26 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
-## 開発中
+## 2.3.2.43
+
+### Added
+
+- `plan_metadata_repair_and_update(properties:, mdta_layout:)` を追加し、限定metadata修復と文字列タグ差分を同じ候補へ一括反映する。合成できない組合せは保存前に理由付きで拒否する。
+- `chapter_samples(style: :quicktime)` を追加し、正常Neroとの併存や内容差によらずQuickTimeのsampleと時計を明示取得できるようにした。
+- `save!(diagnostics:)` で独立検証後の要求診断だけを返却し、参照・時間の解析結果を再利用する。
+
+### Changed
+
+- 正常時間へのprofile指定は強制書換えにせず `unchanged` を返す。異常のprofile不適合・診断不能は成功扱いしない。
+- 同一世代の完全metadata観測を再利用する。修復変更あり＋同値タグ更新でも変更状態を保持する。
+- 既存の世代競合検出、原本保護、独立検証、公開状態、cleanup、無変更の別出力コピー契約を維持する。
+
+### Tests
+
+- 合成MP4で修復・更新・同値・chapter形式別取得と破損除去、artwork保持、Unicodeパス、失敗状態を検証した。
+- 約8.4MBのfixtureで2段階保存の全体走査4回／コピー2回を、一括保存の2回／1回へ削減。全不要時は全体走査・コピー・書込ゼロを確認した。
+
+## 2.3.2.42
 
 ### Added
 

@@ -9,7 +9,7 @@ module TagLib::MP4
     MAX_VALUES = 100_000
     attr_reader :report, :values, :sample_data, :nero_payload_sha256
 
-    # 原本世代の読取値だけを再利用し、native handleや未保存の章状態をcacheしない。
+    # 原本世代の読取値だけを再利用する。samples: :quicktimeは他形式を診断しない明示選択。
     def self.read(file, samples: false)
       generation = file.io_generation if file.respond_to?(:io_generation)
       return new(file, samples: samples) unless generation
@@ -31,7 +31,7 @@ module TagLib::MP4
         @moov = one(@atoms, 'moov')
         if @samples
           capture(:quicktime)
-          reject!('Nero and QuickTime selection is ambiguous', :unsupported) if @sample_data && nero
+          reject!('Nero and QuickTime selection is ambiguous', :unsupported) if @samples != :quicktime && @sample_data && nero
         else
           ChapterSnapshot::STYLES.each { |style| capture(style) }
         end

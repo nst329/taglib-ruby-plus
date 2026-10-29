@@ -817,16 +817,25 @@ module TagLib
           end
         end
 
-        def chapter_samples
+        # 指定形式のsampleと時計を完全読取する。他形式との併存は明示選択時に許可する。
+        def chapter_samples(style: nil)
+          raise ArgumentError, 'style must be :quicktime' unless [nil, :quicktime].include?(style)
           ensure_current!
           ensure_no_repair!
           raise Error.new('chapter samples are unavailable while chapters are edited', code: :pending_changes, area: :chapters) if chapters_changed?
-          return @chapter_samples if @chapter_samples_loaded
+          return @chapter_samples if @chapter_samples_loaded && @chapter_samples_style == style
 
-          snapshot = read_structure { |native| native.chapter_sample_snapshot }
+          snapshot = read_structure do |native|
+            native.chapter_sample_snapshot(style: style)
+          rescue ::TagLib::MP4::ChapterSnapshotError => error
+            raise Error.new(error.message, code: error.code, area: :chapters, phase: :read,
+              issues: [{ code: error.reason_code, message: error.message,
+                         location: 'chapter_samples/quicktime', details: { format: :quicktime } }]), cause: error
+          end
           fields = %i[track_id source_track_id media_timescale media_duration samples movie edit
                       preservation_signature ffprobe_comparison source_references signature_version]
           @chapter_samples = snapshot && DeepCopy.call(fields.to_h { |field| [field, snapshot.public_send(field)] })
+          @chapter_samples_style = style
           @chapter_samples_loaded = true
           @chapter_samples
         end
@@ -859,6 +868,9 @@ module TagLib
         # metadata診断と完全snapshotを同じnative読込みで取得し、以後の編集候補にも使う。
         # 修復対象のmalformed metadataでも例外にせず、statusとissuesだけを返す。
         def observation_metadata
+          if @metadata_baseline && @diagnostics.dig(:metadata, :status) == :complete
+            return @diagnostics[:metadata].merge(value: @metadata_baseline)
+          end
           report, snapshot = read_native do |native|
             report = begin
               diagnostic_report(:metadata, native.metadata_diagnostics)
@@ -945,6 +957,11 @@ module TagLib
           ensure_current!
           ensure_repair_slot!
           raise ArgumentError, 'profile must be :taglib_full_movie' unless profile == :taglib_full_movie
+          timing = diagnose(:chapter_timing)
+          info = timing.dig(:data, :tracks)&.find { |row| row[:track_id] == Integer(track_id) }
+          if info && info[:observations].empty?
+            return DeepCopy.call(status: :unchanged, reason: :timing_complete, track_id: Integer(track_id))
+          end
           result, plan = read_native do |native|
             result = native.repair_native_chapter_timing(track_id: Integer(track_id), profile: profile)
             [result, native.instance_variable_get(:@chapter_timing_repair)]
@@ -964,10 +981,14 @@ module TagLib
         end
 
         # 候補の検証・別handle再読込・media保持を終えてから一度だけ公開する。
-        def save!(to: nil, snapshots: [])
+        def save!(to: nil, snapshots: [], diagnostics: [])
           ensure_current!
           unless snapshots.is_a?(Array) && snapshots.uniq == snapshots && (snapshots - %i[metadata chapters]).empty?
             raise ArgumentError, 'snapshots must contain unique metadata/chapters symbols'
+          end
+          unless diagnostics.is_a?(Array) && diagnostics.uniq == diagnostics &&
+                 (diagnostics - %i[metadata chapters chapter_references chapter_timing]).empty?
+            raise ArgumentError, 'diagnostics must contain unique metadata/chapters/chapter_references/chapter_timing symbols'
           end
           output = to.nil? ? @path : ::File.expand_path(to)
           replace_source = output == @path
@@ -984,7 +1005,8 @@ module TagLib
             end
             actual.merge!(read_native { |native| capture_snapshots(native, missing) }) unless missing.empty?
             adopt_snapshots!(actual)
-            return result(output, @digest, changed: false, snapshots: actual)
+            return result(output, @digest, changed: false, snapshots: actual,
+                          diagnostics: diagnostics.to_h { |area| [area, diagnose(area)] })
           end
 
           publication = Publication::State.new
@@ -996,6 +1018,7 @@ module TagLib
           output_generation = nil
           begin
             @requested_snapshots = snapshots
+            @requested_diagnostics = diagnostics
             @publication_state = publication
             # cleanup失敗で残すpathをGCが後からunlinkしないよう、明示管理のFileを使う。
             temporary = Tempfile.create(['taglib-plus-', '.mp4'], ::File.dirname(output))
@@ -1017,9 +1040,10 @@ module TagLib
             output_digest = @output_scan.fetch(:digest)
             baseline = if changed
                          verify_candidate(temporary_path)
-                       elsif snapshots.any?
+                       elsif snapshots.any? || diagnostics.any?
                          ::TagLib::MP4::Internal::File.open(temporary_path, false) do |native|
                            native.io_generation = output_generation
+                           @verified_diagnostics = capture_diagnostics(native)
                            capture_snapshots(native, snapshots)
                          end
                        end
@@ -1036,7 +1060,7 @@ module TagLib
               adopt_baseline!(baseline, output_digest)
             end
             phase = :result
-            result(output, output_digest, changed: changed, source_digest: source_digest, snapshots: baseline || {})
+            result(output, output_digest, changed: changed, source_digest: source_digest, snapshots: baseline || {}, diagnostics: @verified_diagnostics || {})
           rescue StandardError => error
             publication_status = publication.status
             mark_publication_failure!(publication_status)
@@ -1054,6 +1078,7 @@ module TagLib
               @source_scan = @output_scan = @source_tracks = nil
               @rendered_nero = nil
               @requested_snapshots = nil
+              @requested_diagnostics = @verified_diagnostics = @verified_reference_reports = nil
               @candidate_generation = nil
               @publication_state = nil
               cleanup_candidate(temporary) if temporary && publication.status != :unknown
@@ -1343,7 +1368,11 @@ module TagLib
         def verify_candidate(path)
           ::TagLib::MP4::Internal::File.open(path, false) do |native|
             native.io_generation = @candidate_generation
-            return verify_limited_repair(native) if @repair_kind == :limited_repairs
+            if @repair_kind == :limited_repairs
+              captured = verify_limited_repair(native)
+              @verified_diagnostics = capture_diagnostics(native)
+              return captured
+            end
             actual = MetadataSnapshot.__send__(:from_legacy, native.metadata_snapshot)
             # 破損chapter除去は後段のraw保持署名でmetadata全体を比較する。
             # 元metadataのnative再読込を省き、返却snapshotは出力から従来どおり取得する。
@@ -1378,6 +1407,7 @@ module TagLib
               verify_broken_chapter_removal(native, checked: checked) if @repair_kind == :broken_chapter_removal
               native.chapter_snapshot if @repair_kind == :chapter_timing
             end
+            @verified_diagnostics = capture_diagnostics(native)
             captured = { metadata: actual }
             captured[:chapters] = chapters if chapters
             captured
@@ -1418,6 +1448,14 @@ module TagLib
             raise IOError, 'QuickTime track verification failed' if expected.target_track_id && checked.track_ids.include?(expected.target_track_id)
           elsif expected.quicktime_status == :complete
             raise IOError, 'QuickTime chapter preservation verification failed' unless reader.report.fetch(:quicktime)[:status] == :complete
+          end
+        end
+
+        # 独立検証handleの同一世代cacheから、要求された診断だけを返却する。
+        def capture_diagnostics(native)
+          Array(@requested_diagnostics).to_h do |area|
+            [area, diagnostic_report(area, @verified_reference_reports&.[](area) ||
+              native.public_send(DIAGNOSTIC_OPERATIONS.fetch(area)))]
           end
         end
 
@@ -1781,6 +1819,7 @@ module TagLib
           # 厳密モードの新世代は検証済み出力SHAを採用し、再走査を避ける。
           @generation.__send__(:adopt_digest, output_digest) if @verification == :sha256
           @diagnostics.clear
+          @diagnostics.merge!(@verified_diagnostics) if @verified_diagnostics
           @header_reader = nil
           @metadata_destination = nil
           @chapter_samples = nil
@@ -1793,10 +1832,11 @@ module TagLib
           @chapters_baseline = @chapters_candidate = baseline[:chapters] if baseline.key?(:chapters)
         end
 
-        def result(output, output_digest, changed:, source_digest: @digest, snapshots: {})
+        def result(output, output_digest, changed:, source_digest: @digest, snapshots: {}, diagnostics: {})
           value = { output_path: output, changed: changed, source_digest: source_digest,
                     output_digest: output_digest, snapshots: snapshots,
                     verification: (!changed && output == @path ? @verification : :independent_reopen) }
+          value[:diagnostics] = diagnostics unless diagnostics.empty?
           if @limited_repair_plan
             value.merge!(operations: @limited_repair_plan.required_operations,
               removed: { metadata: @limited_repair_plan.metadata[:removed] || [],

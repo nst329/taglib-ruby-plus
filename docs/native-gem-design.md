@@ -82,3 +82,10 @@ colrとmetadata contextの読み取り専用診断、purlの新規mdta生成拒�
 新規v2.3.2.16タグのpushで既存workflowのarm64・Intel・source buildとGitHub Packages公開を実行する。
 native ABIと既存配布名は維持し、各native gemのsmoke testへ新しい診断APIの読取・凍結確認を追加する。
 既存2.3.2.15のtag/packageは変更しない。採用理由は[colr/purl ADR](ADR/2026-10-13-colr診断とpurlのcontext生成拒否.md)を参照。
+
+## 2.3.2.43の公開
+
+限定metadata修復と文字列タグ差分の一括保存、QuickTime明示sample取得、保存後の選択診断返却を含める。
+Ruby／native ABIと配布名は維持する。新規 `v2.3.2.43` タグで既存workflowを起動し、
+同一commitのRuby 3.2／4.0全体CI、arm64／x86_64 native build・smoke testの成功後に、
+arm64・x86_64・sourceの3種をGitHub Packagesへ公開する。既存versionとタグは上書きしない。

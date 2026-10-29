@@ -64,7 +64,11 @@ if TagLib::Plus::MP4.const_defined?(:Stream, false)
         $whole_hashes += 1
         $whole_copies += 1 if options[:destination]
       end
-      super
+      active = $measuring
+      $stream_read_bytes += File.size(path) if active
+      value = super
+      $stream_write_bytes += File.size(options[:destination]) if active && options[:destination]
+      value
     end
   end
   TagLib::Plus::MP4.const_get(:Stream, false).singleton_class.prepend(StreamCounter)
@@ -81,7 +85,7 @@ $metric_source = File.realpath(source)
 $native_source_opens = $external_processes = 0
 $artwork_objects = $artwork_retained_bytes = nil
 $media_size_floor = File.size(source_fixture) * 0.8
-$whole_hashes = $whole_copies = 0
+$whole_hashes = $whole_copies = $stream_read_bytes = $stream_write_bytes = 0
 failure = nil
 started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 Meter.plus_meter_start unless ENV['PLUS_IO_UNMETERED']
@@ -89,6 +93,23 @@ $measuring = true
 begin
   api.open(source) do |file|
     case operation
+    when 'repair_update_combined'
+      plan = file.plan_metadata_repair_and_update(properties: { title: 'updated' })
+      file.apply_limited_repairs(plan: plan, allow: plan.required_operations)
+      file.save!(to: File.join(work, 'output.mp4'))
+    when 'repair_update_sequential'
+      plan = file.plan_limited_repairs
+      file.apply_limited_repairs(plan: plan, allow: plan.required_operations)
+      stage = File.join(work, 'repaired.mp4')
+      file.save!(to: stage)
+      api.open(stage) do |repaired|
+        repaired.metadata = repaired.metadata.with(properties: { title: 'updated' })
+        repaired.save!(to: File.join(work, 'output.mp4'))
+      end
+    when 'repair_update_noop'
+      plan = file.plan_metadata_repair_and_update(properties: { title: 'ordinary-title' })
+      file.apply_limited_repairs(plan: plan, allow: plan.required_operations)
+      file.save!
     when 'structural_reads'
       2.times do
         %i[chapters chapter_references chapter_timing color].each { |area| file.diagnose(area) }
@@ -152,6 +173,7 @@ end
 puts JSON.generate(operation: operation, size: File.size(source_fixture),
   read_bytes: Meter.plus_meter_read, write_bytes: Meter.plus_meter_write,
   whole_hash_passes: $whole_hashes, whole_media_copies: $whole_copies,
+  stream_read_bytes: $stream_read_bytes, stream_write_bytes: $stream_write_bytes,
   temporary_peak_bytes: Meter.plus_meter_peak,
   native_source_opens: $native_source_opens, external_process_calls: $external_processes,
   artwork_byte_objects: $artwork_objects, artwork_retained_string_bytes: $artwork_retained_bytes,

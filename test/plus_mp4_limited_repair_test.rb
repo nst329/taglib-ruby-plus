@@ -69,6 +69,213 @@ class PlusMP4LimitedRepairTest < Test::Unit::TestCase
     fixture_child(meta, 'hdlr')[:data].byteslice(8, 4)
   end
 
+  def test_combined_metadata_repair_and_update_use_one_copy_and_preserve_chapters
+    seed_chapters(broken: false)
+    inject_mdir_mdta_pair(@path, keys: %w[a], indices: [0, 1, 2])
+    original = File.binread(@path)
+    API.open(@path) do |file|
+      plan = file.plan_metadata_repair_and_update(properties: { title: '新しい作品' })
+      assert_equal :repairable, plan.status
+      assert_equal %i[remove_invalid_mdta_indices update_metadata], plan.required_operations
+      file.apply_limited_repairs(plan: plan, allow: plan.required_operations)
+      file.define_singleton_method(:write_candidate) { |_| raise 'native save must not run' }
+      result = file.save!(to: @output, snapshots: %i[metadata chapters], diagnostics: [:chapters])
+      assert result[:changed]
+      assert_equal [:chapters], result[:diagnostics].keys
+      assert_equal :complete, result[:diagnostics][:chapters][:status]
+      assert_equal ['新しい作品'], result[:snapshots][:metadata].properties[:title]
+      assert_equal ['QT'], result[:snapshots][:chapters].quicktime.map(&:title)
+      assert_equal ['Nero'], result[:snapshots][:chapters].nero.map(&:title)
+    end
+    assert_equal original, File.binread(@path)
+    mdta = metadata_contexts(@output).find { |context| metadata_handler(context) == 'mdta' }
+    assert_equal [[1].pack('N')], fixture_child(mdta, 'ilst')[:children].map { |item| item[:type] }
+  end
+
+  def test_update_only_then_equal_update_need_no_stage_copy_or_scan
+    API.open(@path) do |file|
+      plan = file.plan_metadata_repair_and_update(properties: { title: '同値' })
+      assert_equal [:update_metadata], plan.required_operations
+      file.apply_limited_repairs(plan: plan, allow: [:update_metadata])
+      assert file.save!(to: @output)[:changed]
+    end
+    API.open(@output) do |file|
+      plan = file.plan_metadata_repair_and_update(properties: { title: '同値' })
+      assert_equal :unchanged, plan.status
+      assert_equal [], file.apply_limited_repairs(plan: plan, allow: [])
+      file.define_singleton_method(:prepare_candidate) { |*| raise 'no candidate for unchanged' }
+      file.define_singleton_method(:write_candidate) { |*| raise 'no save for unchanged' }
+      assert_equal false, file.save![:changed]
+      assert_equal [], Dir.glob(File.join(@dir, 'taglib-plus-*'))
+    end
+  end
+
+  def test_equal_utf16_property_with_nonzero_locale_keeps_original_bytes
+    inject_mdir_mdta_pair(@path, indices: [1])
+    edit_fixture(@path) do |moov|
+      mdir = fixture_child(moov, 'udta')[:children].find do |node|
+        node[:type] == 'meta' && metadata_handler(node) == 'mdir'
+      end
+      item = fixture_child(mdir, 'ilst')[:children].first
+      item[:data] = atom_box('data', [2, 42].pack('N2') + 'ordinary-title'.encode(Encoding::UTF_16BE).b)
+    end
+    original = File.binread(@path)
+    API.open(@path) do |file|
+      plan = file.plan_metadata_repair_and_update(properties: { title: 'ordinary-title' })
+      assert_equal :unchanged, plan.status
+      file.apply_limited_repairs(plan: plan, allow: [])
+      assert_equal false, file.save![:changed]
+    end
+    assert_equal original, File.binread(@path)
+  end
+
+  def test_repair_change_survives_equal_property_update
+    inject_mdir_mdta_pair(@path, indices: [0, 1])
+    API.open(@path) do |file|
+      plan = file.plan_metadata_repair_and_update(properties: { title: 'ordinary-title' })
+      assert_equal :repairable, plan.status
+      assert_equal [:remove_invalid_mdta_indices], plan.required_operations
+      file.apply_limited_repairs(plan: plan, allow: plan.required_operations)
+      assert file.save!(to: @output)[:changed]
+    end
+  end
+
+  def test_composition_rejects_mdta_alias_and_missing_mdir_before_output
+    inject_mdir_mdta_pair(@path, keys: %w[title], indices: [0, 1])
+    API.open(@path) do |file|
+      plan = file.plan_metadata_repair_and_update(properties: { title: 'new' })
+      assert_equal :blocked, plan.status
+      assert_equal :update_mdta_conflict, plan.metadata[:reason_code]
+      error = assert_raise(API::Error) { file.apply_limited_repairs(plan: plan, allow: [:update_metadata]) }
+      assert_equal :repair_blocked, error.code
+    end
+    inject_metadata(@path, keys: %w[a], indices: [0, 1])
+    API.open(@path) do |file|
+      plan = file.plan_metadata_repair_and_update(properties: { title: 'new' })
+      assert_equal :blocked, plan.status
+      assert_equal :update_mdir_required, plan.metadata[:reason_code]
+    end
+    assert_equal false, File.exist?(@output)
+  end
+
+  def test_explicit_quicktime_samples_allow_different_normal_nero
+    seed_chapters(broken: false)
+    original = File.binread(@path)
+    API.open(@path) do |file|
+      assert_raise(API::Error) { file.chapter_samples }
+      value = file.chapter_samples(style: :quicktime)
+      assert_equal 1, value[:samples].size
+      assert_equal :unchanged, file.plan_limited_repairs.status
+      assert_equal false, file.save![:changed]
+      assert_raise(ArgumentError) { file.chapter_samples(style: :nero) }
+    end
+    assert_equal original, File.binread(@path)
+  end
+
+  def test_explicit_sample_format_matrix_and_structured_missing_reference
+    base = File.binread(@path)
+    [[:nero], [:quicktime], [], %i[nero quicktime]].each do |styles|
+      File.binwrite(@path, base)
+      TagLib::MP4::Internal::File.open(@path, false) do |native|
+        styles.each { |style| native.set_chapters([TagLib::MP4::Chapter.new(0, 'same')], style: style) }
+        assert native.save_chapters unless styles.empty?
+      end
+      API.open(@path) do |file|
+        value = file.chapter_samples(style: :quicktime)
+        assert_equal styles.include?(:quicktime), !value.nil?
+        assert_equal :unchanged, file.plan_limited_repairs.status
+      end
+    end
+    edit_fixture(@path) do |moov|
+      track = fixture_tracks(moov).find { |node| fixture_child(node, 'tref') }
+      fixture_child(fixture_child(track, 'tref'), 'chap')[:data] = [999].pack('N')
+    end
+    API.open(@path) do |file|
+      error = assert_raise(API::Error) { file.chapter_samples(style: :quicktime) }
+      assert_equal :malformed, error.code
+      assert_equal :missing_chapter_track, error.issues.first[:code]
+    end
+  end
+
+  def test_composition_preserves_artwork_and_other_properties_and_rejects_empty_values
+    inject_mdir_mdta_pair(@path, indices: [0, 1])
+    image = File.binread(File.join(__dir__, 'data/globe_east_90.jpg'))
+    edit_fixture(@path) do |moov|
+      mdir = fixture_child(moov, 'udta')[:children].find do |node|
+        node[:type] == 'meta' && metadata_handler(node) == 'mdir'
+      end
+      artwork = atom_box('covr', atom_box('data', [13, 0].pack('N2') + image))
+      fixture_child(mdir, 'ilst')[:children] << parse_boxes(artwork).first
+    end
+    API.open(@path) do |file|
+      blocked = file.plan_metadata_repair_and_update(properties: { title: '' })
+      assert_equal :blocked, blocked.status
+      assert_equal :update_unsupported, blocked.metadata[:reason_code]
+      plan = file.plan_metadata_repair_and_update(properties: { comment: 'comment' })
+      file.apply_limited_repairs(plan: plan, allow: plan.required_operations)
+      result = file.save!(to: @output, snapshots: [:metadata], diagnostics: %i[metadata chapter_references chapter_timing])
+      metadata = result[:snapshots][:metadata]
+      assert_equal ['ordinary-title'], metadata.properties[:title]
+      assert_equal ['comment'], metadata.properties[:comment]
+      assert_equal image, metadata.artworks.first.data
+      assert_equal %i[metadata chapter_references chapter_timing], result[:diagnostics].keys
+    end
+  end
+
+  def test_composed_update_tampering_is_rejected_before_publication
+    inject_mdir_mdta_pair(@path, indices: [0, 1])
+    source = File.binread(@path)
+    API.open(@path) do |file|
+      plan = file.plan_metadata_repair_and_update(properties: { title: 'new' })
+      file.apply_limited_repairs(plan: plan, allow: plan.required_operations)
+      error = assert_raise(API::Error) { file.metadata = API::MetadataSnapshot.new }
+      assert_equal :pending_changes, error.code
+      prepare = file.method(:prepare_candidate)
+      file.define_singleton_method(:prepare_candidate) do |path, **options|
+        prepare.call(path, **options)
+        bytes = ::File.binread(path)
+        index = bytes.index('new')
+        raise 'updated property not found' unless index
+        ::File.open(path, 'r+b') { |io| io.seek(index); io.write('bad') }
+      end
+      error = assert_raise(API::Error) { file.save!(to: @output) }
+      assert_equal :verify, error.phase
+      assert_equal false, error.committed
+      assert_equal false, File.exist?(@output)
+      assert file.changes[:changed]
+    end
+    assert_equal source, File.binread(@path)
+  end
+
+  def test_healthy_timing_profile_does_not_force_a_save
+    seed_chapters(broken: false)
+    API.open(@path) do |file|
+      id = file.chapter_samples(style: :quicktime)[:track_id]
+      assert_equal :unchanged, file.repair_chapter_timing(track_id: id, profile: :taglib_full_movie)[:status]
+      assert_equal false, file.changes[:changed]
+      file.define_singleton_method(:prepare_candidate) { |*| raise 'healthy timing must not save' }
+      assert_equal false, file.save![:changed]
+    end
+  end
+
+  def test_composition_handles_combining_character_path_and_rejects_old_plan_after_change
+    name = File.join(@dir, "結合e\u0301.m4a")
+    File.rename(@path, name)
+    API.open(name) do |file|
+      plan = file.plan_metadata_repair_and_update(properties: { title: '更新' })
+      File.open(name, 'ab') { |io| io.write([8].pack('N') + 'free') }
+      error = assert_raise(API::Error) { file.apply_limited_repairs(plan: plan, allow: [:update_metadata]) }
+      assert_equal :source_changed, error.code
+    end
+    API.open(name) do |file|
+      plan = file.plan_metadata_repair_and_update(properties: { title: '更新' })
+      file.apply_limited_repairs(plan: plan, allow: [:update_metadata])
+      result = file.save!(to: @output, snapshots: [:metadata])
+      assert_equal ['更新'], result[:snapshots][:metadata].properties[:title]
+      assert File.exist?(name)
+    end
+  end
+
   def test_both_repairs_preserve_original_raw_metadata_nero_and_media
     seed_chapters
     inject_metadata(@path, keys: %w[a b], indices: [1, 0, 2, 3, 0xffffffff, 1])

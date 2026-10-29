@@ -1,8 +1,47 @@
 # frozen_string_literal: true
 
 module TagLib::MP4
+  # moovの増減・free消費・chunk offset補正を限定修復と通常編集で共有する。
+  module AtomReplacementLayout
+    private
+
+    def deleted_reference_atom?(atom)
+      return true if @consumed_free&.include?(atom[:offset])
+
+      super
+    end
+
+    # 直下freeを必要量だけ消費する。不足分だけmoovを拡張し、stco/co64を移動する。
+    def replacement
+      @consumed_free = []
+      edited_size = rendered_size(@moov)
+      if edited_size > length(@moov)
+        @moov[:children].select { |a| a[:type] == 'free' }.each do |atom|
+          break unless edited_size > length(@moov)
+          @consumed_free << atom[:offset]
+          edited_size -= length(atom)
+        end
+      end
+      available = length(@moov) - edited_size
+      padding = if available >= 8
+                  available
+                elsif available.positive?
+                  available + 8
+                else
+                  0
+                end
+      delta = edited_size + padding - length(@moov)
+      fail!('edited moov exceeds repair limit', :unsupported) if edited_size + padding > ChapterReferences::MAX_MOOV_BYTES
+      edited = render(@moov, delta)
+      return edited.freeze if padding.zero?
+      box(@moov, edited.byteslice(@moov[:payload_offset] - @moov[:offset]..) + [padding].pack('N') + 'free' + "\0".b * (padding - 8)).freeze
+    end
+  end
+  private_constant :AtomReplacementLayout
+
   # 検証済みmoovの限定atom編集。offset補正と対象外bytesの保持は参照修復と共用する。
   class MP4AtomEditor < ChapterReferences
+    include AtomReplacementLayout
     attr_reader :result
 
     # 例: timing_track: 4。metadata_transformはraw meta bytesだけを受け取る内部処理。
@@ -98,38 +137,6 @@ module TagLib::MP4
         media == { version: 0, duration: rounded_ms, timescale: 1000 } &&
         info[:stts][:duration] == media[:duration] && header == { version: 0, duration: media[:duration] } &&
         edits == [{ version: 0, segment_duration: duration & 0xffff_ffff, media_time: 0, media_rate: 65_536 }]
-    end
-
-    def deleted_reference_atom?(atom)
-      return true if @consumed_free&.include?(atom[:offset])
-
-      super
-    end
-
-    # 直下freeを必要量だけ消費する。不足分だけmoovを拡張し、stco/co64を移動する。
-    def replacement
-      @consumed_free = []
-      edited_size = rendered_size(@moov)
-      if edited_size > length(@moov)
-        @moov[:children].select { |a| a[:type] == 'free' }.each do |atom|
-          break unless edited_size > length(@moov)
-          @consumed_free << atom[:offset]
-          edited_size -= length(atom)
-        end
-      end
-      available = length(@moov) - edited_size
-      padding = if available >= 8
-                  available
-                elsif available.positive?
-                  available + 8
-                else
-                  0
-                end
-      delta = edited_size + padding - length(@moov)
-      fail!('edited moov exceeds repair limit', :unsupported) if edited_size + padding > MAX_MOOV_BYTES
-      edited = render(@moov, delta)
-      return edited.freeze if padding.zero?
-      box(@moov, edited.byteslice(@moov[:payload_offset] - @moov[:offset]..) + [padding].pack('N') + 'free' + "\0".b * (padding - 8)).freeze
     end
   end
   private_constant :MP4AtomEditor

@@ -9,8 +9,9 @@ module TagLib::MP4
 
     # 例: capture(file).samples.first => {sample_index: 0, start_ticks: 0, duration_ticks: 50, ...}
     # private constructorへ完全読取済みのデータだけを渡す。
-    def self.capture(file)
-      reader = ChapterReader.read(file, samples: true)
+    def self.capture(file, style: nil)
+      raise ArgumentError, 'style must be :quicktime' unless [nil, :quicktime].include?(style)
+      reader = ChapterReader.read(file, samples: style || true)
       reader.require_complete!
       reader.sample_data && new(reader.sample_data)
     end
@@ -66,8 +67,8 @@ module TagLib::MP4
 
   class File
     # pending編集を反映せず、保存済みの全sampleを読む。不在はnil、不完全読取は例外。
-    def chapter_sample_snapshot
-      ChapterSampleSnapshot.capture(self)
+    def chapter_sample_snapshot(style: nil)
+      ChapterSampleSnapshot.capture(self, style: style)
     end
   end
 end

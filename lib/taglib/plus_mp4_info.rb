@@ -32,8 +32,8 @@ module TagLib
           ::TagLib::MP4.const_get(:ColorMetadataReader, false).new(self).read
         end
 
-        def chapter_sample_snapshot
-          ::TagLib::MP4::ChapterSampleSnapshot.capture(self)
+        def chapter_sample_snapshot(style: nil)
+          ::TagLib::MP4::ChapterSampleSnapshot.capture(self, style: style)
         end
 
         # 選択領域だけを遅延し、別の選択でも同じ不変sectionを再利用する。
