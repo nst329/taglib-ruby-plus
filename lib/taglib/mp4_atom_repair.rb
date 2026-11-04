@@ -102,7 +102,7 @@ module TagLib::MP4
       end
     end
 
-    # 再現済みwriter profileの一致を確認し、movie単位の64bit durationだけを昇格する。
+    # 再現済みwriterのtkhd/elstをfull-movieのv1へ揃え、movie単位の正しいdurationを書く。
     def prepare_timing_edit
       info = @timing_report.find { |row| row[:track_id] == @timing_track }
       @result = MetadataSnapshot.copy(status: :not_applicable, reason: :profile_mismatch, track_id: @timing_track)
@@ -128,15 +128,23 @@ module TagLib::MP4
         after: { version: 1, tkhd_duration: duration, elst_duration: duration })
     end
 
-    # 単位誤り・下位32bit切捨て・ms丸めが同時に一致する場合だけ補正候補とする。
+    # 64bit切捨てと32bit tkhd単位誤りの両方を、full-movie意図の単一editに限定して受理する。
     def native_timing_profile?(info)
       movie, media, header, edits = info.values_at(:movie, :media, :track_header, :edits)
       duration = movie[:duration]
       rounded_ms = (duration * 1000 + movie[:timescale] / 2) / movie[:timescale]
-      movie[:version] == 1 && duration > 0xffff_ffff && duration < 0xffff_ffff_ffff_ffff &&
-        media == { version: 0, duration: rounded_ms, timescale: 1000 } &&
-        info[:stts][:duration] == media[:duration] && header == { version: 0, duration: media[:duration] } &&
+      common = media == { version: 0, duration: rounded_ms, timescale: 1000 } &&
+        info[:stts][:duration] == media[:duration] &&
+        header == { version: 0, duration: media[:duration] } &&
         edits == [{ version: 0, segment_duration: duration & 0xffff_ffff, media_time: 0, media_rate: 65_536 }]
+      return false unless common
+
+      if movie[:version] == 0
+        duration.positive? && duration <= 0xffff_ffff &&
+          duration != media[:duration] && movie[:timescale] != media[:timescale]
+      else
+        movie[:version] == 1 && duration > 0xffff_ffff && duration < 0xffff_ffff_ffff_ffff
+      end
     end
   end
   private_constant :MP4AtomEditor

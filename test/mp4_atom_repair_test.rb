@@ -37,6 +37,17 @@ class MP4AtomRepairTest < Test::Unit::TestCase
       track_duration: 3_640_937, edit_rows: [[MOVIE_DURATION & 0xffffffff, 0, 65_536]])
   end
 
+  # 32bit movieのtkhdだけがmedia timescaleの値になっているwriter出力を再現する。
+  def seed_32bit_timing(track_duration: 3_607_103)
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
+      file.set_chapters(Array.new(15) { |i| TagLib::MP4::Chapter.new((i + 1) * 50, '') }, style: :quicktime)
+      assert file.save_chapters
+    end
+    inject_chapter_timing(@path, movie_scale: 600, movie_duration: 2_164_262,
+      track_duration: track_duration, edit_rows: [[2_164_262, 0, 65_536]],
+      movie_version: 0, media_duration: 3_607_103, stts_entries: [[15, 225_000], [1, 232_103]])
+  end
+
   def digest
     Digest::SHA256.file(@path).hexdigest
   end
@@ -61,6 +72,46 @@ class MP4AtomRepairTest < Test::Unit::TestCase
       assert_equal before, file.chapter_snapshot
     end
     assert_empty Dir.glob("#{@path}.taglib-mdta-*")
+  end
+
+  # 32bit movieでもtkhdがmedia単位なら、full-movie意図のv1へ昇格して直す。
+  def test_32bit_tkhd_media_duration_is_promoted_to_full_movie_v1
+    seed_32bit_timing
+    original = digest
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
+      before = file.chapter_snapshot
+      media = file.send(:mdat_payload_signature, @path)
+      track = file.chapter_timing_diagnostics.first
+      assert_equal [:tkhd_elst_duration_mismatch], track[:observations]
+      result = file.repair_native_chapter_timing(track_id: track[:track_id], profile: :taglib_full_movie)
+      assert_equal :planned, result[:status]
+      assert_equal 1, result[:after][:version]
+      assert_equal 2_164_262, result[:after][:tkhd_duration]
+      assert_equal 2_164_262, result[:after][:elst_duration]
+      assert_equal original, digest
+      assert file.save_chapters
+      assert_equal before, file.chapter_snapshot
+      assert_equal media, file.send(:mdat_payload_signature, @path)
+      repaired = file.chapter_timing_diagnostics.first
+      assert_empty repaired[:observations]
+      assert_equal({ version: 1, duration: 2_164_262 }, repaired[:track_header])
+      assert_equal([{ version: 1, segment_duration: 2_164_262, media_time: 0, media_rate: 65_536 }], repaired[:edits])
+    end
+    assert_empty Dir.glob("#{@path}.taglib-mdta-*")
+  end
+
+  # 32bitでtkhdが正しい入力はprofile不一致のまま変更しない。
+  def test_32bit_profile_rejects_correct_tkhd
+    seed_32bit_timing(track_duration: 2_164_262)
+    original = digest
+    TagLib::MP4::Internal::File.open(@path, false) do |file|
+      track = file.chapter_timing_diagnostics.first
+      assert_empty track[:observations]
+      result = file.repair_native_chapter_timing(track_id: track[:track_id], profile: :taglib_full_movie)
+      assert_equal :not_applicable, result[:status]
+      assert_nil file.instance_variable_get(:@chapter_timing_repair)
+    end
+    assert_equal original, digest
   end
 
   def test_profile_requires_explicit_intent_and_rejects_normal_short_edit

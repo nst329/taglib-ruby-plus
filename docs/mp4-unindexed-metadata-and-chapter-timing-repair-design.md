@@ -124,6 +124,14 @@ tkhdのflags・track ID・creation/modification・reserved・matrix等、elstの
 
 修復計画と通常タグ/metadata/参照修復を別保存にする。保存前に原本は変更しない。保存後は、昇格したatomの生成期待bytesとそれ以外のraw保持signatureを検証する。free領域を使える場合は消費し、不足時はmoovを拡張してstco/co64を補正する。offset overflowは昇格でごまかさず拒否する。
 
+### 32bit movieのtkhd単位誤り（2026-11-04追記）
+
+実ファイルHeyzo-3304で、`mvhd` v0・timescale 600・duration 2,164,262、`mdhd` v0・timescale 1000・duration 3,607,103、`tkhd` v0 duration 3,607,103、`elst` v0 segment_duration 2,164,262を観測した。`elst`はmovie durationとして正しいが、`tkhd`だけがmedia durationの数値になっている。
+
+- 追加条件: `mvhd` v0、durationが32bit以内、movieとmediaのtimescaleが異なる、`tkhd` durationが`mdhd` durationと同じ、`elst`がmovie durationと一致する単一full-movie edit、`mdhd`/`stts`がms丸めと一致する。
+- 補正: 既存のv1昇格経路を使い、`tkhd`と`elst`をv1へ、durationをmovie durationにする。`mvhd`はv0のまま変更しない。
+- 検証: 合成fixtureでobservation解消、chapter snapshot・mdat payload保持、ffprobeのchapter終端を確認した。正しい`tkhd`を持つ32bit入力は`not_applicable`のまま無変更である。
+
 ### readerの限定拡張
 
 設計前のstrict readerはelst v0単一identity editしか受け付けなかったため、v1へ直しただけではchapter_snapshotが拒否する。v1、entry count1、media_time=0、rate=1、正しい長さ/flagsの読取を追加する。単一identity以外の制限は維持する。

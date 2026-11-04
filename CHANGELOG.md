@@ -8,6 +8,18 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.45
+
+### Fixed
+
+- `taglib-full-movie`の時間修復で、32bit movie（`mvhd` version 0）の`tkhd`にmedia timescaleのdurationが書かれたwriter出力も受理する。`tkhd`と`elst`をversion 1へ昇格し、movie timescaleの正しいdurationを設定する。
+- 32bit profileは、movieとmediaのtimescaleが異なり、`tkhd`がmedia durationと同じ値で、`elst`がmovie durationと一致する単一full-movie editだけに限定する。正常なshort editや一致済みの`tkhd`は変更しない。
+
+### Tests
+
+- 32bit movieの合成fixtureで、時間診断のobservation解消、chapter snapshot・mdat payload保持、保存後の`tkhd`/`elst` version 1とduration、原本digest不変を確認した。
+- 正しい`tkhd`を持つ32bit movieが`not_applicable`のまま無変更であることを確認した。
+
 ## 2.3.2.44
 
 ### Fixed

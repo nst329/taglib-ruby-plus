@@ -29,3 +29,10 @@ native writerの生成不整合は入力条件から再現できたが、実フ�
 [設計](../mp4-unindexed-metadata-and-chapter-timing-repair-design.md)
 
 実装後、両backendの実ファイルコピーで参照修復・時間修復・保持APIの通常タグ保存2回と原本不変を確認した。細部の採用判断は[限定atom編集のADR](2026-10-09-限定atom編集と原子的保存の共用.md)に記録する。上記の試作段階の記録は当時の根拠として残す。
+
+## 2026-11-04 — 32bit movieのtkhd単位誤りをv1昇格で修復
+
+- 決定: `mvhd` v0で、`tkhd`だけがmedia timescaleのdurationになっているfull-movie chapter trackも`taglib-full-movie`の対象にする。`tkhd`と`elst`をv1へ昇格し、movie durationを設定する。`mvhd`はv0のまま変更しない。
+- 理由: 実ファイルHeyzo-3304で、movie timescale 600・duration 2,164,262、media timescale 1000・duration 3,607,103、`tkhd` 3,607,103、`elst` 2,164,262を観測した。`elst`は正しく、`tkhd`だけがmedia単位の値だった。既存のv1昇格経路を再利用でき、v0専用のatom編集分岐を増やさずに済む。
+- 条件: `mvhd` v0、durationが32bit以内、movieとmediaのtimescaleが異なる、`tkhd` durationが`mdhd` durationと同じ、`elst`がmovie durationと一致する単一full-movie edit、`mdhd`/`stts`がms丸めと一致する場合だけ受理する。正しい`tkhd`を持つ入力は`not_applicable`のまま変更しない。
+- 影響: 合成fixtureでobservation解消、chapter snapshot・mdat payload保持、ffprobeのchapter終端を確認した。`mvhd` v0と`tkhd`/`elst` v1の混在は許容する。公開gemのversion更新とMListNewの依存更新は別作業とする。

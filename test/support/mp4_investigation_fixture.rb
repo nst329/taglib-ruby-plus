@@ -147,12 +147,20 @@ module MP4InvestigationFixture
   end
 
   # 時間不整合だけを再現する。chapter samplesと表の件数は常に一致させる。
-  def inject_chapter_timing(path, movie_scale:, movie_duration:, track_duration:, edit_rows:)
+  def inject_chapter_timing(path, movie_scale:, movie_duration:, track_duration:, edit_rows:,
+                            movie_version: 1, media_duration: 3_640_937,
+                            stts_entries: [[15, 227_000], [1, 235_937]])
     edit_fixture(path) do |moov|
       movie = fixture_child(moov, 'mvhd')
       data = movie.fetch(:data)
       old_prefix = data.getbyte(0) == 1 ? 32 : 20
-      movie[:data] = [0x01000000].pack('N') + [0, 0].pack('Q>2') + [movie_scale].pack('N') + [movie_duration].pack('Q>') + data.byteslice(old_prefix..)
+      movie[:data] = if movie_version == 1
+                       [0x01000000].pack('N') + [0, 0].pack('Q>2') + [movie_scale].pack('N') +
+                         [movie_duration].pack('Q>') + data.byteslice(old_prefix..)
+                     else
+                       [0].pack('N') + [0, 0].pack('N2') + [movie_scale, movie_duration].pack('N2') +
+                         data.byteslice(old_prefix..)
+                     end
       track = fixture_tracks(moov).find do |node|
         handler = fixture_child(fixture_child(node, 'mdia'), 'hdlr').fetch(:data)
         handler.byteslice(8, 4) == 'text'
@@ -168,9 +176,9 @@ module MP4InvestigationFixture
         header[:data] = [flags, 0, 0].pack('N3') + fields + [track_duration].pack('N') + original.byteslice(suffix..)
       end
       mdia = fixture_child(track, 'mdia')
-      fixture_child(mdia, 'mdhd')[:data][12, 8] = [1000, 3_640_937].pack('N2')
+      fixture_child(mdia, 'mdhd')[:data][12, 8] = [1000, media_duration].pack('N2')
       stbl = fixture_child(fixture_child(mdia, 'minf'), 'stbl')
-      fixture_child(stbl, 'stts')[:data] = [0, 2, 15, 227_000, 1, 235_937].pack('N6')
+      fixture_child(stbl, 'stts')[:data] = [0, stts_entries.size, *stts_entries.flatten].pack('N*')
       track[:children].reject! { |node| node[:type] == 'edts' }
       if edit_rows
         version = edit_rows.any? { |duration, _time, _rate| duration > 0xffffffff } ? 1 : 0
