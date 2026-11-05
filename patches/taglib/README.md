@@ -52,3 +52,7 @@ grouped試作はproposals/0001、0002、0003の後に同じpatchを適用しま�
 `0004-mp4-chapter-movie-duration.patch`を既存metadata patch列の後に適用します。legacy/groupedの共通private chapter builderが対象です。MovieInfoのdurationを64bitで保持し、tkhd/elstへmovie単位のdurationを生成します。32bitに収まる場合はv0、超える場合はv1です。mvhd/timescaleとmediaのms丸め・paddingは変更しません。ゼロtimescale、未知duration、media/table/offsetの対応幅超過は拒否します。
 
 通常nativeビルドとgrouped検証ビルドはこのpatchを適用します。macOS arm64の両backendで再ビルドし、高timescale・32bit境界・正常異timescale・保存後reader/ffprobeを検証しました。インストール済みbundleやHomebrew TagLibは変更していません。
+
+## chapter media durationの切り捨て
+
+`0005-mp4-chapter-duration-floor.patch`を0004の後に適用します。movie durationをchapter media timescale（1ms）へ変換するとき、四捨五入ではなく切り捨てを使います。最終chapterサンプルがmovie durationを超えて`chapter_samples`のcoverageが`clipped`になるのを防ぎます。movie durationそのものやtkhd/elstのmovie単位durationは変更しません。

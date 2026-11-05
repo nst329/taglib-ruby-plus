@@ -284,7 +284,7 @@ class MP4AtomRepairTest < Test::Unit::TestCase
         assert_equal({ version: version, duration: duration }, row[:track_header])
         assert_equal duration, row[:edits].first[:segment_duration]
         assert_equal version, row[:edits].first[:version]
-        assert_equal (duration * 1000 + scale / 2) / scale, row[:media][:duration]
+        assert_equal (duration * 1000) / scale, row[:media][:duration]
         assert_empty row[:observations]
       end
     end

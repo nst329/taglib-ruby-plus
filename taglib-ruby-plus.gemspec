@@ -166,6 +166,7 @@ Gem::Specification.new do |s|
     'lib/taglib/mp4_atom_repair.rb',
     'lib/taglib/mp4_unindexed_mdta.rb',
     'patches/taglib/0004-mp4-chapter-movie-duration.patch',
+    'patches/taglib/0005-mp4-chapter-duration-floor.patch',
     'test/mp4_atom_repair_test.rb',
     'test/mp4_repair_investigation_test.rb',
     'test/support/mp4_investigation_fixture.rb',

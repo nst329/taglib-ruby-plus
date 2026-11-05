@@ -91,6 +91,21 @@ class MP4ChapterSampleSnapshotTest < Test::Unit::TestCase
     assert_equal [1001, 1999], snapshot.samples.map { |row| row[:duration_ticks] }
   end
 
+  # movie durationのms変換は切り捨て、chapter trackをmovieより長くしない。
+  def test_chapter_writer_floors_fractional_movie_duration_to_milliseconds
+    edit_fixture(@path) do |moov|
+      movie = fixture_child(moov, 'mvhd')
+      movie[:data][12, 8] = [1_000_000, 1_000_600].pack('N2')
+    end
+    seed([[0, 'first'], [500, 'last']])
+
+    value = snapshot
+    assert_equal 1_000_000, value.movie[:timescale]
+    assert_equal 1_000_600, value.movie[:duration]
+    assert_equal 1000, value.media_duration
+    assert_equal :complete, value.ffprobe_comparison[:status]
+  end
+
   def test_identity_without_edit_and_co64
     seed
     before = snapshot

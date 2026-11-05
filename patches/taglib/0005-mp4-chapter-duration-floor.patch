@@ -1,0 +1,15 @@
+--- a/taglib/mp4/mp4qtchapterlist.cpp
++++ b/taglib/mp4/mp4qtchapterlist.cpp
+@@ -193,8 +193,10 @@
+-    // Integer quotient/remainder preserves nearest-ms rounding without overflow.
++    // Integer quotient/remainder floors to milliseconds without overflow.
++    // The chapter track must not exceed the movie duration when both are
++    // converted to this writer's millisecond media timescale.
+     if(timescale > 0 && duration > 0 && duration != 0xffffffffffffffffULL &&
+        !(version == 0 && duration == 0xffffffffULL)) {
+       const auto seconds = duration / timescale;
+-      const auto milliseconds = (duration % timescale * 1000ULL + timescale / 2) / timescale;
++      const auto milliseconds = duration % timescale * 1000ULL / timescale;
+       if(seconds > 0xffffffffULL / 1000 || seconds * 1000 + milliseconds > 0xffffffffULL)
+         return info; // mdhd/stts use 32-bit media time in this writer.
+       info.timescale = timescale;

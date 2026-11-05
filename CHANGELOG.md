@@ -8,6 +8,16 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.46
+
+### Fixed
+
+- QuickTime chapter writerのchapter media durationをmovie durationのms切り捨てで求め、最終chapterサンプルがmovieを超えないようにした。ms切り上げでcoverageが`clipped`になる問題を解消する。
+
+### Tests
+
+- movie durationが小数msの合成MP4で、最終chapter終端が切り捨て値になり、`chapter_samples`のcoverageが`complete`になることを確認する。
+
 ## 2.3.2.45
 
 ### Fixed
