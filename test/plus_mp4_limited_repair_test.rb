@@ -337,6 +337,49 @@ class PlusMP4LimitedRepairTest < Test::Unit::TestCase
     assert_equal false, File.exist?(@output)
   end
 
+  # 親末尾までのsize=0は一般的なatom表現であり、metadata境界の判定を止めない。
+  def test_zero_size_metadata_containers_are_read_to_parent_end
+    inject_metadata(@path, keys: %w[a], indices: [1])
+    mark_last_metadata_atoms_zero_size
+    API.open(@path) do |file|
+      assert_equal :complete, file.diagnose(:metadata)[:status]
+      plan = file.plan_limited_repairs
+      assert_equal :unchanged, plan.status
+      assert_equal :metadata_complete, plan.metadata[:reason_code]
+      assert_equal false, file.save![:changed]
+    end
+  end
+
+  def test_zero_size_metadata_containers_allow_invalid_index_removal
+    inject_metadata(@path, keys: %w[a], indices: [0, 1])
+    mark_last_metadata_atoms_zero_size
+    API.open(@path) do |file|
+      plan = file.plan_limited_repairs
+      assert_equal :repairable, plan.status
+      assert_equal [:remove_invalid_mdta_indices], plan.required_operations
+      file.apply_limited_repairs(plan: plan, allow: ALLOW)
+      file.save!(to: @output)
+    end
+    API.open(@output) do |file|
+      assert_equal :unchanged, file.plan_limited_repairs.status
+      meta = meta(@output)
+      types = fixture_child(meta, 'ilst')[:children].map { |item| item[:type] }
+      assert_includes types, [1].pack('N')
+      refute_includes types, [0].pack('N')
+      assert_includes types, "\xA9nam".b
+    end
+  end
+
+  def mark_last_metadata_atoms_zero_size
+    edit_fixture(@path) do |moov|
+      udta = fixture_child(moov, 'udta')
+      meta = fixture_child(udta, 'meta')
+      udta[:zero_size] = true
+      meta[:zero_size] = true
+      fixture_child(meta, 'ilst')[:zero_size] = true
+    end
+  end
+
   def test_safe_mdir_mdta_pair_is_diagnosed_and_saved_unchanged
     inject_mdir_mdta_pair(@path, indices: [1])
     original_contexts = metadata_contexts(@path).map { |context| render_boxes([context]) }

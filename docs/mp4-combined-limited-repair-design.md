@@ -123,7 +123,7 @@ end
 - keysは件数・境界・namespace・UTF-8・重複を検証する。既存の件数上限を継承する。keysの欠落・破損をK=0と解釈しない。正常な空keys（K=0）は数値indexすべてが不正となる。
 - 不正indexはilst内の任意位置・任意件数・重複を許す。正常index、複数の不正値、既知の通常fourcc itemとの混在を扱い、元順序で不正itemだけを除去する。
 - 正常indexのitemは型付き値へ変換せずraw保持する。値型がnative非対応でも、境界と参照が確定し、今回対象外として保持できれば除去しない。正常indexの重複も勝手に統合しない。
-- 複数meta、未知構造、異常境界、extended/zero-size headerはこの構造profileではblocked。index値の一般化と、任意の破損構造への対応は分ける。
+- 複数meta、未知構造、異常境界、extended headerはこの構造profileではblocked。metadata contextと子atomのsize=0は親末尾までの表現として受理し、実終端を親境界で確定する。index値の一般化と、任意の破損構造への対応は分ける。
 - 不正indexがなくても、構造解析不能をnot_neededにしない。
 
 数値indexと通常fourccの識別は診断・計画・検証で共通化する。現行readerの「先頭byteが0ならnumeric」という判定だけでは32bit全域を扱えないため、修復設計ではこの制約を引き継がない。mdta contextの数値itemは4byte全体をindexとして検査し、既存の許可リストにある通常fourccは通常itemとして保持する。未知fourccや既知fourccと数値indexの両解釈が成立する場合は、推測で削除せず`ambiguous_item_type`でblockedとする。単に4byteを整数化できることを除去根拠にしない。今回のprobeでは、既知通常fourccを保持し、未知のASCII可視4文字を曖昧として拒否し、残りを数値として扱う試作を検証した。ただし「非ASCIIなら必ずindex」という証明にはならない。fixtureの成功だけでproducerの意図を確定してはならない。

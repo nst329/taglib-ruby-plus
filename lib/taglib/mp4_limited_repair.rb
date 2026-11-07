@@ -133,7 +133,9 @@ module TagLib::MP4
       meta = context[:atom]
       fail!('unsupported metadata location', :unsupported) unless supported_metadata_parent?(context[:udta])
       raw = @metadata_context_headers.dig(meta[:offset], :raw) || bytes(meta)
-      fail!('unsupported metadata header', :unsupported) unless raw.unpack1('N') == raw.bytesize && raw.byteslice(8, 4) == "\0".b * 4
+      # 親末尾までのsize=0は一般的なatom表現である。meta自身の終端は親境界で確定している。
+      declared_size = raw.unpack1('N')
+      fail!('unsupported metadata header', :unsupported) unless (declared_size.zero? || declared_size == raw.bytesize) && raw.byteslice(8, 4) == "\0".b * 4
       header = metadata_context_header(context, raw: raw)
       children = header.fetch(:children)
       handler = header.fetch(:handler)
@@ -264,6 +266,7 @@ module TagLib::MP4
         fail!('metadata item limit exceeded', :limit) if @metadata_atom_count > 50_000
         fail!('truncated metadata header', :malformed) if raw.bytesize - offset < 8
         size, type = raw.byteslice(offset, 8).unpack('Na4')
+        size = raw.bytesize - offset if size.zero?
         fail!('invalid metadata boundary', :malformed) unless size >= 8 && size <= raw.bytesize - offset
         rows << { type: type, offset: offset, position: rows.size, raw: raw.byteslice(offset, size) }
         offset += size

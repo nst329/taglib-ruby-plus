@@ -8,6 +8,18 @@ Releases generally follow [Semantic Versioning](http://semver.org/spec/v2.0.0.ht
 four-component RubyGems versions are used when identifying a downstream
 revision of a specific TagLib release.
 
+## 2.3.2.47
+
+### Fixed
+
+- 限定metadata修復で、`meta`、`ilst`など末尾のatomが宣言size=0（親境界まで）の入力を受理する。実終端は共通parserが確定した親境界を使い、書き換え時は通常の明示sizeへ戻す。
+- 宣言size=0だけを理由に`unsupported metadata header`または`invalid metadata boundary`でblockedにせず、metadata診断が`complete`の入力を保存不要として扱えるようにした。
+
+### Tests
+
+- `moov/udta`配下の`meta`と`ilst`をsize=0にした合成MP4で、metadata診断・限定修復計画が`unchanged`になることを確認する。
+- size=0のmetadata contextから不正indexを除去し、通常の明示sizeで保存されることと、保持itemが残ることを確認する。
+
 ## 2.3.2.46
 
 ### Fixed

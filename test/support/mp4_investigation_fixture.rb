@@ -41,7 +41,9 @@ module MP4InvestigationFixture
   def render_boxes(nodes)
     nodes.map do |node|
       data = node[:children] ? node.fetch(:prefix, ''.b) + render_boxes(node[:children]) : node.fetch(:data)
-      if node[:extended]
+      if node[:zero_size]
+        [0].pack('N') + node[:type] + data
+      elsif node[:extended]
         [1].pack('N') + node[:type] + [data.bytesize + 16].pack('Q>') + data
       else
         atom_box(node[:type], data)
